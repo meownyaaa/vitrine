@@ -42,7 +42,10 @@ typedef struct SGSingEngine SGSingEngine;
 // before it.
 typedef OSStatus (*SGSingPull)(void *context, UInt32 frames, float *left, float *right, UInt32 *sounding);
 
-SGSingEngine *SGSingEngineCreate(void);
+// bufferSeconds: the least lead to keep (0 for what the model asks); the rings are sized to hold it.
+SGSingEngine *SGSingEngineCreate(double bufferSeconds);
+// The same, changed while the engine runs: held to what its rings hold.
+void SGSingEngineSetMinimumLead(SGSingEngine *engine, double seconds);
 // Stops the worker and frees the engine; nothing may be rendering through it.
 void SGSingEngineDestroy(SGSingEngine *engine);
 // The separator the worker runs, nil for none (what plays is then dry).

@@ -483,7 +483,7 @@ static void apply(void) {
     BOOL on = SGSingOn() && !SGSingMissing();
     SGSingEngine *engine = atomic_load(&sg_engine);
     if (on && !engine) {
-        engine = SGSingEngineCreate();
+        engine = SGSingEngineCreate(SGSingBuffer());
         if (!engine) {
             sg_setupError = @"Karaoke could not set aside memory for the song.";
             return;
@@ -593,6 +593,16 @@ void SGSingComputeUnitsChanged(void) {
     retry(@"Runs on changed", NO);
     if (SGSingOn()) apply();
     announce();
+}
+
+NSInteger SGSingBuffer(void) {
+    return MAX(0, MIN(SGInt(SGKeySingBuffer, 0), 120));
+}
+
+void SGSetSingBuffer(NSInteger seconds) {
+    SGSetInt(SGKeySingBuffer, MAX(0, MIN(seconds, 120)));
+    SGSingEngine *engine = atomic_load(&sg_engine);
+    if (engine) SGSingEngineSetMinimumLead(engine, SGSingBuffer());
 }
 
 void SGSetSingIgnoresHeat(BOOL ignores) {

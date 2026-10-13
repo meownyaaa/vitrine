@@ -781,7 +781,7 @@ saying which, then the switch; its row is on the main page too, under Karaoke's)
 and Light, a checkmark against the chosen one, each with its size; then the chosen model's download, Paused and Checking
 among its states, and its removal; and Remove the other model, with its size, while the one not chosen, or the old
 model with the full one, is on the iPhone), Toggle from lyrics (the redesign's mic, on until switched off, issue #12),
-Ignore heat warnings, and under Advanced Runs on (Automatic: the Neural Engine
+Ignore heat warnings, Ignore memory warnings, Buffer (SGKeySingBuffer: a slider of 0 (Automatic) to 30 s, or a number typed by tapping the figure, up to 120 s, which moves the slider's end; the least lead the engine keeps, so a slow model has more to ride out. The engine's rings are sized from it when it is made (SGSingEngineCreate), so a larger buffer than the one Spotify started with is held to what they hold until Spotify is opened again), and under Advanced Runs on (Automatic: the Neural Engine
 beside the CPU; CPU only) and Prepare after updates, all applying straight away. Lock screen, on the main
 page under either look, opens the lock screen widget's page, titled Lock screen: Widget (the line in place of the artist,
 and Spotify's like and dislike buttons' flag, locked off while the star is on) then Artwork (Off, Moving artwork, Lyrics,

@@ -43,6 +43,8 @@ extern NSNotificationName const SGSingButtonDidChangeNotification;
 // Keeps the model through iOS's memory warnings, which otherwise let it go and stop Karaoke until the next song.
 // Off until switched on: with it on, iOS may close Spotify instead.
 #define SGKeySingIgnoreMemory @"spotifyglass.sing.ignoreMemory"
+// The least seconds of song Karaoke listens ahead, 0 (Automatic) until set.
+#define SGKeySingBuffer @"spotifyglass.sing.buffer"
 // Where the model runs: an index into SGSingComputeUnitNames(), Automatic (0: a Neural Engine copy beside the CPU's,
 // where the iPhone has a Neural Engine) unless CPU only (1) is chosen. The GPU, Neural Engine and GPU and Neural Engine
 // stored before (2-4), and the earlier key's every value, are Automatic now, carried over at launch.
@@ -99,6 +101,10 @@ BOOL SGSingReadLevels(float *vocals, float *rest, int count);
 // A level as the slider reads it out: Gone, a percentage, As sung, Backing and a percentage, Vocals only.
 NSString *SGSingLevelText(double level);
 void SGSetSingIgnoresHeat(BOOL ignores);
+// Seconds of lead Karaoke keeps at least, 0 for what the model asks; a larger one needs more memory, and rings bigger
+// than the engine was made with wait for Spotify to be opened again.
+NSInteger SGSingBuffer(void);
+void SGSetSingBuffer(NSInteger seconds);
 // Seconds of Spotify's sound Sing holds ahead of what plays now, as the render thread left it; 0 when none.
 double SGSingHeldLead(void);
 // The seconds to take off `state`'s position for what is heard: the lead held when the clock's line `state` is on

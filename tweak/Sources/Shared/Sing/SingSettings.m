@@ -213,6 +213,10 @@ UIViewController *SGSingSettingsPage(void) {
     SGModRow *memory = SGOptionRow(@"Ignore memory warnings", @"Keeps Karaoke going when iOS is low on memory, which may then close Spotify",
                                    SGKeySingIgnoreMemory);
     heat.changed = ^(BOOL on) { SGSetSingIgnoresHeat(on); };
+    SGModRow *buffer = SGSliderRow(@"Buffer", @"How far ahead Karaoke separates. More rides out a slow model but uses more memory; tap the number to type more than the slider's end",
+                                   0, 30, 1, ^double { return SGSingBuffer(); }, ^(double value) { SGSetSingBuffer((NSInteger)value); },
+                                   ^NSString *(double value) { return value < 1 ? @"Automatic" : [NSString stringWithFormat:@"%.0f s", value]; });
+    buffer.typed = YES;
     __block __weak SGModPage *page;
     SGModRow *model = SGStatActionRow(@"Voice model", nil, ^NSString *{ return modelValue(); }, ^{ modelTapped(page); });
     SGModRow *remove = SGActionRow(@"Remove voice model", nil, ^{
@@ -274,7 +278,7 @@ UIViewController *SGSingSettingsPage(void) {
     SGModRow *prepare = SGSwitchRow(@"Prepare after updates",
                                     @"Readies the Neural Engine in the background after Vitrine or iOS updates, so Karaoke starts at full speed", SGKeySingPrepareAhead);
     SGSingPage *made = [[SGSingPage alloc] initWithTitle:@"Karaoke" intro:nil sections:@[
-        SGSection(nil, @[sing, button, heat, memory]),
+        SGSection(nil, @[sing, button, heat, memory, buffer]),
         SGNotedSection(@"Voice model", @[full, light, model, remove, other],
                        @"Each model is downloaded and kept on its own, and Karaoke needs only the chosen one. A switch takes effect "
                        @"without restarting Spotify: the model loads in a few seconds, and the song plays as it is until it is in."),

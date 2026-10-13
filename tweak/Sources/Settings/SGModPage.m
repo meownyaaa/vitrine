@@ -459,6 +459,8 @@ static const CGFloat kSliderTop = 12, kSliderGap = 6, kSliderHeight = 28, kSlide
     _value.textColor = SGGrey();
     _value.textAlignment = NSTextAlignmentRight;
     _value.isAccessibilityElement = NO;
+    _value.userInteractionEnabled = YES;
+    [_value addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(typeNumber)]];
     _slider = [SGModSlider new];
     _slider.maximumTrackTintColor = [UIColor colorWithWhite:1 alpha:0.16];
     [_slider addTarget:self action:@selector(moved) forControlEvents:UIControlEventValueChanged];
@@ -480,6 +482,7 @@ static const CGFloat kSliderTop = 12, kSliderGap = 6, kSliderHeight = 28, kSlide
     _subtitle.text = row.subtitle;
     _subtitle.hidden = !row.subtitle;
     _slider.minimumTrackTintColor = SGGreen();
+    if (row.typed) row.maximum = MAX(row.maximum, row.number());
     _slider.minimumValue = (float)row.minimum;
     _slider.maximumValue = (float)row.maximum;
     _slider.spokenStep = (float)(count > 0 && count <= 40 ? row.step : snapped(row, row.minimum + (row.maximum - row.minimum) / 20) - row.minimum);
@@ -510,6 +513,31 @@ static const CGFloat kSliderTop = 12, kSliderGap = 6, kSliderHeight = 28, kSlide
     _shown = value;
     if (_row.setNumber) _row.setNumber(value);
     [self showValue];
+}
+
+- (void)typeNumber {
+    if (!_row.typed) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:_row.title message:[NSString stringWithFormat:@"A number from %g up.", _row.minimum] preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.keyboardType = UIKeyboardTypeDecimalPad;
+        field.text = [NSString stringWithFormat:@"%g", self->_shown];
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Set" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *text = [alert.textFields.firstObject.text stringByReplacingOccurrencesOfString:@"," withString:@"."];
+        if (!text.length) return;
+        double typed = MAX(self->_row.minimum, text.doubleValue);
+        if (self->_row.setNumber) self->_row.setNumber(typed);
+        double value = snapped(self->_row, self->_row.number ? self->_row.number() : typed);
+        self->_row.maximum = MAX(self->_row.maximum, value);
+        self->_shown = value;
+        self->_slider.maximumValue = (float)self->_row.maximum;
+        [self->_slider setValue:(float)value animated:YES];
+        [self showValue];
+    }]];
+    UIViewController *top = self.window.rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    [top presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)released {

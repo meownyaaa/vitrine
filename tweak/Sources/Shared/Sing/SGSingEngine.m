@@ -6,7 +6,6 @@
 #import "Shared/AudioEffects/SGDSPEffects.h"
 
 enum {
-    kRing = kSGSingRate * 10,        // what the rings hold: the longest lead and a window, with room to spare
     kLongestLead = kSGSingRate * 6,
     kShortestLead = kSGSingRate * 5 / 2,
 };
@@ -48,7 +47,9 @@ static const int kRoomPreset = 2;
 static const float kRoomTailSeconds = 4;
 
 struct SGSingEngine {
-    float *left, *right, *vocalsLeft, *vocalsRight;   // rings, a frame at position p at p % kRing
+    float *left, *right, *vocalsLeft, *vocalsRight;   // rings, a frame at position p at p % ring
+    uint64_t ring;                      // frames each ring holds: ten seconds, or the buffer asked for and a window with room to spare
+    atomic_uint minimumLead;            // frames the lead is kept up to at least, 0 for what the model asks (SGSingEngineSetMinimumLead)
 
     // Positions in frames of Spotify's sound since the engine was made: what was pulled, what was played,
     // and up to where the vocals are in.
@@ -139,7 +140,7 @@ static void startOver(SGSingEngine *engine) {
 static OSStatus pullInto(SGSingEngine *engine, uint64_t at, uint64_t count, SGSingPull pull, void *context, uint64_t *kept) {
     if (kept) *kept = 0;
     while (count) {
-        uint64_t index = at % kRing, run = MIN(count, kRing - index);
+        uint64_t index = at % engine->ring, run = MIN(count, engine->ring - index);
         UInt32 sounding = (UInt32)run;
         OSStatus status = pull(context, (UInt32)run, engine->left + index, engine->right + index, kept ? &sounding : NULL);
         if (status != noErr) return status;
@@ -177,7 +178,7 @@ static Placement placementAt(float angle) {
 
 // The vocals' middle at `position`.
 static inline float middleAt(SGSingEngine *engine, uint64_t position) {
-    uint64_t index = position % kRing;
+    uint64_t index = position % engine->ring;
     return (engine->vocalsLeft[index] + engine->vocalsRight[index]) * 0.5f;
 }
 
@@ -219,7 +220,7 @@ OSStatus SGSingEngineRender(SGSingEngine *engine, UInt32 frames, float *left, fl
     int64_t want = MIN(working ? target : (int64_t)held, cap) - (int64_t)held;
     int64_t count = (int64_t)frames + MAX(-(int64_t)frames / 2, MIN(want, (int64_t)frames));
     count = MAX(count, (int64_t)frames - (int64_t)held);
-    count = MIN(count, (int64_t)(kRing - kSGSingWindowFrames) - (int64_t)held);
+    count = MIN(count, (int64_t)(engine->ring - kSGSingWindowFrames) - (int64_t)held);
     if (count > 0) {
         // What this render plays and the lead does not hold is pulled whatever it is. The rest reads ahead, and a part of
         // it the mixer marks silent is sound Spotify has not decoded yet: it is not taken into the lead, and reading ahead
@@ -293,7 +294,7 @@ OSStatus SGSingEngineRender(SGSingEngine *engine, UInt32 frames, float *left, fl
 
     uint64_t dry = 0;
     for (UInt32 i = 0; i < frames; i++) {
-        uint64_t position = played + i, index = position % kRing;
+        uint64_t position = played + i, index = position % engine->ring;
         float x = engine->left[index], y = engine->right[index];
         engine->vocalsGain += vocalsStep;
         engine->otherGain += otherStep;
@@ -383,7 +384,10 @@ static SGSingSeparator *currentSeparator(SGSingEngine *engine) {
 // The lead that keeps the vocals in ahead of what plays: a window, then the model's time and some spare.
 static void updateTarget(SGSingEngine *engine, double modelSeconds) {
     double lead = kSGSingWindowFrames + (modelSeconds * kLeadPerModelTime + kLeadSpare) * kSGSingRate;
-    atomic_store(&engine->targetLead, (unsigned)fmax(kShortestLead, fmin(lead, kLongestLead)));
+    double room = (double)(engine->ring - kSGSingWindowFrames - kSGSingRate);
+    double asked = fmax(lead, (double)atomic_load(&engine->minimumLead));
+    double limit = atomic_load(&engine->minimumLead) ? room : kLongestLead;
+    atomic_store(&engine->targetLead, (unsigned)fmax(kShortestLead, fmin(asked, fmin(limit, room))));
 }
 
 // The loudness (RMS of both channels) of the vocals and of the rest, per block not measured yet from `start`, where
@@ -431,7 +435,7 @@ static void *work(void *argument) {
         if (written < start + kSGSingWindowFrames) continue;
         for (int c = 0; c < 2; c++) {
             const float *ring = c ? engine->right : engine->left;
-            uint64_t index = start % kRing, run = MIN((uint64_t)kSGSingWindowFrames, kRing - index);
+            uint64_t index = start % engine->ring, run = MIN((uint64_t)kSGSingWindowFrames, engine->ring - index);
             memcpy(engine->window[c], ring + index, run * sizeof(float));
             memcpy(engine->window[c] + run, ring, (kSGSingWindowFrames - run) * sizeof(float));
         }
@@ -464,7 +468,7 @@ static void *work(void *argument) {
         if (atomic_load(&engine->generation) != generation) continue;   // flushed meanwhile: the window is gone
         // The rings past `ready` are the worker's: the render thread reads only below it.
         for (uint64_t i = 0; i < kSGSingWindowFrames; i++) {
-            uint64_t position = start + i, index = position % kRing;
+            uint64_t position = start + i, index = position % engine->ring;
             float a = position < previousEnd ? (float)(position - start) / (float)(previousEnd - start) : 1;
             engine->vocalsLeft[index] = engine->vocalsLeft[index] * (1 - a) + engine->vocals[0][i] * a;
             engine->vocalsRight[index] = engine->vocalsRight[index] * (1 - a) + engine->vocals[1][i] * a;
@@ -479,14 +483,16 @@ static void *work(void *argument) {
 
 #pragma mark - any thread
 
-SGSingEngine *SGSingEngineCreate(void) {
+SGSingEngine *SGSingEngineCreate(double bufferSeconds) {
     SGSingEngine *engine = calloc(1, sizeof *engine);
     if (!engine) return NULL;
     engine->lock = OS_UNFAIR_LOCK_INIT;
-    engine->left = calloc(kRing, sizeof(float));
-    engine->right = calloc(kRing, sizeof(float));
-    engine->vocalsLeft = calloc(kRing, sizeof(float));
-    engine->vocalsRight = calloc(kRing, sizeof(float));
+    engine->ring = (uint64_t)fmax(kSGSingRate * 10.0, (fmax(0, fmin(bufferSeconds, 120)) + 4) * kSGSingRate + kSGSingWindowFrames);
+    atomic_store(&engine->minimumLead, (unsigned)(fmax(0, fmin(bufferSeconds, 120)) * kSGSingRate));
+    engine->left = calloc(engine->ring, sizeof(float));
+    engine->right = calloc(engine->ring, sizeof(float));
+    engine->vocalsLeft = calloc(engine->ring, sizeof(float));
+    engine->vocalsRight = calloc(engine->ring, sizeof(float));
     for (int c = 0; c < 2; c++) {
         engine->window[c] = calloc(kSGSingWindowFrames, sizeof(float));
         engine->vocals[c] = calloc(kSGSingWindowFrames, sizeof(float));
@@ -594,7 +600,12 @@ void SGSingEngineSetPaused(SGSingEngine *engine, bool paused) {
 }
 
 void SGSingEngineSetLeadCap(SGSingEngine *engine, double seconds) {
-    atomic_store(&engine->leadCap, seconds < (double)kRing / kSGSingRate ? (unsigned)fmax(0, seconds * kSGSingRate) : UINT_MAX);
+    atomic_store(&engine->leadCap, seconds < (double)engine->ring / kSGSingRate ? (unsigned)fmax(0, seconds * kSGSingRate) : UINT_MAX);
+}
+
+void SGSingEngineSetMinimumLead(SGSingEngine *engine, double seconds) {
+    atomic_store(&engine->minimumLead, (unsigned)(fmax(0, fmin(seconds, 120)) * kSGSingRate));
+    updateTarget(engine, atomic_load(&engine->averageMicroseconds) / 1e6);
 }
 
 void SGSingEngineFlush(SGSingEngine *engine) {

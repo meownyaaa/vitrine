@@ -46,6 +46,8 @@
 @property (nonatomic, copy) double (^number)(void);
 @property (nonatomic, copy) void (^setNumber)(double value);
 @property (nonatomic, copy) NSString *(^format)(double value);
+// A slider row's number may be typed: a tap on it asks for one, and one past the maximum moves the slider's end to it.
+@property (nonatomic) BOOL typed;
 // A menu row's (SGMenuRow): the names its pull-down menu offers, the current one being whichever `value` reads.
 @property (nonatomic, copy) NSArray<NSString *> *menu;
 // A small rounded square of this color before the row's value.
