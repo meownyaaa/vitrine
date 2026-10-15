@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-beta.14](https://github.com/meownyaaa/vitrine/compare/v1.0.0-beta.13...v1.0.0-beta.14) (2026-10-15)
+
+
+### Features
+
+* AI DJ player in the redesign ([#36](https://github.com/meownyaaa/vitrine/issues/36)) ([7c3067f](https://github.com/meownyaaa/vitrine/commit/7c3067f65b8b11f56fcf4a0e12f3a70b8f0a9947))
+* AutoMix blends songs with Spotify's own Automix and crossfade ([#41](https://github.com/meownyaaa/vitrine/issues/41)) ([be40239](https://github.com/meownyaaa/vitrine/commit/be40239e481477a81d3ff140470572ebc4ca088e))
+* Spotify 9.1.90 is supported ([9c73973](https://github.com/meownyaaa/vitrine/commit/9c7397316b1b9e98518fb03b2b4cec37170681bc))
+* the landscape lyrics stay up for a song without lines, with its cover at the screen's height ([8797991](https://github.com/meownyaaa/vitrine/commit/8797991c8a03af612cb693ccfbac3c3a8432a492))
+
+
+### Fixes
+
+* Apple Music's tall animated covers fill the redesigned player ([#40](https://github.com/meownyaaa/vitrine/issues/40)) ([b34944f](https://github.com/meownyaaa/vitrine/commit/b34944fe33ef74e9b65f1b2b4f6e3daffef52c14))
+* Lossless puts the streaming quality back only once Spotify has loaded its settings ([e4cc34b](https://github.com/meownyaaa/vitrine/commit/e4cc34b6e284f6e464c9281b88e6606d03a29144))
+* the Live Activity follows a song that ends by itself while the iPhone is locked ([70780b2](https://github.com/meownyaaa/vitrine/commit/70780b2636f1842bf440fd3090634810f0c0fe64))
+* the Live Activity gets past refused updates and iOS's 8-hour limit ([7e7e4b8](https://github.com/meownyaaa/vitrine/commit/7e7e4b8ed56617894481a0538507a33681d19687))
+* the lock screen's lyrics go over the cover instead of the moving artwork while the iPhone is hot ([64e342b](https://github.com/meownyaaa/vitrine/commit/64e342b4512b649c959a8c8bc7ecd4ade1997a78))
+* the pinned ⋯ moves with the page on a swipe back ([#35](https://github.com/meownyaaa/vitrine/issues/35)) ([75b3e01](https://github.com/meownyaaa/vitrine/commit/75b3e01af9833de5c297a85a503fdc8ca4e851fa))
+* the redesigned Home keeps its colors while a Top picks cover loads again ([9eafa6b](https://github.com/meownyaaa/vitrine/commit/9eafa6b6d95797632eea17376965d14606a28f77))
+* the redesigned Home's filter pill and avatar scroll away with the title ([9c8b1ad](https://github.com/meownyaaa/vitrine/commit/9c8b1ad72c2adab3da98b6e10974b08009805d25))
+* Top picks finds the Cards from shelf before it is on screen ([#42](https://github.com/meownyaaa/vitrine/issues/42)) ([7c53f20](https://github.com/meownyaaa/vitrine/commit/7c53f20402b1a2785e93668cba821516657b47cc))
+* Top picks stays through a pull to refresh and a scroll back up ([#42](https://github.com/meownyaaa/vitrine/issues/42)) ([836f9a5](https://github.com/meownyaaa/vitrine/commit/836f9a523171e683a8f2b3bed20e4574a28e0a5e))
+
 ## [1.0.0-beta.13](https://github.com/My-Name-Is-Jeff/vitrine/compare/v1.0.0-beta.12...v1.0.0-beta.13) (2026-10-12)
 
 
