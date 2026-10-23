@@ -20,7 +20,7 @@
 #      hard-links ActivityKit and Live Activities do not exist below iOS 16.1 in any form, so the appex
 #      crash-loops at launch; Spotify's own WidgetExtension wants WidgetKit and AppIntents. Both are
 #      dropped rather than patched.
-#   4. The App Group shim is built for iOS 15.0.
+#   4. The App Group shim and the vendored audio library are built for iOS 15.0.
 #
 # This does NOT make Spotify itself run on iOS 15 - that is a separate patcher (the spotify-ios15
 # project), which rewrites Spotify's own imports and ships its shim dylib, and is not vendored here.
@@ -121,6 +121,15 @@ if ! xcrun -sdk iphoneos --find clang >/dev/null 2>&1; then
 fi
 # Theos builds its Swift support tools only at MAKELEVEL 0, and `make release` hands this script MAKELEVEL 1.
 # A build with FLEX carries the phone driver too (tweak/Makefile, SG_DRIVER); --no-flex leaves it out.
+# The audio library first, on its own, because TARGET means two different things in the two makefiles
+# and a command-line assignment reaches both: Theos wants iphone:clang:latest:<version>, while
+# vendor/audio/Makefile wants a clang triple, and handing it Theos's spelling fails with
+# "unknown target triple 'iphone:clang:latest:15.0'". Building it here leaves the nested sg-audio
+# sub-make with nothing to compile, so the value it gets is never used. The ios objects are removed
+# first so they are not reused from a 16.0 build; the main pipeline rebuilds them the same way.
+rm -rf "$ROOT/vendor/audio/build/ios"
+env -u MAKELEVEL gmake -C "$ROOT/vendor/audio" PLATFORM=ios TARGET="arm64-apple-ios$SG_DEPLOYMENT" >/dev/null
+
 # TARGET is a plain := in tweak/Makefile, so a command-line assignment wins over it; CFLAGS must go
 # through Theos's ADDITIONAL_CFLAGS, because overriding spotifyglass_CFLAGS would drop -fobjc-arc.
 env -u MAKELEVEL gmake -C "$ROOT/tweak" clean package SG_DRIVER="$WITH_FLEX" \
