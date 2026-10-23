@@ -1,0 +1,256 @@
+# iOS 15 build. A duplicate of build-ipa-optimised.yml calling scripts/pipeline-ios15.sh, so edits
+# for iOS 15 never touch the main pipeline. What differs is in that script's header.
+#
+# The IPA this produces is NOT yet runnable on iOS 15 on its own: Spotify's own binary still imports a
+# few hundred symbols iOS 15 does not have. Run the spotify-ios15 patcher over the output. All this
+# workflow does is make Vitrine's own dylibs loadable there, which is what dyld was halting on.
+name: Build IPA for iOS 15 (experimental)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Direct link to a decrypted Spotify IPA"
+        required: true
+        type: string
+      use_alt_name:
+        description: "Name it as a TestFlight build"
+        default: false
+        type: boolean
+      release_notes:
+        description: "Extra text for the release description"
+        default: ""
+        required: false
+        type: string
+      deployment_target:
+        description: "Tweak deployment target. 15.0 is what makes AppIntents and ActivityKit weak links; 16.0 reproduces the dyld halt."
+        default: "15.0"
+        required: false
+        type: string
+
+env:
+  THEOS: ${{ github.workspace }}/theos
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Mask IPA link
+        run: |
+          URL="$(jq -r '.inputs.ipa_url // empty' "$GITHUB_EVENT_PATH")"
+          [ -z "$URL" ] || echo "::add-mask::$URL"
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/checkout@v5
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+
+      - name: Download IPA and install tools
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          set -eo pipefail
+          JOBS="$RUNNER_TEMP/jobs"; : > "$JOBS"
+
+          bg() {
+            local name="$1"; shift
+            ( "$@" ) > "$RUNNER_TEMP/$name.log" 2>&1 &
+            echo "$! $name" >> "$JOBS"
+          }
+
+          fetch_ipa() {
+            mkdir -p ipa
+            curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$IPA_URL" -o ipa/spotify.ipa
+            case "$(file --mime-type -b ipa/spotify.ipa)" in
+              application/zip|application/x-ios-app) ;;
+              *) echo "::error::Not an IPA"; return 1 ;;
+            esac
+          }
+
+          install_brew() {
+            brew install --quiet make dpkg ldid
+          }
+
+          install_cyan() {
+            python3 -m pip install --quiet --break-system-packages git+https://github.com/asdfzxcvbn/pyzule-rw.git
+          }
+
+          install_ipapatch() {
+            local suffix=macos-arm64
+            [ "$(uname -m)" = "x86_64" ] && suffix=macos-amd64
+            sudo curl -fsSL --retry 3 \
+              "https://github.com/asdfzxcvbn/ipapatch/releases/latest/download/ipapatch.${suffix}" \
+              -o /usr/local/bin/ipapatch
+            sudo chmod +x /usr/local/bin/ipapatch
+          }
+
+          bg ipa      fetch_ipa
+          bg brew     install_brew
+          bg cyan     install_cyan
+          bg ipapatch install_ipapatch
+
+          failed=0
+          while read -r pid name; do
+            if wait "$pid"; then
+              echo "::group::$name ok"
+            else
+              echo "::group::$name FAILED"; failed=1
+            fi
+            cat "$RUNNER_TEMP/$name.log"
+            echo "::endgroup::"
+          done < "$JOBS"
+
+          [ "$failed" -eq 0 ] || { echo "::error::a download or install failed"; exit 1; }
+
+      - name: Name the build
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+          USE_ALT_NAME: ${{ inputs.use_alt_name }}
+        run: |
+          set -eo pipefail
+
+          FILE="${IPA_URL##*/}"; FILE="${FILE%%[?#]*}"
+          PREFIX=Vitrine-iOS15
+          SPOT_VERSION=""
+          if [[ "$FILE" =~ ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            SPOT_VERSION="${BASH_REMATCH[1]}"
+            PREFIX=TestFlight-Vitrine-iOS15
+            echo "found testflight version in the file name: $SPOT_VERSION"
+          elif [ "$USE_ALT_NAME" = "true" ]; then
+            PREFIX=TestFlight-Vitrine-iOS15
+          fi
+
+          APP_DIR="$(unzip -Z1 ipa/spotify.ipa | grep -oE '^Payload/[^/]+\.app/' | sort -u | head -1)"
+          [ -n "$APP_DIR" ] || { echo "::error::no Payload/*.app in the IPA"; exit 1; }
+          unzip -p ipa/spotify.ipa "${APP_DIR}Info.plist" > "$RUNNER_TEMP/Info.plist"
+          [ -n "$SPOT_VERSION" ] || SPOT_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$RUNNER_TEMP/Info.plist")"
+
+          MOD_VERSION="$(cat version.txt 2>/dev/null || true)"
+          : "${MOD_VERSION:=0.0.0}"
+
+          OUT="$GITHUB_WORKSPACE/out/${PREFIX}-${SPOT_VERSION}-v${MOD_VERSION}.ipa"
+          {
+            echo "FILE_PREFIX=$PREFIX"
+            echo "SPOTIFY_VERSION=$SPOT_VERSION"
+            echo "MOD_VERSION=$MOD_VERSION"
+            echo "TIMESTAMP=$(date -u +'%Y-%m-%d-%H-%M-%S')"
+            echo "OUT_IPA=$OUT"
+            echo "PATCHED_IPA=${OUT%.ipa}-patched.ipa"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          SG_DEPLOYMENT: ${{ inputs.deployment_target }}
+        run: |
+          set -eo pipefail
+          if [ ! -x ./scripts/pipeline-ios15.sh ]; then
+            echo "::error::scripts/pipeline-ios15.sh is not on ${GITHUB_REF_NAME}. Run this workflow from the branch that has it (testing-ios-15)."
+            exit 1
+          fi
+          ./scripts/pipeline-ios15.sh ipa/spotify.ipa --no-flex -o "$OUT_IPA"
+
+      - name: Add the verification marker
+        continue-on-error: true
+        run: |
+          python3 - "$OUT_IPA" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1], 'a') as z:
+              if 'Payload/softgaypaws.com' not in z.namelist():
+                  z.writestr('Payload/softgaypaws.com', b'')
+          PY
+
+      - name: Inject credit strings
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          INJECT_TARGETS: ${{ secrets.INJECT_TARGETS }}
+          INJECT_KEY: ${{ secrets.INJECT_KEY }}
+          INJECT_VALUE: ${{ secrets.INJECT_VALUE }}
+        run: python3 .github/scripts/inject-credit.py --ipa "$OUT_IPA"
+
+      - name: Make the patched IPA
+        run: |
+          set -eo pipefail
+          cp "$OUT_IPA" "$PATCHED_IPA"
+          ipapatch --input "$PATCHED_IPA" --inplace --noconfirm
+
+      - name: Report what went in
+        env:
+          SG_DEPLOYMENT: ${{ inputs.deployment_target }}
+        run: |
+          set -eo pipefail
+          echo "### Vitrine for iOS 15" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tweak deployment target: \`${SG_DEPLOYMENT:-15.0}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Libraries iOS 15 lacks, and how \`spotifyglass.dylib\` links them. All of these must say WEAK, or dyld halts the app at launch:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          python3 - "$OUT_IPA" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import struct, sys, zipfile
+          MISSING = ("AppIntents", "ActivityKit", "FoundationModels", "Symbols",
+                     "Translation", "libswiftSpatial", "libswiftXPC", "WidgetKit")
+          z = zipfile.ZipFile(sys.argv[1])
+          names = [n for n in z.namelist() if n.endswith("/spotifyglass.dylib")]
+          if not names:
+              print("no spotifyglass.dylib in the IPA"); raise SystemExit(0)
+          d = z.read(names[0])
+          ncmds, szcmds = struct.unpack_from("<II", d, 16)
+          off, rows = 32, []
+          for _ in range(ncmds):
+              cmd, cs = struct.unpack_from("<II", d, off)
+              if cmd in (0xC, 0x80000018):
+                  no = struct.unpack_from("<I", d, off + 8)[0]
+                  p = d[off + no:off + cs].split(b"\0")[0].decode("latin1")
+                  if any(m in p for m in MISSING):
+                      rows.append((p, "WEAK" if cmd == 0x80000018 else "**HARD**"))
+              off += cs
+          print("| library | load |"); print("|---|---|")
+          for p, kind in sorted(rows):
+              print("| `%s` | %s |" % (p, kind))
+          if not rows:
+              print("| none | - |")
+          print("")
+          plugins = sorted({n.split("PlugIns/")[1].split("/")[0]
+                            for n in z.namelist() if "/PlugIns/" in n})
+          print("App extensions left in the bundle: %s"
+                % (", ".join("`%s`" % p for p in plugins) if plugins else "none"))
+          PY
+
+      - name: Write the release description
+        env:
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          {
+            printf '**Vitrine %s** on **Spotify %s**, built for **iOS 15**\n\n' "$MOD_VERSION" "$SPOTIFY_VERSION"
+            printf -- '- `%s`: for SideStore\n' "$(basename "$OUT_IPA")"
+            printf -- '- `%s`: patched for signing with a certificate\n\n' "$(basename "$PATCHED_IPA")"
+            printf "Experimental. This only makes Vitrine's own dylibs loadable on iOS 15; Spotify's own\n"
+            printf "binary still needs the spotify-ios15 patcher run over this IPA before it will launch.\n\n"
+            printf "No Live Activity and no app extensions in this build: ActivityKit and WidgetKit do not\n"
+            printf "exist on iOS 15.\n\n"
+            printf 'Built from %s.\n' "$GITHUB_SHA"
+            [ -z "$NOTES" ] || printf '\n%s\n' "$NOTES"
+          } > release-body.md
+          cat release-body.md
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v3.0.2
+        with:
+          tag_name: ipa-${{ env.MOD_VERSION }}-${{ env.TIMESTAMP }}
+          name: ${{ env.FILE_PREFIX }} v${{ env.MOD_VERSION }} // Spotify ${{ env.SPOTIFY_VERSION }} // Build ${{ env.TIMESTAMP }}
+          body_path: release-body.md
+          target_commitish: ${{ github.sha }}
+          draft: true
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: out/*.ipa
