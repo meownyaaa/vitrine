@@ -8,6 +8,9 @@ import Translation
 import os
 
 @objc(SGOnDeviceTranslation)
+// Locale.Language, and everything this class reaches through it, is iOS 16. Only ObjC calls in here
+// (SGRKaraokeView.m), and only behind its own check, so the gate costs nothing.
+@available(iOS 16.0, *)
 public final class SGOnDeviceTranslation: NSObject {
     private static let log = Logger(subsystem: "spotifyglass", category: "translation")
     // The model asked fresh for each run of this many lines, so a long song stays inside its context, with room

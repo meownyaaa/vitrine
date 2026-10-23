@@ -135,6 +135,7 @@ struct SGLiveActivityActionIntent: LiveActivityIntent {
 // the background takes a moment for, so the intent asks again.
 let SGShortcutNotification = Notification.Name("SGShortcut")
 
+@available(iOS 16.0, *)
 struct SGShortcutError: Error, CustomLocalizedStringResourceConvertible {
     let message: String
     var localizedStringResource: LocalizedStringResource { "\(message)" }
@@ -142,6 +143,7 @@ struct SGShortcutError: Error, CustomLocalizedStringResourceConvertible {
 
 // What Spotify answered `action` with: one of SGLiveActivityActionIntent's actions, like, or sing:MODE.
 @MainActor
+@available(iOS 16.0, *)
 private func askSpotify(_ action: String) async throws -> String {
     // ponytail: 8 s of asking, untimed on a phone; raise it if a launch in the background takes longer.
     for _ in 0..<32 {
