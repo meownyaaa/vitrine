@@ -38,6 +38,10 @@ UIViewController *SGLabsPage(void) {
             SGFlagRow(@"One minute option", @"ios-feature-sleeptimer.enable_one_minute_option"),
             SGFlagRow(@"Options sheet", @"ios-feature-sleeptimer.use_options_sheet"),
         ], @"Options sheet is always on in Redesigned UI."),
+        SGSection(@"DJ", @[
+            SGFlagRow(@"Auto mix", @"ios-playlistcuration-mats.auto_mix_enabled_for_dj"),
+            SGFlagRow(@"Auto mix in the context menu", @"ios-playlistcuration-mats.dj_auto_mix_context_menu_enabled"),
+        ]),
         SGSection(@"Player", @[
             SGFlagRow(@"Snake on the cover art", @"ios-feature-cover-art-snake.enabled"),
         ]),

@@ -611,6 +611,9 @@ static SGRKaraokeLayout *layOut(SGKaraokeLine *line, CGFloat width, SGRKaraokeSt
     layout.translation = layout.romanised = CGRectNull;
     NSArray<SGKaraokeWord *> *spoken = style.pronunciation ? line.pronunciation.words : nil;
     NSString *translation = style.translation ? line.translation : nil;
+    // A translator hands back a line already in the language as it was; the line says it once. It stays
+    // translated, so it is not asked again.
+    if (translation.length && [SGLyricsBareText(translation) isEqualToString:SGLyricsBareText(SGKaraokeLineText(line))]) translation = nil;
     // A source's own pronunciation, hidden, still reads better than the transform's.
     if (style.romanised && !spoken.count) {
         layout.romanisedText = line.pronunciation ? SGKaraokeLineText(line.pronunciation)
@@ -1925,8 +1928,8 @@ static BOOL anyUntranslated(NSArray<SGKaraokeLine *> *lines) {
     // A translator is offered only for a song in another language than the one it would translate into,
     // and the translators are asked after (an AI translator's key is a Keychain read).
     BOOL wanted = _lines && !_sample && (_foreign || SGHidden(SGKeyLyricsTranslateEverySong)) && _untranslated;
-    BOOL onDevice = wanted && SGOnDeviceTranslation.translationAvailable;
-    BOOL intelligence = wanted && [SGOnDeviceTranslation appleIntelligenceAvailable:language];
+    BOOL onDevice = wanted && SGFlag(SGKeyLyricsTranslateOnDevice, YES) && SGOnDeviceTranslation.translationAvailable;
+    BOOL intelligence = wanted && SGFlag(SGKeyLyricsAppleIntelligence, YES) && [SGOnDeviceTranslation appleIntelligenceAvailable:language];
     BOOL ai = wanted && SGAITranslatorReady();
     BOOL translatable = ai || onDevice || intelligence;
     BOOL offered = _lines && !_sample && (_hasSpoken || _hasTranslation || translatable);

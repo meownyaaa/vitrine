@@ -82,7 +82,7 @@ static NSMutableURLRequest *geminiRequest(NSString *model, NSString *prompt, NSS
     NSMutableDictionary *config = [@{@"responseMimeType": @"application/json",
                                      @"responseSchema": @{@"type": @"ARRAY", @"items": @{@"type": @"STRING"}}} mutableCopy];
     // Gemini 3 thinks at length by default, which a whole song's translation does not need and which made it
-    // slow enough to time out. Plain: a model behind gemini-flash-latest that does not know the field.
+    // slow enough to time out. Plain: a model named in Other… that does not know the field.
     if (!plain) config[@"thinkingConfig"] = @{@"thinkingLevel": @"low"};
     NSMutableURLRequest *request = post([NSString stringWithFormat:@"https://generativelanguage.googleapis.com/v1beta/models/%@:generateContent", model],
                                         @{@"contents": @[@{@"parts": @[@{@"text": prompt}]}], @"safetySettings": safety, @"generationConfig": config});
@@ -183,8 +183,9 @@ static const SGAIProvider kProviders[] = {
     {@"gemini", @"Gemini", @"Google", @"Vitrine.Gemini",
      @"Translate with Gemini sends the song's lyrics to Google, on your own key from Google AI Studio. The key stays on this iPhone.",
      @"Answer with a JSON array of the {count} translations as strings.",
-     // gemini-flash-latest follows each Flash release; Google gives two weeks' notice of a breaking change.
-     {@"gemini-flash-latest", @"gemini-3.6-flash", @"gemini-3.5-flash-lite"}, {@"Flash (latest)", @"3.6 Flash", @"3.5 Flash-Lite"},
+     // A pinned id first, the one users report working. gemini-flash-latest follows each Flash release, preview
+     // ones included, with notice only by email to the key's owner, so it is offered but not the default.
+     {@"gemini-3.6-flash", @"gemini-3.5-flash-lite", @"gemini-flash-latest"}, {@"3.6 Flash", @"3.5 Flash-Lite", @"Flash (latest)"},
      YES, {@"thinking"}, geminiRequest, geminiAnswer},
     {@"openai", @"OpenAI-compatible", nil, @"Vitrine.OpenAI",
      @"Sends the song's lyrics to the server below: OpenAI's own unless you name another, such as OpenRouter, or an "
@@ -195,8 +196,10 @@ static const SGAIProvider kProviders[] = {
     {@"anthropic", @"Anthropic", @"Anthropic", @"Vitrine.Anthropic",
      @"Translate with Anthropic sends the song's lyrics to Anthropic, on your own key from the Claude Console. The key stays on this iPhone.",
      kLinesFormat,
-     // The cheapest current model first: the reason a model is picked at all is what translating costs.
-     {@"claude-haiku-5-5", @"claude-sonnet-5-5", @"claude-opus-5-5"}, {@"Haiku 5.5", @"Sonnet 5.5", @"Opus 5.5"},
+     // The cheapest first: the reason a model is picked at all is what translating costs. Not the 5.5 models,
+     // whose safety classifiers stop at lyrics with a refusal; Other… still names any model. Haiku 4.5 has no
+     // effort, so its first request comes back once and is sent plain.
+     {@"claude-haiku-4-5", @"claude-sonnet-4-6"}, {@"Haiku 4.5", @"Sonnet 4.6"},
      NO, {@"output_config", @"effort", @"json_schema"}, anthropicRequest, anthropicAnswer},
 };
 static const NSUInteger kProviderCount = sizeof(kProviders) / sizeof(kProviders[0]);
@@ -510,6 +513,13 @@ SGModRow *SGTranslateEverySongRow(void) {
 // The provider, its key, server or model changed: an open lyrics menu names who gets the lyrics, so it is built again.
 static void translatorChanged(void) {
     [NSNotificationCenter.defaultCenter postNotificationName:SGLyricsTranslationsDidChangeNotification object:nil];
+}
+
+NSArray<SGModRow *> *SGOnDeviceTranslatorRows(void) {
+    SGModRow *onDevice = SGSwitchRow(@"Translate on iPhone", @"Apple's Translate in the lyrics' translate menu", SGKeyLyricsTranslateOnDevice);
+    SGModRow *intelligence = SGSwitchRow(@"Apple Intelligence", @"Apple Intelligence in the lyrics' translate menu", SGKeyLyricsAppleIntelligence);
+    onDevice.changed = intelligence.changed = ^(BOOL on) { translatorChanged(); };
+    return @[onDevice, intelligence];
 }
 
 void SGAIForgetKeys(void) {

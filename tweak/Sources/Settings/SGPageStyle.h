@@ -53,3 +53,6 @@ void SGOpenURL(NSString *url);
 extern NSString *const SGRepoURL;
 // The controller on top of the key window, through whatever is presented over it.
 UIViewController *SGTopController(void);
+// `panel` as a dark popover from `from`, at its preferredContentSize, a popover on iPhone too. Picked from a
+// system menu, which is still going away, it waits for the menu.
+void SGPresentPopover(UIViewController *panel, UIView *from);

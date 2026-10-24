@@ -26,6 +26,7 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Shared/Player/SpeedPitch.h"
+#import "Shared/AlbumQueue/AlbumQueue.h"
 #import "ContextMenu.h"
 
 // After a pick of Spotify's, how long its sheet has to start going, or to push a page of its own (which shows
@@ -845,6 +846,7 @@ static NSString *storedKey(NSString *kind) {
     if (_groups) return YES;
     UITableView *table = tableIn(self.sheet.viewIfLoaded, 0);
     if (!table || rowCount(table) == 0) return NO;
+    SGAlbumQueueInstall(self.sheet);
     CFTimeInterval started = CACurrentMediaTime();
     [table layoutIfNeeded];
     _table = table;

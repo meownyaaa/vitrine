@@ -16,6 +16,10 @@
 #import <objc/runtime.h>
 #import "Redesigned/ContextMenu/ContextMenu.h"
 
+// The album footer is exercised by harness/album-queue and the Spotify simulator test. These
+// player-menu fixtures do not provide an album page or the shared album footer.
+void SGAlbumQueueInstall(UIViewController *menu) {}
+
 void SGRPlayerMenuWatch(UIView *button);
 // touch.m: a finger's touches, through UIKit's own recognizers.
 extern void SGHarnessTap(UIWindow *window, CGPoint point);
@@ -55,6 +59,7 @@ static NSInteger sg_background = 2;
 double SGPlayerSpeed(void) { return sg_speed; }
 BOOL SGPlayerSpeedAllowed(void) { return YES; }
 void SGSetPlayerSpeed(double speed) { sg_speed = speed; NSLog(@"[harness] speed %.2f", speed); }
+void SGPlayerShowSpeedPitchPanel(UIView *from) { NSLog(@"[harness] speed and pitch panel requested"); }
 float SGPlayerPitch(void) { return sg_pitch; }
 void SGSetPlayerPitch(float semitones) { sg_pitch = semitones; NSLog(@"[harness] pitch %.0f", semitones); }
 BOOL SGPlayerPitchAvailable(void) { return YES; }

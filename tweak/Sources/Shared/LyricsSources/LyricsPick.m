@@ -12,6 +12,7 @@
 #import "Shared/Lyrics/Lyrics.h"
 
 NSNotificationName const SGLyricsSourceChosenNotification = @"spotifyglass.lyricsSourceChosen";
+NSNotificationName const SGLyricsOffersDidChangeNotification = @"spotifyglass.lyricsOffersDidChange";
 
 // Each track's asks are kept for the menu opened on it again; the picks are kept for the replays, and what
 // Automatic puts back, which holds lines, for as many tracks as the walk keeps.
@@ -84,6 +85,9 @@ static void askMissing(SGLyricsOfferAsk *ask) {
                   failed ? @", a request failed on the way; not kept" : @"");
             if (!failed) ask.answers[key] = result.karaokeLines.count ? result : NSNull.null;
             [ask.asking removeObject:key];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSNotificationCenter.defaultCenter postNotificationName:SGLyricsOffersDidChangeNotification object:trackID];
+            });
             if (ask.asking.count) return;
             NSArray *waiting = [ask.waiting copy];
             [ask.waiting removeAllObjects];
@@ -92,7 +96,8 @@ static void askMissing(SGLyricsOfferAsk *ask) {
     }
 }
 
-void SGLyricsOffers(NSString *trackID, NSTimeInterval wait, void (^done)(NSDictionary<NSString *, SGLyricsResult *> *offers)) {
+// The track's ask, made if new, with every source missing an answer asked.
+static SGLyricsOfferAsk *askFor(NSString *trackID) {
     if (!sg_asks) sg_asks = [NSMutableDictionary dictionary];
     SGLyricsOfferAsk *ask = sg_asks[trackID];
     if (!ask) {
@@ -104,6 +109,21 @@ void SGLyricsOffers(NSString *trackID, NSTimeInterval wait, void (^done)(NSDicti
         ask.waiting = [NSMutableArray array];
     }
     askMissing(ask);
+    return ask;
+}
+
+void SGLyricsAskOffers(NSString *trackID) {
+    askFor(trackID);
+}
+
+NSDictionary<NSString *, SGLyricsResult *> *SGLyricsOffersSoFar(NSString *trackID, NSArray<NSString *> **asking) {
+    SGLyricsOfferAsk *ask = trackID ? sg_asks[trackID] : nil;
+    if (asking) *asking = ask.asking.allObjects ?: @[];
+    return ask ? offersIn(ask) : @{};
+}
+
+void SGLyricsOffers(NSString *trackID, NSTimeInterval wait, void (^done)(NSDictionary<NSString *, SGLyricsResult *> *offers)) {
+    SGLyricsOfferAsk *ask = askFor(trackID);
     __block BOOL called = NO;
     void (^once)(void) = ^{
         if (called) return;

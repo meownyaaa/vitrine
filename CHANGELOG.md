@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-beta.15](https://github.com/My-Name-Is-Jeff/vitrine/compare/v1.0.0-beta.14...v1.0.0-beta.15) (2026-10-24)
+
+
+### Features
+
+* Add to Queue on an album page's menu with Spoof Premium ([#88](https://github.com/My-Name-Is-Jeff/vitrine/issues/88)) ([f5473f7](https://github.com/My-Name-Is-Jeff/vitrine/commit/f5473f76958b22232f6034443b4af84107729dbb))
+* Spoof Premium turns off the DJ's Premium-only flag, Labs adds auto mix ([6c66ac6](https://github.com/My-Name-Is-Jeff/vitrine/commit/6c66ac6972651b92d5699d220f8661830d677a78))
+* switches for the on-device translators, and no translation that repeats its line ([b807baa](https://github.com/My-Name-Is-Jeff/vitrine/commit/b807baa7491ccaf478f1ca71eb0efd17f6bb0ba4))
+
+
+### Fixes
+
+* Anthropic presets Haiku 4.5 and Sonnet 4.6, Gemini defaults to 3.6 Flash ([604512d](https://github.com/My-Name-Is-Jeff/vitrine/commit/604512d14684fd5700050e421fc023978377037c))
+* Lyrics Source opens a panel that lists each source as it answers ([60f6db1](https://github.com/My-Name-Is-Jeff/vitrine/commit/60f6db199ec14a1595f7ce7f61dbec6bac75b265))
+* the Lyrics Source submenu lists the sources at once and fits without scrolling ([f2858cf](https://github.com/My-Name-Is-Jeff/vitrine/commit/f2858cf56e55941d3b60723630ba6d23204bd235))
+* the volume slider's speaker glyphs line up with its track ([#86](https://github.com/My-Name-Is-Jeff/vitrine/issues/86)) ([7a01b3f](https://github.com/My-Name-Is-Jeff/vitrine/commit/7a01b3f931c9668e293742c4a6c29234645db67f))
+
 ## [1.0.0-beta.14](https://github.com/My-Name-Is-Jeff/vitrine/compare/v1.0.0-beta.13...v1.0.0-beta.14) (2026-10-23)
 
 

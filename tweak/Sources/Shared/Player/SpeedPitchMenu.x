@@ -525,7 +525,7 @@ static NSString *pitchText(float pitch) {
 
 // A popover, so it takes the system's glass and closes on a tap outside it. On iPhone a popover becomes a
 // sheet unless its delegate says otherwise.
-@interface SGSpeedPitchPanel : UIViewController <UIPopoverPresentationControllerDelegate>
+@interface SGSpeedPitchPanel : UIViewController
 @end
 
 @implementation SGSpeedPitchPanel
@@ -534,37 +534,12 @@ static NSString *pitchText(float pitch) {
     block.panelOnly = YES;
     self.view = block;
 }
-
-- (UIModalPresentationStyle)adaptivePresentationStyleForPresentationController:(UIPresentationController *)controller
-                                                               traitCollection:(UITraitCollection *)traits {
-    return UIModalPresentationNone;
-}
 @end
 
 void SGPlayerShowSpeedPitchPanel(UIView *from) {
-    if (!from.window) return;
     SGSpeedPitchPanel *panel = [SGSpeedPitchPanel new];
-    panel.modalPresentationStyle = UIModalPresentationPopover;
     panel.preferredContentSize = CGSizeMake(320, kGrid + 3 * kSliderBlockHeight + kSwitchRowHeight + kPanelBottom);
-    UIPopoverPresentationController *popover = panel.popoverPresentationController;
-    popover.sourceView = from;
-    popover.sourceRect = from.bounds;
-    popover.permittedArrowDirections = UIPopoverArrowDirectionUp | UIPopoverArrowDirectionDown;
-    popover.delegate = panel;
-    SGPresentDark(panel);
-    // Picked from the system menu, which is still going away: the panel waits for it.
-    __block int tries = 0;
-    __block void (^present)(void);
-    present = ^{
-        UIViewController *top = SGTopController();
-        if ((top.isBeingDismissed || top.isBeingPresented || top.transitionCoordinator) && ++tries < 20) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), present);
-            return;
-        }
-        present = nil;
-        [top presentViewController:panel animated:YES completion:nil];
-    };
-    dispatch_async(dispatch_get_main_queue(), present);
+    SGPresentPopover(panel, from);
 }
 
 #pragma mark - the player's more button

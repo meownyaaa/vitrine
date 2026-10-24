@@ -14,6 +14,11 @@ extern NSNotificationName const SGLyricsTranslationsDidChangeNotification;
 #define SGKeyLyricsTranslateEverySong @"spotifyglass.lyrics.translateEverySong"
 SGModRow *SGTranslateEverySongRow(void);
 
+// Off: the translate menu leaves out Apple's Translate, or Apple Intelligence. Both on until switched off.
+#define SGKeyLyricsTranslateOnDevice @"spotifyglass.lyrics.translateOnDevice"
+#define SGKeyLyricsAppleIntelligence @"spotifyglass.lyrics.appleIntelligence"
+NSArray<SGModRow *> *SGOnDeviceTranslatorRows(void);
+
 // The AI translator: a provider's id (gemini, openai, anthropic; unset: gemini), the prompt every provider gets
 // (unset: Vitrine's), and per provider spotifyglass.lyrics.<id>.model. An OpenAI-compatible server (unset: OpenAI's)
 // is kept in the Keychain beside its key, not here. All read at each translation.
@@ -28,7 +33,7 @@ SGModRow *SGTranslateEverySongRow(void);
 @property (nonatomic, copy, readonly) NSString *by, *model;
 @property (nonatomic, readonly) NSDate *made;   // nil: not known
 + (instancetype)by:(NSString *)by model:(NSString *)model made:(NSDate *)made;
-@property (nonatomic, readonly) NSString *name;   // "Gemini (gemini-flash-latest)", "Translate on iPhone", "Unknown"
+@property (nonatomic, readonly) NSString *name;   // "Gemini (gemini-3.6-flash)", "Translate on iPhone", "Unknown"
 @property (nonatomic, readonly) BOOL deletable;   // made by an AI provider, or by no one known
 @end
 

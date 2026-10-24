@@ -64,6 +64,11 @@ static void report(id state, BOOL platform) {
 @end
 
 static SGPlayerObserver *sg_ownObserver;
+static __weak id sg_player;
+
+id SGPlayer(void) {
+    return sg_player;
+}
 
 %hook _TtC23NowPlaying_PlatformImpl28StatefulPlayerImplementation
 - (void)player:(id)player stateDidChange:(id)state {
@@ -85,6 +90,7 @@ static SGPlayerObserver *sg_ownObserver;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         dispatch_async(dispatch_get_main_queue(), ^{
+            sg_player = player;
             sg_ownObserver = [SGPlayerObserver new];
             [(id<SPTPlayer>)player addPlayerObserver:sg_ownObserver];
             id state = [player respondsToSelector:@selector(state)] ? [(id<SPTPlayer>)player state] : nil;

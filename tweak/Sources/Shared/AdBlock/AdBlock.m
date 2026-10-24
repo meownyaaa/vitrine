@@ -37,6 +37,11 @@ static NSString *const upsellFlags[] = {
     @"ios-settings-mediaqualitypageplugin-impl.is_gbb_upsell_enabled",
     @"ios-settings-mediaqualitypageplugin-impl.should_show_pigeon_upsell",
     @"ios-system-listeningparties.preview_ended_upsell_enabled",
+    // Ours, checked against 9.1.78, 9.1.88 and 9.1.90.
+    @"ios-feature-nowplaying-modes.video_first_skip_limit_upsell",
+    @"ios-feature-premium-destination-badge.badge_enabled",
+    @"ios-account-common.premium_plans_entry_point_row_enabled",
+    @"ios-account-common.premium_referrals_settings_item_enabled",
 };
 
 // More of what Hide ads sets, by value: the ad features off, their guards and Skip buttons pinned on, and the

@@ -290,6 +290,41 @@ UIViewController *SGTopController(void) {
     return top;
 }
 
+@interface SGPopoverStyle : NSObject <UIPopoverPresentationControllerDelegate>
+@end
+
+@implementation SGPopoverStyle
+- (UIModalPresentationStyle)adaptivePresentationStyleForPresentationController:(UIPresentationController *)controller
+                                                               traitCollection:(UITraitCollection *)traits {
+    return UIModalPresentationNone;
+}
+@end
+
+void SGPresentPopover(UIViewController *panel, UIView *from) {
+    if (!from.window) return;
+    static SGPopoverStyle *style;
+    if (!style) style = [SGPopoverStyle new];
+    panel.modalPresentationStyle = UIModalPresentationPopover;
+    UIPopoverPresentationController *popover = panel.popoverPresentationController;
+    popover.sourceView = from;
+    popover.sourceRect = from.bounds;
+    popover.permittedArrowDirections = UIPopoverArrowDirectionUp | UIPopoverArrowDirectionDown;
+    popover.delegate = style;
+    SGPresentDark(panel);
+    __block int tries = 0;
+    __block void (^present)(void);
+    present = ^{
+        UIViewController *top = SGTopController();
+        if ((top.isBeingDismissed || top.isBeingPresented || top.transitionCoordinator) && ++tries < 20) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), present);
+            return;
+        }
+        present = nil;
+        [top presentViewController:panel animated:YES completion:nil];
+    };
+    dispatch_async(dispatch_get_main_queue(), present);
+}
+
 // The fork's repo. Its links stay hidden while this is nil.
 NSString *const SGRepoURL = @"https://github.com/My-Name-Is-Jeff/vitrine";
 

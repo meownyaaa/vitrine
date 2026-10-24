@@ -243,6 +243,12 @@ NSString *SGLyricsChosenSource(NSString *trackID);
 // Every source in the order is asked for the track at once, the answers kept for the last few tracks, and
 // `done` gets the ones with lines, by key, when all have answered or `wait` has passed.
 void SGLyricsOffers(NSString *trackID, NSTimeInterval wait, void (^done)(NSDictionary<NSString *, SGLyricsResult *> *offers));
+// The same asks started, with no answer awaited.
+void SGLyricsAskOffers(NSString *trackID);
+// What they have answered, asking nothing: the sources with lines so far, and in `asking` the keys still out.
+NSDictionary<NSString *, SGLyricsResult *> *SGLyricsOffersSoFar(NSString *trackID, NSArray<NSString *> **asking);
+// Posted on the main queue (object the track's id) each time one of those sources answers.
+extern NSNotificationName const SGLyricsOffersDidChangeNotification;
 // Makes the offer of `key` the track's lyrics now, everywhere they show, and posts
 // SGLyricsSourceChosenNotification (object the track's id) once its lines are kept.
 void SGLyricsChooseSource(NSString *trackID, NSString *key);
