@@ -360,10 +360,12 @@ static void logBarOnce(UITabBar *bar) {
 }
 @end
 
-// The now playing card (56), its gap over the bar (8) and 24 more, whether a song is playing or not.
+// The now playing card (56), its gap over the bar (8) and 24 more, whether a song is playing or not; in a
+// Jam the strip's height on top while the card is above the bar. In the minimized row the strip rides just
+// above the card, which these 88 already reach.
 static const CGFloat kFadeAbove = 88;
 
-static void placeFade(UIView *stockBar, CGRect glass) {
+static void placeFade(UIView *stockBar, CGRect glass, BOOL minimized) {
     SGRBarFade *fade = objc_getAssociatedObject(stockBar, &kFadeKey);
     if (!fade) {
         fade = [SGRBarFade new];
@@ -375,7 +377,7 @@ static void placeFade(UIView *stockBar, CGRect glass) {
         layer.locations = @[@0, @0.5, @1];
         objc_setAssociatedObject(stockBar, &kFadeKey, fade, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    CGFloat top = CGRectGetMinY(glass) - kFadeAbove;
+    CGFloat top = CGRectGetMinY(glass) - kFadeAbove - (minimized ? 0 : SGRNowPlayingStripHeight());
     CGRect frame = CGRectMake(0, top, stockBar.bounds.size.width, CGRectGetMaxY(glass) - top);
     if (!CGRectEqualToRect(fade.frame, frame)) fade.frame = frame;
     if (fade.superview != stockBar || stockBar.subviews.firstObject != fade) [stockBar insertSubview:fade atIndex:0];
@@ -565,7 +567,7 @@ static void syncBar(UIView *stockBar) {
     CGFloat height = MAX(bounds.size.height, glassHeight(bar, stockBar));
     CGRect frame = CGRectMake(0, CGRectGetMaxY(bounds) - height, width, height);
     if (!CGRectEqualToRect(host.frame, frame)) host.frame = frame;
-    placeFade(stockBar, frame);
+    placeFade(stockBar, frame, minimized);
     CGRect mainFrame = host.bounds, apartFrame = CGRectZero;
     if (minimized) {
         CGFloat side = kApartItemWidth + 2 * kPlatterInset;
@@ -820,7 +822,11 @@ static void setMinimized(BOOL minimized, BOOL animated) {
         settle(YES);
         return;
     }
-    moveFrom(host, before, ^{ SGRNowPlayingBarFollowTabBar(); }, settle);
+    SGRNowPlayingBarMoving(YES);
+    moveFrom(host, before, ^{ SGRNowPlayingBarFollowTabBar(); }, ^(BOOL finished) {
+        SGRNowPlayingBarMoving(NO);
+        settle(finished);
+    });
 }
 
 CGRect SGRTabBarInlineSlot(UIView *host, CGFloat height) {
@@ -856,23 +862,41 @@ static UIView *tabBarOf(UIView *item) {
     return nil;
 }
 
+// The bar in its own pass, and whether one of its items laid out during it.
+static __weak UIView *sg_passBar;
+static BOOL sg_itemsLaidOut;
+
 %hook _TtC23NavigationUI_TabBarImpl10TabBarView
 - (void)layoutSubviews {
+    // A pass nested in another (an item's layoutIfNeeded) hands both back, so the outer one still composes.
+    UIView *bar = (UIView *)self, *outer = sg_passBar;
+    BOOL outerLaidOut = sg_itemsLaidOut;
+    sg_passBar = bar;
     %orig;
-    SGRComposeTabBar((UIView *)self);
-    for (UIView *sub in ((UIView *)self).subviews) {
+    SGRComposeTabBar(bar);
+    sg_itemsLaidOut = NO;
+    for (UIView *sub in bar.subviews) {
         if (![sub isKindOfClass:SGRTabBarHost.class] && ![sub isKindOfClass:SGRBarFade.class]) [sub layoutIfNeeded];
     }
-    holdHome((UIView *)self);
-    syncBar((UIView *)self);
-    SGRLogTabBarRow((UIView *)self);
+    // Items the row's pass laid out are composed once, all together, rather than once each.
+    if (sg_itemsLaidOut) SGRComposeTabBar(bar);
+    sg_passBar = outer;
+    sg_itemsLaidOut = outerLaidOut;
+    holdHome(bar);
+    syncBar(bar);
+    SGRLogTabBarRow(bar);
 }
 %end
 
-// The bar's own pass runs before Spotify has filled the row; the items lay out as they arrive.
+// The bar's own pass runs before Spotify has filled the row; the items lay out as they arrive. Inside the bar's
+// pass, the pass composes once after them; outside it, the item composes at once, so no frame shows Spotify's row.
 static void itemDidLayOut(UIView *item) {
     UIView *bar = tabBarOf(item);
     if (!bar) return;
+    if (bar == sg_passBar) {
+        sg_itemsLaidOut = YES;
+        return;
+    }
     SGRComposeTabBar(bar);
     holdHome(bar);
     syncBar(bar);

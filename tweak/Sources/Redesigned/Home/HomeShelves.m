@@ -141,6 +141,6 @@ BOOL SGRHomeLook(void) {
 }
 
 NSString *SGRHomeTopPicksFrom(void) {
-    NSString *from = [NSUserDefaults.standardUserDefaults stringForKey:SGRKeyHomeTopPicksFrom];
+    NSString *from = SGString(SGRKeyHomeTopPicksFrom);
     return from.length ? from : nil;
 }

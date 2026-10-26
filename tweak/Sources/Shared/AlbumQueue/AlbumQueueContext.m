@@ -33,4 +33,43 @@ NSArray<NSString *> *SGAlbumQueueTrackURIs(id context, NSString *uri, NSString *
     return tracks;
 }
 
-BOOL SGAlbumQueueIsAlbumURI(NSString *uri) { return validURI(uri, @"spotify:album:"); }
+NSString *SGSanitizeEntityURI(NSString *raw) {
+    if (![raw isKindOfClass:NSString.class] || raw.length == 0) return nil;
+    NSString *clean = raw;
+    if ([clean hasPrefix:@"https://open.spotify.com/playlist/"]) {
+        clean = [@"spotify:playlist:" stringByAppendingString:[clean substringFromIndex:@"https://open.spotify.com/playlist/".length]];
+    } else if ([clean hasPrefix:@"https://open.spotify.com/album/"]) {
+        clean = [@"spotify:album:" stringByAppendingString:[clean substringFromIndex:@"https://open.spotify.com/album/".length]];
+    }
+    for (NSString *prefix in @[@"spotify:playlist:", @"spotify:album:"]) {
+        if ([clean hasPrefix:prefix]) {
+            NSString *sub = [clean substringFromIndex:prefix.length];
+            NSRange q = [sub rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"?:/#"]];
+            if (q.location != NSNotFound) sub = [sub substringToIndex:q.location];
+            if (sub.length == 22) {
+                BOOL validChars = YES;
+                for (NSUInteger i = 0; i < sub.length; i++) {
+                    unichar c = [sub characterAtIndex:i];
+                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+                        validChars = NO;
+                        break;
+                    }
+                }
+                if (validChars) return [prefix stringByAppendingString:sub];
+            }
+        }
+    }
+    return nil;
+}
+
+BOOL SGAlbumQueueIsAlbumURI(NSString *uri) {
+    NSString *clean = SGSanitizeEntityURI(uri);
+    return clean && [clean hasPrefix:@"spotify:album:"];
+}
+BOOL SGIsPlaylistURI(NSString *uri) {
+    NSString *clean = SGSanitizeEntityURI(uri);
+    return clean && [clean hasPrefix:@"spotify:playlist:"];
+}
+BOOL SGIsValidEntityURI(NSString *uri) {
+    return SGSanitizeEntityURI(uri) != nil;
+}

@@ -4,8 +4,8 @@
 
 @interface SPTEncoreIconView : UIView
 - (instancetype)initWithIcon:(id)icon;
-- (void)setForegroundColor:(UIColor *)color;
-- (void)setActiveForegroundColor:(UIColor *)color;
+@property (nonatomic, strong) UIColor *foregroundColor;
+@property (nonatomic, strong) UIColor *activeForegroundColor;
 - (void)setIsActive:(BOOL)active;
 - (BOOL)isActive;
 @end

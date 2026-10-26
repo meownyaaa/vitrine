@@ -4,5 +4,7 @@
 NSString *SGURIString(id uri);
 @protocol SGPlayerStateObserver <NSObject>
 - (void)playerStateDidChange:(SPTPlayerState *)state;
+@optional
+- (void)playerStateDidReport:(SPTPlayerState *)state;
 @end
 void SGAddPlayerStateObserver(id<SGPlayerStateObserver> observer);

@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-SRC=/Users/vojta/Documents/quick/custom_spotify/custom_spotify/tweak/Sources
+SRC=$(cd "$(dirname "$0")/../../tweak/Sources" && pwd)
 OUT=$(dirname "$0")/build
 rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/MorphHarness.app"
 "$THEOS/bin/logos.pl" -c generator=internal "$SRC/Redesigned/Player/PlayerMorph.x" > "$OUT/gen/PlayerMorph.m"

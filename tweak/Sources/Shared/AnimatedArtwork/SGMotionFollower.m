@@ -57,8 +57,11 @@
     });
 }
 
-// The next track's clip, fetched into the store once, so a skip finds it there.
+// The next track's clip, fetched into the store once, so a skip finds it there. Not in Low Power Mode: the
+// skip then downloads it, and the plain cover shows until it lands. Every found clip asks again, so no
+// observer is needed for the mode ending.
 - (void)fetchAhead {
+    if (NSProcessInfo.processInfo.lowPowerModeEnabled) return;
     SPTPlayerState *state = SGPlayerState();
     id future = [state respondsToSelector:@selector(future)] ? state.future : nil;
     id next = [future isKindOfClass:NSArray.class] ? [(NSArray *)future firstObject] : nil;

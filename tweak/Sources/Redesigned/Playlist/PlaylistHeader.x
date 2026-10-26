@@ -236,6 +236,12 @@ static void applyHero(UIView *layout, UIView *cover, UIView *plane, UIView *bloc
     if (!CGRectEqualToRect(hero.frame, frame)) hero.frame = frame;
 
     [hero followCover:coverImageIn(cover)];
+    // Full bleed covers off: Spotify's own square stays above the block, shrinking as the header collapses, and the
+    // hero only reads the picture for the field. A mix's picture is full bleed in Spotify's own layout, so it stays.
+    if (!SGRFullBleedCovers() && [cover.accessibilityIdentifier isEqualToString:@"Components.Header.UI.ArtworkImage"]) {
+        hero.hidden = YES;
+        return;
+    }
     conceal(cover);
 }
 
@@ -269,6 +275,9 @@ static BOOL modelFlag(id model, NSString *name, BOOL fallback) {
 // A description is HTML: links to other playlists as <a> and entities for quotes and ampersands.
 static NSString *plainText(NSString *html) {
     if (!html.length) return nil;
+    // The header's passes hand the same description over on every step of the collapse.
+    static NSString *lastHTML, *lastText;
+    if ([html isEqualToString:lastHTML]) return lastText;
     static NSRegularExpression *tags;
     if (!tags) tags = [NSRegularExpression regularExpressionWithPattern:@"<[^>]+>" options:0 error:NULL];
     NSMutableString *text = [[tags stringByReplacingMatchesInString:html options:0 range:NSMakeRange(0, html.length)
@@ -279,7 +288,9 @@ static NSString *plainText(NSString *html) {
         [text replaceOccurrencesOfString:entity withString:entities[entity] options:0 range:NSMakeRange(0, text.length)];
     }
     NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    return trimmed.length ? trimmed : nil;
+    lastHTML = [html copy];
+    lastText = trimmed.length ? trimmed : nil;
+    return lastText;
 }
 
 static NSString *firstText(UIView *root, UIView *skip) {
@@ -299,7 +310,7 @@ static NSString *firstText(UIView *root, UIView *skip) {
 static NSString *creatorIn(UIView *block) {
     __block UIView *facepile = nil;
     SGForEachView(block, ^(UIView *v) {
-        if (!facepile && [NSStringFromClass(v.class) containsString:@"FacepileView"]) facepile = v;
+        if (!facepile && SGClassNamed(v.class, @"FacepileView")) facepile = v;
     });
     UIView *row = facepile.superview;
     for (NSUInteger level = 0; row && row != block && level < 3; level++, row = row.superview) {
@@ -480,7 +491,7 @@ static void applyScrims(UIView *headerRoot) {
     if (!bar) bar = NSClassFromString(@"_TtC28EncoreConsumerMobile_BaseKit19HeaderNavigationBar");
     UIView *navigation = firstOfClass(headerRoot, bar);
     for (UIView *sub in navigation.subviews) {
-        if (![NSStringFromClass(sub.class) containsString:@"GradientView"]) continue;
+        if (!SGClassNamed(sub.class, @"GradientView")) continue;
         conceal(sub);
         objc_setAssociatedObject(headerRoot, &kBarScrimKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
@@ -506,7 +517,7 @@ static UIView *applyBackground(UIView *layout) {
     SGRPlaylistHero *hero = objc_getAssociatedObject(plane, &kHeroKey);
     SGForEachView(container, ^(UIView *v) {
         if (hero && (v == hero || [v isDescendantOfView:hero])) return;
-        if ([NSStringFromClass(v.class) containsString:@"GradientView"]) {
+        if (SGClassNamed(v.class, @"GradientView")) {
             conceal(v);
             return;
         }

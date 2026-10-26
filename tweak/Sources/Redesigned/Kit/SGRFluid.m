@@ -13,12 +13,15 @@ static const struct { CGFloat side, x, y; CFTimeInterval turn; } kCopy[] = {
 };
 enum { kCopies = sizeof(kCopy) / sizeof(kCopy[0]) };
 // The blurred cover is small: it is drawn several times the screen's size, so detail is lost anyway. The Blur
-// setting is its radius in steps of 1.25 px, so the standard 8 is 10 px, a twelfth of the side.
-static const CGFloat kBlurSide = 128, kBlurPerStep = 1.25, kBrightness = -0.08;
+// setting is its radius in steps of 1.25 px, so the standard 8 is 10 px, a twelfth of the side. No brightness
+// offset: Core Image works in linear light, where even -0.08 turned every channel under about 30% to black
+// (issue #100), leaving dark covers black and the rest a single saturated channel. The ceiling below darkens.
+static const CGFloat kBlurSide = 128, kBlurPerStep = 1.25;
 // The upper three copies' opacity at full Warp.
 static const float kOverOpacity = 0.7;
-// The shade over the bottom of the visible rect, where the controls are.
-static const CGFloat kShadeFrom = 0.45, kShadeAlpha = 0.55;
+// The shade over the bottom of the visible rect, where the controls are. Light: the ceiling already keeps the
+// text's contrast, and 0.55 left the lower half of a dark cover black (issue #100).
+static const CGFloat kShadeFrom = 0.45, kShadeAlpha = 0.3;
 
 NSNotificationName const SGRFluidSettingsDidChangeNotification = @"spotifyglass.redesign.fluidSettingsDidChange";
 
@@ -60,7 +63,7 @@ static UIImage *blurred(UIImage *image, BOOL contrast, CGFloat radius, CGFloat s
     CGRect extent = input.extent;
     CIImage *output = [[[input imageByClampingToExtent]
         imageByApplyingFilter:@"CIGaussianBlur" withInputParameters:@{kCIInputRadiusKey: @(radius)}]
-        imageByApplyingFilter:@"CIColorControls" withInputParameters:@{kCIInputSaturationKey: @(saturation), kCIInputBrightnessKey: @(kBrightness)}];
+        imageByApplyingFilter:@"CIColorControls" withInputParameters:@{kCIInputSaturationKey: @(saturation)}];
     static CIContext *context;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ context = [CIContext contextWithOptions:nil]; });
@@ -68,7 +71,9 @@ static UIImage *blurred(UIImage *image, BOOL contrast, CGFloat radius, CGFloat s
     if (!cg) return nil;
     // Each blurred pixel is capped at a linear luminance (0.04 with Increase Contrast) that keeps the player's
     // white text at about 8.8:1 and its 65% white at about 4.7:1 on the brightest; an average alone would leave
-    // a bright patch of a cover behind the text. The Brightness gain comes first, so the ceiling still caps it.
+    // a bright patch of a cover behind the text. The Brightness gain scales the capped pixel, so below 100 it
+    // darkens every cover alike (applied before the cap, a bright cover stayed at the ceiling whatever the
+    // setting); above 100 it lifts the darker pixels, and the ceiling still holds the bright ones.
     size_t width = CGImageGetWidth(cg), height = CGImageGetHeight(cg);
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef bitmap = CGBitmapContextCreate(NULL, width, height, 8, width * 4, space,
@@ -84,10 +89,10 @@ static UIImage *blurred(UIImage *image, BOOL contrast, CGFloat radius, CGFloat s
         CGFloat rgb[3];
         for (int c = 0; c < 3; c++) {
             CGFloat v = p[c] / 255.0;
-            rgb[c] = gain * (v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4));
+            rgb[c] = v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
         }
         CGFloat light = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
-        CGFloat cap = light > ceiling ? ceiling / light : 1;
+        CGFloat cap = MIN(gain * (light > ceiling ? ceiling / light : 1), ceiling / light);
         for (int c = 0; c < 3; c++) {
             CGFloat v = MIN(1, rgb[c] * cap);
             p[c] = floor(255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055));

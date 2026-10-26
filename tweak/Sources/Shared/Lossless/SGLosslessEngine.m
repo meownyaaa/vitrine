@@ -285,8 +285,9 @@ static BOOL record(double seconds, NSString **error) {
 
 #pragma mark - the writer
 
-// Fills the ring from where the render thread reads until the generation changes or the file ends.
-static void fill(NSString *path, double rate, uint64_t from, uint64_t generation) {
+// Fills the ring from where the render thread reads until the generation or the source epoch changes or the file ends.
+// Past the epoch the selector never reads this ring again (the epoch only grows), so there is nothing left to fill.
+static void fill(NSString *path, double rate, uint64_t from, uint64_t generation, uint64_t epoch) {
     Reader reader = {0};
     NSString *error;
     if (!openReader(&reader, path, rate, &error)) {
@@ -297,7 +298,7 @@ static void fill(NSString *path, double rate, uint64_t from, uint64_t generation
     float *l = malloc(kChunk * sizeof(float)), *r = malloc(kChunk * sizeof(float));
     uint64_t end = from;
     BOOL seek = YES;
-    while (atomic_load(&sg_generation) == generation) {
+    while (atomic_load(&sg_generation) == generation && SGPlayerSourceEpoch() == epoch) {
         uint64_t reading = MAX(atomic_load_explicit(&sg_readAt, memory_order_relaxed), atomic_load(&sg_ringStart));
         if (reading > end + (uint64_t)rate) {
             // Spotify plays ahead of what the ring holds: start again where it plays.
@@ -372,10 +373,10 @@ static NSDictionary *anchor(NSString *path, double hint, NSString **error) {
     atomic_store(&sg_ringStart, now);
     atomic_store(&sg_ringEnd, now);
     atomic_store(&sg_readAt, now);
-    uint64_t generation = atomic_load(&sg_generation);
+    uint64_t generation = atomic_load(&sg_generation), epoch = sg_playEpoch;
     atomic_fetch_add(&sg_writers, 1);
     // Its own thread: it runs for the rest of the song, which would hold a shared queue's thread that long.
-    NSThread *writer = [[NSThread alloc] initWithBlock:^{ fill(path, rate, now, generation); }];
+    NSThread *writer = [[NSThread alloc] initWithBlock:^{ fill(path, rate, now, generation, epoch); }];
     writer.qualityOfService = NSQualityOfServiceUserInitiated;
     writer.name = @"spotifyglass.lossless.writer";
     [writer start];

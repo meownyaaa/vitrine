@@ -103,8 +103,7 @@ SGLyricsAsk SGGeniusAsk = ^(SGLyricsQuery *query, void (^done)(SGLyricsResult *r
             return;
         }
         NSURL *embed = [NSURL URLWithString:[NSString stringWithFormat:@"https://genius.com/songs/%@/embed.js", song]];
-        SGLyricsGetText(embed, ^(NSString *js) {
-            NSArray<NSString *> *rows = SGGeniusEmbedRows(js);
+        SGLyricsGetTextThen(embed, ^id(NSString *js) { return SGGeniusEmbedRows(js); }, ^(NSArray<NSString *> *rows) {
             if (!rows) {
                 SGLog(@"genius: %@ by %@ is song %@, no lines in its embed", query.title, query.artist, song);
                 done(nil);

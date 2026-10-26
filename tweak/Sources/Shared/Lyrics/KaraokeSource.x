@@ -440,10 +440,18 @@ void SGKaraokeSeek(NSInteger ms) {
 }
 
 // A Spotify track by its base62 id, a local file by its URI (Shared/LocalFiles/LocalFiles.h).
+// The id is kept on the track, which the page asks for on every frame; a local file's key is not,
+// as a rename changes it.
+static char sg_trackIDKey;
 static NSString *idOf(SPTPlayerTrack *track) {
+    NSString *kept = track ? objc_getAssociatedObject(track, &sg_trackIDKey) : nil;
+    if (kept) return kept;
     id uri = track.URI;
     NSString *text = [uri isKindOfClass:NSURL.class] ? ((NSURL *)uri).absoluteString : [uri description];
-    return [text hasPrefix:@"spotify:track:"] ? [text substringFromIndex:@"spotify:track:".length] : SGLocalFileLyricsKey(text);
+    if (![text hasPrefix:@"spotify:track:"]) return SGLocalFileLyricsKey(text);
+    NSString *trackID = [text substringFromIndex:@"spotify:track:".length];
+    objc_setAssociatedObject(track, &sg_trackIDKey, trackID, OBJC_ASSOCIATION_RETAIN);
+    return trackID;
 }
 
 // Tracks come in from the player and from every list that reads their metadata, so when the table
@@ -465,10 +473,8 @@ SPTPlayerTrack *SGKaraokeTrackFor(NSString *trackID) {
     @synchronized (sg_seenTracks) { return sg_seenTracks[trackID]; }
 }
 
-void SGKaraokeRememberTrack(SPTPlayerTrack *track) {
-    if (!sg_seenTracks) return;
-    NSString *trackID = idOf(track);
-    if (trackID) remember(track, trackID);
+void SGKaraokeRememberTrack(SPTPlayerTrack *track, NSString *trackID) {
+    if (sg_seenTracks && trackID) remember(track, trackID);
 }
 
 // With a source of the mod's on, the walk for a track starts the moment the player moves to it and,

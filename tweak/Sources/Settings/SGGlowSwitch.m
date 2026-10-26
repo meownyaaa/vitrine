@@ -186,6 +186,9 @@ static CAShapeLayer *newStroke(CGFloat width) {
         turn.duration = kTurn;
         turn.repeatCount = HUGE_VALF;
         turn.removedOnCompletion = NO;
+        // A turn this slow needs no more than the display's base rate (SGMarquee does the same): each frame of it
+        // is the blur and three masks drawn again.
+        turn.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
         [colors addAnimation:turn forKey:kTurnKey];
     }
 }

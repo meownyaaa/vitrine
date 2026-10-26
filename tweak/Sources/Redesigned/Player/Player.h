@@ -8,7 +8,7 @@
 //     PlayerField.x      the switch's flags and rows, the field in the background plane, the cover it reads
 //     PlayerArtwork.x    the cover's corners, shadow and paused shrink; the lyric preview as Spotify's setting has it
 //     PlayerHeader.x     glass behind the close and more buttons
-//     PlayerControls.x   previous, play and next as bare glyphs, monospaced times
+//     PlayerControls.x   previous, play and next as bare glyphs, shuffle and repeat hidden on request, monospaced times
 //     PlayerFooter.x     share gone, lyrics, Connect and queue as one row of three glyphs
 //     DJPlayer.x         the AI DJ's player (its own units): skip glyphs, a four glyph footer row, over the shared
 //                        play glyph, lowered row and Connect of PlayerControls.x and PlayerFooter.x
@@ -73,7 +73,7 @@ CGFloat SGRPlayerCoverScale(void);
 // title -- in `host`'s coordinates; CGRectNull when no cover has laid out.
 CGRect SGRPlayerArtworkAreaIn(UIView *host);
 // Hides the cover on screen and its shadow, or shows them again, for a stand-in to fly in its place
-// (PlayerMorph.x).
+// (PlayerMorph.x). Until NO, every cover laid out on screen is hidden too, the first open's included.
 void SGRPlayerSetCoverHidden(BOOL hidden);
 
 #pragma mark - the lyrics in the player (PlayerLyrics.x)
@@ -101,10 +101,16 @@ static inline Class SGRDJClass(NSString *name) {
     NSString *mangled = [NSString stringWithFormat:@"_TtC%lu%@%lu%@", (unsigned long)module.length, module, (unsigned long)name.length, name];
     return NSClassFromString(mangled) ?: NSClassFromString([NSString stringWithFormat:@"%@.%@", module, name]);
 }
-// The controls under the lines fade a few seconds after the last touch while the lyrics play, and the
-// lines grow down into their room (PlayerLyrics.x). On until switched off; a scroll through the lines
-// hides them either way.
+// What fades a few seconds after the last touch while the lyrics play, as the lines grow into the room
+// (PlayerLyrics.x): nothing, everything but the lines, or the controls under the title row alone. A scroll
+// on through the lines hides the same views, everything when the choice is Off, and a scroll back brings them
+// back. The key was a switch first: its NO and YES are the first two indexes, and unset reads as the switch did.
 #define SGRKeyLyricsAutoHide @"spotifyglass.redesign.lyrics.autoHide"
+typedef NS_ENUM(NSInteger, SGRLyricsHide) { SGRLyricsHideOff, SGRLyricsHideAll, SGRLyricsHideControls };
+SGRLyricsHide SGRLyricsHideMode(void);
+@class SGModRow;
+// The Lyrics page's choice of it (PlayerSettings.m).
+SGModRow *SGRLyricsHideRow(void);
 
 // A volume slider under the controls (PlayerVolume.m), the system's: this iPhone's, or the Connect device's.
 // On until switched off. Placed by the footer's layout, between the controls (`controls`) and the footer row
@@ -113,6 +119,8 @@ static inline Class SGRDJClass(NSString *name) {
 BOOL SGRPlayerVolumeOn(void);
 // YES when the row shows; NO when it is off, has no controls to sit under or no room between them and the footer.
 BOOL SGRPlayerPlaceVolume(UIView *stack, UIView *controls, UIView *row, CGFloat margin);
+// Called after any slider's setValue:animated: (PlayerFooter.x), so the row follows its hidden system slider.
+void SGRPlayerVolumeSliderSet(UISlider *slider);
 
 // Follow the cover (PlayerCoverAccent.x): the player's lit controls painted in the cover's color instead of the accent.
 // Off until switched on, read at launch. The cover's color (a gray one gives the accent back), and a paint of Spotify's
@@ -121,6 +129,12 @@ BOOL SGRPlayerPlaceVolume(UIView *stack, UIView *controls, UIView *row, CGFloat 
 BOOL SGRPlayerFollowsCover(void);
 void SGRPlayerSetCoverAccent(UIColor *cover);
 void SGRPlayerPaintCover(UIView *stack);
+
+// Shuffle and repeat left out of the controls (PlayerControls.x), each on its own switch under Hide on the player, the
+// way the Music app keeps them off its main controls. Off until switched on, read at launch. The buttons go by alpha
+// and keep their slots, so previous, play and next stay where they are, centered.
+#define SGRKeyPlayerHideShuffle @"spotifyglass.redesign.player.hideShuffle"
+#define SGRKeyPlayerHideRepeat @"spotifyglass.redesign.player.hideRepeat"
 
 // The lyrics turn sideways with the phone onto a landscape screen of their own (PlayerLandscape.x). On
 // until switched off. Shown or put away by hand for the harness.
@@ -145,9 +159,9 @@ BOOL SGRPlayerMotionShowing(void);
 // `arrived` runs once on the main queue when a call would return it (never when nothing is found, or the
 // track changed). Without `arrived` it only answers with a clip already in.
 UIView *SGRPlayerMotionPreview(void (^arrived)(void));
-// How dark the clip is drawn (a black layer's opacity) for white text over it to keep 4.5:1, or 7:1 with
-// `contrast` (Increase Contrast), when `luminance` is the clip's bright end, its 75th percentile of linear
-// luminance; between 0.10 and 0.80, 0.15 more while the lyrics are up.
+// How dark the clip is drawn (the dim's opacity, where its gradient is whole) for white text over it to keep
+// 4.5:1, or 7:1 with `contrast` (Increase Contrast), when `luminance` is the clip's bright end, its 75th
+// percentile of linear luminance; between 0.10 and 0.80, 0.15 more while the lyrics are up.
 CGFloat SGRPlayerClipDim(CGFloat luminance, BOOL contrast, BOOL lyrics);
 
 #pragma mark - the Visualizer (PlayerVisualiser.m)
@@ -189,6 +203,11 @@ UIView *SGRPlayerConnectGlyphIn(UIView *host, UIView *connect);
 // Connect's touches only in a 44pt square over its glyph: `holder` is the view of the footer that holds Connect, whose
 // own view reaches far past the glyph (over Queue and the DJ button once the glyph is moved).
 void SGRPlayerCoverConnect(UIView *holder, UIView *glyph);
+// Whether a control is drawn lit: in the accent, judged as Follow the cover judges what it repaints.
+BOOL SGRPlayerAccentLike(UIColor *color);
+// The color an image is drawn in: the average of its opaque pixels, read once at 16 by 16 and kept on the image; nil
+// for one with too few.
+UIColor *SGRPlayerImageInk(UIImage *image);
 
 // The tap to seek around the progress bar (PlayerControls.x), apart for the harness: whether a tap at `point`
 // in the duration unit's view seeks, and the share of the song a point on the slider stands for, measured

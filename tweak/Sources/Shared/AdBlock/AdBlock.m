@@ -19,6 +19,7 @@ static NSString *const adFlags[] = {
     @"ios-feature-adssponsoredcontext.sponsored_playlist_v2_enabled",
     @"ios-feature-adssponsoredcontext.sponsored_context_mismatch_aderror_enabled",
     @"ios-feature-adssponsoredcontextnpbattachment.sponsored_npb_slot_fetch_enabled",
+    @"ios-feature-nowplaying.keep_fullscreen_during_video_ads",   // 9.1.94's
 };
 
 static NSString *const upsellFlags[] = {
@@ -42,6 +43,13 @@ static NSString *const upsellFlags[] = {
     @"ios-feature-premium-destination-badge.badge_enabled",
     @"ios-account-common.premium_plans_entry_point_row_enabled",
     @"ios-account-common.premium_referrals_settings_item_enabled",
+    // 9.1.94's, all off by default.
+    @"ios-reinventfree-contextualupsellpremiumpromo-impl.is_promo_checkout_link_enabled",
+    @"ios-reinventfree-controllerui-impl.route_search_upsell_to_track_selected",
+    @"ios-reinventfree-timecapupsellpage-impl.track_selected_artwork_enabled",
+    @"ios-nowplaying-scroll-impl.membership_upsell_banner_in_about_card_enabled",
+    @"ios-settings-rootpage-impl.use_compact_upsell",
+    @"ios-premiumvalue.enable_premium_value",
 };
 
 // More of what Hide ads sets, by value: the ad features off, their guards and Skip buttons pinned on, and the
@@ -125,15 +133,26 @@ static NSString *const labels[] = {
     @"Ad services", @"Upsell services", @"Popups", @"Page components", @"Feed sections", @"Requests", @"Config rewrites",
 };
 static NSMutableDictionary<NSString *, NSNumber *> *sg_counts;
-static BOOL sg_unsaved;   // checks counted since the counts were last written
+static BOOL sg_unsaved;   // stops or checks counted since the counts were last written
+static CFAbsoluteTime sg_savedAt;
 
+// Made once per label: the hooks count on every request and page component.
 static NSString *checkedKey(NSString *label) {
-    return [label stringByAppendingString:@" checked"];
+    static NSDictionary<NSString *, NSString *> *keys;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableDictionary<NSString *, NSString *> *made = [NSMutableDictionary dictionary];
+        for (NSString *each in SGAdBlockLabels()) made[each] = [each stringByAppendingString:@" checked"];
+        keys = made;
+    });
+    return keys[label];
 }
 
 // The kinds whose hooks count what they look at. The services are stubs Spotify loads, with nothing to look at.
+static NSString *const checkedLabels[] = {@"Popups", @"Page components", @"Feed sections", @"Requests", @"Config rewrites"};
+
 static BOOL countsChecks(NSString *label) {
-    return [@[@"Popups", @"Page components", @"Feed sections", @"Requests", @"Config rewrites"] containsObject:label];
+    return listed(label, checkedLabels, sizeof(checkedLabels) / sizeof(checkedLabels[0]));
 }
 
 // Counting happens on whichever thread the hook ran on, the page reads on the main one.
@@ -144,18 +163,28 @@ static NSMutableDictionary<NSString *, NSNumber *> *countsLocked(void) {
         if (sg_counts.count && !sg_counts[checkedKey(@"Requests")]) {
             [sg_counts removeAllObjects];
             sg_counts[checkedKey(@"Requests")] = @0;
-            [NSUserDefaults.standardUserDefaults setObject:sg_counts forKey:kCounts];
+            SGPrefsWriteUnmemoized(^{ [NSUserDefaults.standardUserDefaults setObject:sg_counts forKey:kCounts]; });
         }
     }
     return sg_counts;
+}
+
+// Counted in memory, as a stop can come several times a second, and written when Spotify leaves the screen
+// and at most every 30 s while counting goes on, so a kill in the background (no notification comes) loses
+// half a minute at most. Called under the lock.
+static void saveLocked(BOOL now) {
+    if (!sg_unsaved || (!now && CFAbsoluteTimeGetCurrent() - sg_savedAt < 30)) return;
+    SGPrefsWriteUnmemoized(^{ [NSUserDefaults.standardUserDefaults setObject:countsLocked() forKey:kCounts]; });
+    sg_unsaved = NO;
+    sg_savedAt = CFAbsoluteTimeGetCurrent();
 }
 
 void SGAdBlockCountOne(NSString *label) {
     @synchronized (kCounts) {
         NSMutableDictionary<NSString *, NSNumber *> *counts = countsLocked();
         counts[label] = @(counts[label].unsignedIntegerValue + 1);
-        [NSUserDefaults.standardUserDefaults setObject:counts forKey:kCounts];
-        sg_unsaved = NO;
+        sg_unsaved = YES;
+        saveLocked(NO);
     }
 }
 
@@ -165,6 +194,7 @@ void SGAdBlockSawOne(NSString *label) {
         NSString *key = checkedKey(label);
         counts[key] = @(counts[key].unsignedIntegerValue + 1);
         sg_unsaved = YES;
+        saveLocked(NO);
     }
 }
 
@@ -174,15 +204,11 @@ NSUInteger SGAdBlockChecked(NSString *label) {
     }
 }
 
-// The checks counted since the last stop, written as Spotify leaves the screen.
+// Spotify leaving the screen writes what was counted since the last write.
 __attribute__((constructor)) static void saveChecksOnLeaving(void) {
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *note) {
-        @synchronized (kCounts) {
-            if (!sg_unsaved) return;
-            [NSUserDefaults.standardUserDefaults setObject:countsLocked() forKey:kCounts];
-            sg_unsaved = NO;
-        }
+        @synchronized (kCounts) { saveLocked(YES); }
     }];
 }
 

@@ -1,4 +1,5 @@
-// Spotify's App Groups, redirected into whichever group the sideload signature really has.
+// Spotify's App Groups and its extension-credentials keychain group, redirected into groups the
+// sideload signature really has.
 //
 // The main app hands the home screen widget everything it shows through UserDefaults suites named
 // group.com.spotify.client.widget, .widget.data and .widget.lifecycle. Those groups belong to
@@ -6,11 +7,18 @@
 // (group.<hash>.N from a paid certificate service, something else from AltStore), each process
 // then gets a private, empty suite, and the widget stays on its "Open Spotify and play" placeholder.
 //
-// This dylib is loaded by both Spotify and WidgetExtension.appex (scripts/pipeline.sh adds the load
-// command to the extension). In each it maps every group.* identifier the process is not entitled
-// to onto a folder inside one group it is entitled to, the same folder in both processes, so the
-// suites and container files meet again. It is plain runtime swizzling, no Substrate, because the
-// extension carries nothing else of the tweak.
+// This dylib is loaded by Spotify and its Widget, Intents and NotificationService extensions
+// (scripts/pipeline.sh adds the load command to each extension). In each it maps every group.*
+// identifier the process is not entitled to onto a folder inside one group it is entitled to, the
+// same folder in every process, so the suites and container files meet again. It is plain runtime
+// swizzling, no Substrate, because the extensions carry nothing else of the tweak.
+//
+// Keychain: the app saves the login the Siri and notification extensions sign in with under
+// the access group 8W66MEA7DD.com.spotify.client.extension-credentials, built from Spotify's team id
+// in SpotifyShared. A re-signed process is not entitled to it (errSecMissingEntitlement), so Siri asks
+// to verify the account (issue #60). Every SPTKeychainManager call builds its query in
+// getBaseDictionaryForDomain:key:accessGroup:accessAttr:synchronizable:, and there that group is
+// swapped for one the signature has, the same in the app and every extension.
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <os/log.h>
@@ -28,10 +36,15 @@ static NSArray<NSString *> *sEntitled;
 static NSURL *(*sOrigContainerURL)(id, SEL, NSString *);
 static id (*sOrigInitWithSuiteName)(id, SEL, NSString *);
 
-static NSArray<NSString *> *EntitledGroups(void) {
+static NSString *const kCredentialsGroupSuffix = @".com.spotify.client.extension-credentials";
+static NSArray<NSString *> *sKeychainEntitled;
+static NSString *sKeychainGroup;
+static id (*sOrigBaseDictionary)(id, SEL, id, id, NSString *, id, BOOL);
+
+static NSArray<NSString *> *EntitledGroups(CFStringRef entitlement) {
   SecTaskRef task = SecTaskCreateFromSelf(NULL);
   if (!task) return @[];
-  CFTypeRef value = SecTaskCopyValueForEntitlement(task, CFSTR("com.apple.security.application-groups"), NULL);
+  CFTypeRef value = SecTaskCopyValueForEntitlement(task, entitlement, NULL);
   CFRelease(task);
   NSArray *groups = CFBridgingRelease(value);
   if (![groups isKindOfClass:NSArray.class]) return @[];
@@ -78,9 +91,51 @@ static id SGInitWithSuiteName(NSUserDefaults *self, SEL _cmd, NSString *suite) {
   return sOrigInitWithSuiteName(self, _cmd, suite);
 }
 
+// The group the extension credentials go in: the signer's own copy of Spotify's (AltStore re-teams
+// it), else the first entitled one in sorted order. A TEAM.* entry is used as it is, not expanded, so it is
+// allowed whether or not securityd matches the wildcard. com.apple.token is CryptoTokenKit's.
+static NSString *CredentialsGroup(void) {
+  for (NSString *group in sKeychainEntitled) {
+    if ([group hasSuffix:kCredentialsGroupSuffix]) return group;
+  }
+  for (NSString *group in sKeychainEntitled) {
+    if (![group isEqualToString:@"com.apple.token"]) return group;
+  }
+  return nil;
+}
+
+static id SGBaseDictionary(id self, SEL _cmd, id domain, id key, NSString *group, id attr, BOOL sync) {
+  // Only Spotify's extension credentials group, and only when the signature lacks it: TrollStore keeps
+  // Spotify's entitlements and is left alone, and the Watch groups never match the suffix.
+  if ([group isKindOfClass:NSString.class] && [group hasSuffix:kCredentialsGroupSuffix] && ![sKeychainEntitled containsObject:group]) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ os_log(sLog, "[spotifyglass] keychain: %{public}@ -> %{public}@", group, sKeychainGroup); });
+    group = sKeychainGroup;
+  }
+  return sOrigBaseDictionary(self, _cmd, domain, key, group, attr, sync);
+}
+
+// SpotifyShared is a direct dependency of the app and of every extension, so its classes are
+// registered before this constructor runs.
+static void InstallKeychainHook(void) {
+  sKeychainEntitled = EntitledGroups(CFSTR("keychain-access-groups"));
+  sKeychainGroup = CredentialsGroup();
+  os_log(sLog, "[spotifyglass] keychain: entitled to %{public}@, credentials in %{public}@",
+         [sKeychainEntitled componentsJoinedByString:@", "], sKeychainGroup);
+  if (!sKeychainGroup) return;
+  Method m = class_getInstanceMethod(objc_getClass("SPTKeychainManagerImpl"),
+                                     @selector(getBaseDictionaryForDomain:key:accessGroup:accessAttr:synchronizable:));
+  if (!m) {
+    os_log(sLog, "[spotifyglass] keychain: no -[SPTKeychainManagerImpl getBaseDictionaryForDomain:...]");
+    return;
+  }
+  sOrigBaseDictionary = (void *)method_setImplementation(m, (IMP)SGBaseDictionary);
+}
+
 __attribute__((constructor)) static void SGAppGroupsInit(void) {
   sLog = os_log_create("spotifyglass", "appgroups");
-  sEntitled = EntitledGroups();
+  InstallKeychainHook();
+  sEntitled = EntitledGroups(CFSTR("com.apple.security.application-groups"));
   os_log(sLog, "[spotifyglass] appgroups: %{public}@ entitled to %{public}@",
          NSBundle.mainBundle.bundleIdentifier, [sEntitled componentsJoinedByString:@", "]);
   if (sEntitled.count == 0) return;

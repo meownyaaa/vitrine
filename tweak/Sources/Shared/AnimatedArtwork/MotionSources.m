@@ -36,7 +36,8 @@ BOOL SGMotionAppleMusicOn(void) {
 
 NSURL *SGMotionCanvasIn(NSDictionary *metadata) {
     if (![metadata isKindOfClass:NSDictionary.class]) return nil;
-    id type = metadata[@"canvas.type"], address = metadata[@"canvas.url"];
+    id type = metadata[@"canvas.type"] ?: metadata[SGMotionHiddenCanvas @"canvas.type"];
+    id address = metadata[@"canvas.url"] ?: metadata[SGMotionHiddenCanvas @"canvas.url"];
     BOOL video = [type isKindOfClass:NSString.class] && [type rangeOfString:@"video" options:NSCaseInsensitiveSearch].location != NSNotFound;
     return video && [address isKindOfClass:NSString.class] ? [NSURL URLWithString:address] : nil;
 }

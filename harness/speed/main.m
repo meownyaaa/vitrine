@@ -70,6 +70,13 @@ typedef struct {
 @end
 
 @implementation SPTPlayerState
+// The hooked -position (SpeedPitch.x) also reads which track and whether paused: one track, playing.
+- (id)track {
+    return nil;
+}
+- (BOOL)isPaused {
+    return NO;
+}
 - (double)playbackSpeed {
     return 1;
 }
@@ -77,6 +84,10 @@ typedef struct {
     return MAX(0, self.positionAsOfTimestamp - self.timestamp.timeIntervalSinceNow * [self playbackSpeed]);
 }
 @end
+
+// Shared/Player/PlayerState.x: no player state for SGSetPlayerSpeed to start the mod's clock from (the mock has
+// no track), so the speed checks see the units alone.
+SPTPlayerState *SGPlayerState(void) { return nil; }
 
 static OSStatus decoder(void *refCon, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *timestamp, UInt32 bus,
                         UInt32 frames, AudioBufferList *data) {

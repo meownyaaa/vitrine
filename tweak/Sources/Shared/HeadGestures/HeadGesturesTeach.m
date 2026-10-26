@@ -9,7 +9,7 @@
 //
 // The sheet holds the motion open while it is up (SGHeadGesturesHold), so the system's Motion & Fitness prompt,
 // the first time, comes over it before Start, and no gesture does anything to the song meanwhile. The ring
-// reads the motion through SGHeadMotionListen and draws at 60 fps at most, only while the sheet shows.
+// reads the motion through SGHeadMotionListen and draws only while the sheet shows, at up to 120 fps.
 #import <QuartzCore/QuartzCore.h>
 #import <os/lock.h>
 #import "Core/SGCore.h"
@@ -33,7 +33,7 @@ static const CGFloat kTickLength = 10, kTickWidth = 3, kDotSize = 18;
 static const double kPitchReach = 0.3, kYawReach = 0.22;
 // Where the head rests follows it this slowly, so a gesture moves the dot and a new posture does not.
 static const double kRestSeconds = 1.2;
-// The dot follows the motion's 25 samples a second this closely, so it glides between them at 60 fps.
+// The dot follows the motion's 25 samples a second this closely, so it glides between them at any frame rate.
 static const double kFollowSeconds = 0.05;
 // A lit tick fades back this slowly; the light spreads this far either side of the head's direction.
 static const double kTickFadeSeconds = 0.45, kTickSpread = M_PI / 7;
@@ -191,7 +191,7 @@ static BOOL headOffset(double *pitch, double *yaw) {
     SGHeadMotionListen(@"teaching", ^(CMDeviceMotion *motion) { headMoved(motion); });
     _lastFrame = 0;
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(frame:)];
-    _link.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+    _link.preferredFrameRateRange = CAFrameRateRangeMake(30, 120, 60);   // a 60 Hz cap would hold other 120 Hz motion on screen to 60
     [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 

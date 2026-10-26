@@ -10,6 +10,7 @@
 #import "Shared/Gestures/Gestures.h"
 #import "Shared/Haptics/Haptics.h"
 #import "Shared/Player/SpeedPitch.h"
+#import "Shared/Player/PlayerSettings.h"
 
 #pragma mark - hold to play faster
 
@@ -145,10 +146,10 @@ static void watchHold(UIView *tilt) {
 
 // A single tap on the cover is Spotify's way into the tilt mode, the artwork alone in 3D. That is
 // the half of a double tap that misses, so while the zones are on it would open on the way to every
-// gesture; the tap goes back to Spotify with the switch.
+// gesture; the tap goes back to Spotify with the switch. Full screen cover hidden keeps it from Spotify too.
 %hook _TtC35CreativeWorkCommons_CoverArtTiltKit16CoverArtTiltView
 - (void)handleTap {
-    if (SGFlag(SGKeyGestures, NO)) return;
+    if (SGFlag(SGKeyGestures, NO) || SGHidden(SGKeyHideFullScreenCover)) return;
     %orig;
 }
 - (void)layoutSubviews {

@@ -9,6 +9,13 @@
 const CGFloat SGRHeaderInfoBottom = 14;
 const CGFloat SGRHeaderInfoTitleRise = 56;
 
+BOOL SGRFullBleedCovers(void) {
+    static BOOL on;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ on = SGEnabled(SGRKeyFullBleedCovers); });
+    return on;
+}
+
 // The text kSide in from the edges; Play at least kPlayWidth wide, the Music app's; the gaps between.
 static const CGFloat kSide = 20, kPlayWidth = 148, kRowSpacing = 16, kRowAbove = 16, kAboutAbove = 14;
 
@@ -63,10 +70,14 @@ UIImageView *SGRCreatorPicture(UIView *root) {
     SGRMirrorButton *_shuffle, *_trailing;
     SGRPlayCapsule *_play;
     __weak UIView *_creatorLink;
+    // contentHeightForWidth:'s last answer, for _measuredWidth; a negative width is none. Cleared when the text or
+    // the title picture changes, the only things it measures.
+    CGFloat _measuredWidth, _measuredHeight;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
+    _measuredWidth = -1;
     _title = infoLabel(self, SGRFont(UIFontTextStyleTitle2, UIFontWeightBold, UIContentSizeCategoryExtraLarge),
                        SGRPrimary(), 2, NSTextAlignmentCenter);
     _title.accessibilityTraits = UIAccessibilityTraitHeader;
@@ -122,6 +133,7 @@ UIImageView *SGRCreatorPicture(UIView *root) {
         [self addSubview:_logo];
     }
     _titleImage = image;
+    _measuredWidth = -1;
     _title.accessibilityElementsHidden = image != nil;
     if (image) {
         if (!_logo.image) [UIView performWithoutAnimation:^{ self->_logo.frame = self->_title.frame; }];
@@ -168,7 +180,10 @@ UIImageView *SGRCreatorPicture(UIView *root) {
     changed |= setText(_creator, creator);
     changed |= setText(_length, length);
     changed |= setText(_about, about);
-    if (changed) [self setNeedsLayout];
+    if (changed) {
+        _measuredWidth = -1;
+        [self setNeedsLayout];
+    }
     return changed;
 }
 
@@ -261,6 +276,7 @@ UIImageView *SGRCreatorPicture(UIView *root) {
 }
 
 - (CGFloat)contentHeightForWidth:(CGFloat)width {
+    if (width == _measuredWidth) return _measuredHeight;
     CGFloat text = MAX(0, width - 2 * kSide), height = 0;
     UILabel *previous = nil;
     for (UILabel *label in @[_title, _creator, _length]) {
@@ -272,6 +288,8 @@ UIImageView *SGRCreatorPicture(UIView *root) {
     if (previous) height += kRowAbove;
     height += SGRActionHeight;
     if (!_about.hidden) height += kAboutAbove + ceil([_about sizeThatFits:CGSizeMake(text, CGFLOAT_MAX)].height);
+    _measuredWidth = width;
+    _measuredHeight = height;
     return height;
 }
 

@@ -1,4 +1,5 @@
 #import <CommonCrypto/CommonDigest.h>
+#import <NaturalLanguage/NaturalLanguage.h>
 #import <Security/Security.h>
 #import "Core/SGCore.h"
 #import "Settings/SGModPage.h"
@@ -13,6 +14,10 @@ static NSString *const kDefaultPrompt =
     @"Translate the lines of this song into {language}: exactly {count} translations, one per input line and in "
     @"the same order. Translate the meaning naturally, keep each line short like a lyric, and keep an empty line "
     @"empty. A line already in {language} stays as it is.";
+static NSString *const kDefaultBatchPrompt =
+    @"Translate the lyrics of these {count} songs into {language}. Translate the meaning naturally as sung, "
+    @"keep each line short like a lyric, and keep empty lines empty. Lines already in {language} stay as they are. "
+    @"Return a JSON object with the exact same track IDs as keys, mapping each to an array of translated lines in the exact same order.";
 static NSString *const kOpenAIDefaultURL = @"https://api.openai.com/v1";
 // The OpenAI-compatible server is kept beside its key, never in the settings: a settings file from someone
 // else could otherwise point a key stored here at their own server.
@@ -53,12 +58,19 @@ static NSString *string(id value) {
     return [value isKindOfClass:NSString.class] ? value : nil;
 }
 
+static const NSInteger kDefaultAITimeout = 120;
+
+static NSTimeInterval aiTimeout(void) {
+    NSInteger seconds = [NSUserDefaults.standardUserDefaults integerForKey:SGKeyAITimeout];
+    return seconds > 0 ? seconds : kDefaultAITimeout;
+}
+
 static NSMutableURLRequest *post(NSString *url, NSDictionary *body) {
     NSURL *endpoint = url ? [NSURL URLWithString:url] : nil;
     if (!endpoint) return nil;
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
     request.HTTPMethod = @"POST";
-    request.timeoutInterval = 60;
+    request.timeoutInterval = aiTimeout();
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     return request;
@@ -68,6 +80,12 @@ static NSMutableURLRequest *post(NSString *url, NSDictionary *body) {
 static NSDictionary *linesSchema(void) {
     return @{@"type": @"object", @"properties": @{@"lines": @{@"type": @"array", @"items": @{@"type": @"string"}}},
              @"required": @[@"lines"], @"additionalProperties": @NO};
+}
+
+static NSString *geminiThinkingLevel(void) {
+    // Only the menu's levels: a stored "minimal" from an early build of this row would make 3.8 Flash answer 400 every ask.
+    NSString *level = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyAIThinking];
+    return [@[@"medium", @"high"] containsObject:level] ? level : @"low";
 }
 
 // Gemini: generateContent, the key in x-goog-api-key, a bare array forced by responseSchema.
@@ -83,7 +101,7 @@ static NSMutableURLRequest *geminiRequest(NSString *model, NSString *prompt, NSS
                                      @"responseSchema": @{@"type": @"ARRAY", @"items": @{@"type": @"STRING"}}} mutableCopy];
     // Gemini 3 thinks at length by default, which a whole song's translation does not need and which made it
     // slow enough to time out. Plain: a model named in Other… that does not know the field.
-    if (!plain) config[@"thinkingConfig"] = @{@"thinkingLevel": @"low"};
+    if (!plain) config[@"thinkingConfig"] = @{@"thinkingLevel": geminiThinkingLevel()};
     NSMutableURLRequest *request = post([NSString stringWithFormat:@"https://generativelanguage.googleapis.com/v1beta/models/%@:generateContent", model],
                                         @{@"contents": @[@{@"parts": @[@{@"text": prompt}]}], @"safetySettings": safety, @"generationConfig": config});
     [request setValue:key forHTTPHeaderField:@"x-goog-api-key"];
@@ -103,7 +121,23 @@ static NSString *geminiAnswer(NSDictionary *reply, NSString *speaker, NSString *
     NSString *finished = string(dig(reply, @[@"candidates", @0, @"finishReason"]));
     if (blocked) *stopped = geminiStop(blocked, speaker);
     else if (finished && ![finished isEqualToString:@"STOP"]) *stopped = geminiStop(finished, speaker);
-    return *stopped ? nil : string(dig(reply, @[@"candidates", @0, @"content", @"parts", @0, @"text"]));
+    if (*stopped) return nil;
+    NSArray *parts = dig(reply, @[@"candidates", @0, @"content", @"parts"]);
+    if (![parts isKindOfClass:NSArray.class]) return nil;
+    for (id part in parts) {
+        if ([part isKindOfClass:NSDictionary.class]) {
+            NSNumber *thought = part[@"thought"];
+            if (thought && [thought boolValue]) continue;
+            NSString *t = string(part[@"text"]);
+            if (t.length) return t;
+        }
+    }
+    for (NSInteger i = (NSInteger)parts.count - 1; i >= 0; i--) {
+        id part = parts[i];
+        NSString *t = string(part[@"text"]);
+        if (t.length) return t;
+    }
+    return nil;
 }
 
 // A server URL as typed or stored: http or https with a host, no user, password or query (which could carry a
@@ -185,7 +219,7 @@ static const SGAIProvider kProviders[] = {
      @"Answer with a JSON array of the {count} translations as strings.",
      // A pinned id first, the one users report working. gemini-flash-latest follows each Flash release, preview
      // ones included, with notice only by email to the key's owner, so it is offered but not the default.
-     {@"gemini-3.6-flash", @"gemini-3.5-flash-lite", @"gemini-flash-latest"}, {@"3.6 Flash", @"3.5 Flash-Lite", @"Flash (latest)"},
+     {@"gemini-3.8-flash", @"gemini-3.5-flash-lite", @"gemini-flash-latest"}, {@"3.8 Flash", @"3.5 Flash-Lite", @"Flash (latest)"},
      YES, {@"thinking"}, geminiRequest, geminiAnswer},
     {@"openai", @"OpenAI-compatible", nil, @"Vitrine.OpenAI",
      @"Sends the song's lyrics to the server below: OpenAI's own unless you name another, such as OpenRouter, or an "
@@ -285,6 +319,82 @@ static NSString *model(const SGAIProvider *p) {
 
 static NSString *promptTemplate(void) {
     return storedString(SGKeyAIPrompt) ?: kDefaultPrompt;
+}
+
+NSString *SGLyricsBatchPromptTemplate(void) {
+    return storedString(SGKeyLyricsBatchPrompt) ?: kDefaultBatchPrompt;
+}
+
+NSUInteger SGLyricsBatchSize(void) {
+    NSNumber *val = [NSUserDefaults.standardUserDefaults objectForKey:SGKeyLyricsBatchSize];
+    if (!val) return 20;
+    NSInteger n = val.integerValue;
+    if (n == 0) return 0;
+    if (n == 10 || n == 20 || n == 30 || n == 40 || n == 50) return (NSUInteger)n;
+    return 20;
+}
+
+BOOL SGLyricsBatchSkipSaved(void) {
+    return SGFlag(SGKeyLyricsBatchSkipSaved, YES);
+}
+
+static BOOL hasWords(SGKaraokeLine *line) {
+    NSString *text = SGKaraokeLineText(line);
+    return text.length > 0 && ![text isEqualToString:@"♪"];
+}
+
+static NSUInteger otherScriptLetters(NSString *text, BOOL latinTarget) {
+    __block NSUInteger count = 0;
+    [text enumerateSubstringsInRange:NSMakeRange(0, text.length) options:NSStringEnumerationByComposedCharacterSequences
+                          usingBlock:^(NSString *character, NSRange range, NSRange enclosing, BOOL *stop) {
+        UTF32Char c = 0;
+        if (![character getBytes:&c maxLength:sizeof(c) usedLength:NULL encoding:NSUTF32LittleEndianStringEncoding options:0
+                           range:NSMakeRange(0, character.length) remainingRange:NULL]) return;
+        if (![NSCharacterSet.letterCharacterSet longCharacterIsMember:c]) return;
+        BOOL latin = c < 0x250 || (c >= 0x1E00 && c < 0x1F00);
+        if (latin != latinTarget) count++;
+    }];
+    return count;
+}
+
+static NSUInteger romanizedKoreanWords(NSString *text) {
+    NSUInteger count = 0;
+    for (NSString *word in [text componentsSeparatedByCharactersInSet:NSCharacterSet.letterCharacterSet.invertedSet]) {
+        if ([word containsString:@"eo"] || [word containsString:@"eu"]) count++;
+    }
+    return count;
+}
+
+BOOL SGKaraokeInAnotherLanguage(NSArray<SGKaraokeLine *> *lines, NSString *language) {
+    if (!lines.count || !language.length) return NO;
+    NSString *(^code)(NSString *) = ^NSString *(NSString *tag) {
+        return [tag componentsSeparatedByCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"-_"]].firstObject.lowercaseString;
+    };
+    NSString *target = code(language);
+    NSString *targetScript = [NSOrthography defaultOrthographyForLanguage:language].dominantScript;
+    NSUInteger distinct = 0, sure = 0, foreign = 0, otherScript = 0;
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    NLLanguageRecognizer *recognizer = [NLLanguageRecognizer new];
+    for (SGKaraokeLine *line in lines) {
+        NSString *text = hasWords(line) ? SGKaraokeLineText(line).lowercaseString : nil;
+        if (!text.length || [seen containsObject:text]) continue;
+        [seen addObject:text];
+        distinct++;
+        BOOL lettersOther = otherScriptLetters(text, [targetScript isEqualToString:@"Latn"]) >= 2;
+        if (lettersOther) otherScript++;
+        [recognizer reset];
+        [recognizer processString:text];
+        NSDictionary<NLLanguage, NSNumber *> *guess = [recognizer languageHypothesesWithMaximum:1];
+        NLLanguage found = guess.allKeys.firstObject;
+        BOOL confident = found && guess[found].doubleValue >= 0.8, inTarget = confident && [code(found) isEqualToString:target];
+        if (!lettersOther && !inTarget && romanizedKoreanWords(text) >= 2) otherScript++;
+        if (!confident) continue;
+        sure++;
+        if (inTarget) continue;
+        foreign++;
+        if (!lettersOther && ![[NSOrthography defaultOrthographyForLanguage:found].dominantScript isEqualToString:targetScript]) otherScript++;
+    }
+    return !sure || foreign * 5 >= MAX(distinct, 5) || otherScript >= 2;
 }
 
 // The first 8 hex digits of the template's SHA-256, for the log: which prompt went, never what the lyrics were.
@@ -390,7 +500,9 @@ NSArray<NSString *> *SGAITranslationsIn(NSString *provider, id root, NSInteger s
     // {"error": {"message": ...}} from all three; a bare string from some compatible servers.
     NSString *says = string(dig(reply, @[@"error", @"message"])) ?: string(reply[@"error"]);
     if (error) {
-        *problem = [NSString stringWithFormat:@"%@ could not be reached.", who];
+        *problem = error.code == NSURLErrorTimedOut
+            ? [NSString stringWithFormat:@"%@ timed out. Try a longer timeout on the Lyrics page.", who]
+            : [NSString stringWithFormat:@"%@ could not be reached.", who];
     } else if (status == 401 || status == 403 || (status == 400 && [says localizedCaseInsensitiveContainsString:@"API key"])) {
         *problem = [NSString stringWithFormat:@"%@ turned the key down. Check it on the Lyrics page.", who];
     } else if (status == 400 || status == 404) {
@@ -439,7 +551,7 @@ static void send(const SGAIProvider *p, NSURLRequest *request, NSURLRequest *pla
     }] resume];
 }
 
-// Per launch, by "track|language|" and then the provider, server, model and prompt: a translation asked again
+// Per launch, by "track|language|" and then the provider, server, model, Gemini's thinking and prompt: a translation asked again
 // after any of them changed is a new one.
 static NSMutableDictionary<NSString *, NSArray<NSString *> *> *sg_done;
 
@@ -457,12 +569,13 @@ void SGLyricsTranslateWithAI(NSString *trackID, NSArray<SGKaraokeLine *> *lines,
     const SGAIProvider *p = chosen();
     NSString *key = storedSecret(p, kKeyAccount), *modelID = model(p), *template = promptTemplate();
     if (!key || !modelID) {
-        done(nil, [NSString stringWithFormat:@"Add a %@ API key%@ on the Lyrics page first.", p->name, modelID ? @"" : @" and a model"]);
+        done(nil, [NSString stringWithFormat:@"Add a %@ API key%@ in Mod Settings > Lyrics first.", p->name, modelID ? @"" : @" and choose a model"]);
         return;
     }
     if (!sg_done) sg_done = [NSMutableDictionary dictionary];
-    NSString *memo = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@", trackID, languageTag, p->tag,
-                      isOpenAI(p) ? openAIServer() : @"", modelID, template];
+    NSString *memo = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%@|%@", trackID, languageTag, p->tag,
+                      isOpenAI(p) ? openAIServer() : @"", modelID,
+                      [p->tag isEqualToString:@"gemini"] ? geminiThinkingLevel() : @"", template];
     if (trackID && sg_done[memo].count == lines.count) {
         done(sg_done[memo], nil);
         return;
@@ -480,7 +593,7 @@ void SGLyricsTranslateWithAI(NSString *trackID, NSArray<SGKaraokeLine *> *lines,
     NSString *prompt = [NSString stringWithFormat:@"%@\n\n%@", instructions, [[NSString alloc] initWithData:input encoding:NSUTF8StringEncoding]];
     NSURLRequest *request = p->request(modelID, prompt, key, NO), *plain = p->request(modelID, prompt, key, YES);
     if (!request) {
-        done(nil, @"The OpenAI-compatible server's URL is not usable. Check it on the Lyrics page.");
+        done(nil, @"The server URL is invalid. Check it in Mod Settings > Lyrics.");
         return;
     }
     SGLog(@"ai: asking %@ %@ at %@, prompt %@%@", p->tag, modelID, request.URL.host, fingerprint(template),
@@ -493,6 +606,485 @@ void SGLyricsTranslateWithAI(NSString *trackID, NSArray<SGKaraokeLine *> *lines,
         dispatch_async(dispatch_get_main_queue(), ^{
             if (translations && trackID) sg_done[memo] = translations;
             done(translations, problem);
+        });
+    });
+}
+
+static NSDictionary *batchMapIn(NSString *text) {
+    if (!text.length) return nil;
+    id parsed = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (!parsed) {
+        for (NSString *bracket in @[@"{", @"["]) {
+            NSString *closeBracket = [bracket isEqualToString:@"{"] ? @"}" : @"]";
+            NSRange open = [text rangeOfString:bracket], close = [text rangeOfString:closeBracket options:NSBackwardsSearch];
+            if (open.location != NSNotFound && close.location != NSNotFound && close.location > open.location) {
+                NSString *inner = [text substringWithRange:NSMakeRange(open.location, close.location - open.location + 1)];
+                parsed = [NSJSONSerialization JSONObjectWithData:[inner dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+                if (parsed) break;
+            }
+        }
+    }
+    if ([parsed isKindOfClass:NSDictionary.class]) {
+        for (NSString *key in @[@"songs", @"tracks", @"translations", @"results", @"data"]) {
+            if ([parsed[key] isKindOfClass:NSDictionary.class]) return parsed[key];
+        }
+        return parsed;
+    }
+    if ([parsed isKindOfClass:NSArray.class]) {
+        NSMutableDictionary *mapped = [NSMutableDictionary dictionary];
+        for (NSUInteger i = 0; i < [parsed count]; i++) {
+            id item = parsed[i];
+            if ([item isKindOfClass:NSDictionary.class]) {
+                NSString *tID = item[@"track"] ?: item[@"id"] ?: item[@"track_id"] ?: item[@"uri"] ?: @(i).stringValue;
+                id lines = item[@"lines"] ?: item[@"translations"] ?: item[@"translation"];
+                if (lines) mapped[tID] = lines;
+                else mapped[@(i).stringValue] = item;
+            } else if ([item isKindOfClass:NSArray.class]) {
+                mapped[@(i).stringValue] = item;
+            }
+        }
+        return mapped;
+    }
+    return nil;
+}
+
+static NSURLRequest *batchRequest(const SGAIProvider *p, NSString *modelID, NSString *prompt, NSString *key, BOOL plain, BOOL stream) {
+    if ([p->tag isEqualToString:@"gemini"]) {
+        NSMutableArray *safety = [NSMutableArray array];
+        for (NSString *category in @[@"HARM_CATEGORY_HARASSMENT", @"HARM_CATEGORY_HATE_SPEECH",
+                                     @"HARM_CATEGORY_SEXUALLY_EXPLICIT", @"HARM_CATEGORY_DANGEROUS_CONTENT"]) {
+            [safety addObject:@{@"category": category, @"threshold": @"BLOCK_NONE"}];
+        }
+        NSMutableDictionary *config = [@{@"responseMimeType": @"application/json"} mutableCopy];
+        if (!plain) config[@"thinkingConfig"] = @{@"thinkingLevel": geminiThinkingLevel()};
+        NSString *action = stream ? @"streamGenerateContent?alt=sse" : @"generateContent";
+        NSMutableURLRequest *req = post([NSString stringWithFormat:@"https://generativelanguage.googleapis.com/v1beta/models/%@:%@", modelID, action],
+                                        @{@"contents": @[@{@"parts": @[@{@"text": prompt}]}], @"safetySettings": safety, @"generationConfig": config});
+        [req setValue:key forHTTPHeaderField:@"x-goog-api-key"];
+        return req;
+    }
+    if ([p->tag isEqualToString:@"openai"]) {
+        NSString *server = openAIServer();
+        NSMutableDictionary *body = [@{@"model": modelID, @"messages": @[@{@"role": @"user", @"content": prompt}]} mutableCopy];
+        if (stream) body[@"stream"] = @YES;
+        if (!plain) {
+            body[@"response_format"] = @{@"type": @"json_object"};
+            body[@"reasoning_effort"] = @"low";
+        }
+        NSMutableURLRequest *req = post(server ? [server stringByAppendingString:@"/chat/completions"] : nil, body);
+        [req setValue:[@"Bearer " stringByAppendingString:key] forHTTPHeaderField:@"Authorization"];
+        return req;
+    }
+    if ([p->tag isEqualToString:@"anthropic"]) {
+        NSMutableDictionary *body = [@{@"model": modelID, @"max_tokens": @16000,
+                                       @"messages": @[@{@"role": @"user", @"content": prompt}]} mutableCopy];
+        if (stream) body[@"stream"] = @YES;
+        if (!plain) body[@"output_config"] = @{@"effort": @"low"};
+        NSMutableURLRequest *req = post(@"https://api.anthropic.com/v1/messages", body);
+        [req setValue:key forHTTPHeaderField:@"x-api-key"];
+        [req setValue:@"2026-10-21" forHTTPHeaderField:@"anthropic-version"];
+        return req;
+    }
+    return p->request(modelID, prompt, key, plain);
+}
+
+// Scans the accumulated JSON stream for any song keys whose `[...]` array has fully closed,
+// and emits each completed song once via `onSong`.
+static void scanCompletedSongsInStream(NSString *accumulated,
+                                       NSDictionary<NSString *, NSArray<NSString *> *> *songs,
+                                       NSMutableSet<NSString *> *emitted,
+                                       NSMutableDictionary<NSString *, NSArray<NSString *> *> *streamedResults,
+                                       void (^onSong)(NSString *trackKey, NSArray<NSString *> *lines)) {
+    if (!accumulated.length) return;
+    NSUInteger len = accumulated.length;
+    for (NSString *trackKey in songs) {
+        if ([emitted containsObject:trackKey]) continue;
+        NSString *bareID = [trackKey hasPrefix:@"spotify:track:"] ? [trackKey substringFromIndex:@"spotify:track:".length] : trackKey;
+        NSString *uriID = [@"spotify:track:" stringByAppendingString:bareID];
+        
+        NSRange keyRange = [accumulated rangeOfString:[NSString stringWithFormat:@"\"%@\"", trackKey]];
+        if (keyRange.location == NSNotFound) {
+            keyRange = [accumulated rangeOfString:[NSString stringWithFormat:@"\"%@\"", bareID]];
+        }
+        if (keyRange.location == NSNotFound) {
+            keyRange = [accumulated rangeOfString:[NSString stringWithFormat:@"\"%@\"", uriID]];
+        }
+        if (keyRange.location == NSNotFound) continue;
+        
+        NSUInteger pos = NSMaxRange(keyRange);
+        // Find opening '[' after ':' (skipping optional wrapper object like {"lines": [)
+        NSUInteger arrayStart = NSNotFound;
+        BOOL passedColon = NO;
+        while (pos < len) {
+            unichar c = [accumulated characterAtIndex:pos];
+            if (c == ':') {
+                passedColon = YES;
+            } else if (passedColon) {
+                if (c == '[') { arrayStart = pos; break; }
+                if (c == ',' || c == ']') break;
+            }
+            pos++;
+        }
+        if (arrayStart == NSNotFound) continue;
+        
+        // Scan string-aware brackets to find matching ']'
+        NSInteger depth = 0;
+        BOOL inString = NO;
+        BOOL escaped = NO;
+        NSUInteger arrayEnd = NSNotFound;
+        for (NSUInteger i = arrayStart; i < len; i++) {
+            unichar c = [accumulated characterAtIndex:i];
+            if (escaped) {
+                escaped = NO;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escaped = YES;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (c == '[') depth++;
+                else if (c == ']') {
+                    depth--;
+                    if (depth == 0) {
+                        arrayEnd = i;
+                        break;
+                    }
+                }
+            }
+        }
+        if (arrayEnd != NSNotFound) {
+            NSString *slice = [accumulated substringWithRange:NSMakeRange(arrayStart, arrayEnd - arrayStart + 1)];
+            id parsed = [NSJSONSerialization JSONObjectWithData:[slice dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+            if ([parsed isKindOfClass:NSArray.class]) {
+                NSMutableArray<NSString *> *clean = [NSMutableArray arrayWithCapacity:[parsed count]];
+                for (id l in parsed) [clean addObject:[l isKindOfClass:NSString.class] ? l : [l description]];
+                [emitted addObject:trackKey];
+                NSArray<NSString *> *expected = songs[trackKey];
+                if (expected && clean.count == expected.count) {
+                    streamedResults[trackKey] = clean;
+                    streamedResults[bareID] = clean;
+                    if (onSong) {
+                        NSArray<NSString *> *copyLines = [clean copy];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            onSong(trackKey, copyLines);
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+@interface SGAIBatchStreamDelegate : NSObject <NSURLSessionDataDelegate>
+@property (nonatomic, assign) const SGAIProvider *provider;
+@property (nonatomic, copy) NSDictionary<NSString *, NSArray<NSString *> *> *songs;
+@property (nonatomic, copy) void (^onPhase)(NSString *phase);
+@property (nonatomic, copy) void (^onSong)(NSString *trackKey, NSArray<NSString *> *lines);
+@property (nonatomic, copy) void (^completion)(NSData *rawData, NSString *accumulatedText, NSDictionary<NSString *, NSArray<NSString *> *> *streamedResults, NSString *stopReason, NSInteger status, NSError *error);
+@end
+
+@implementation SGAIBatchStreamDelegate {
+    NSMutableData *_rawBuffer;
+    NSMutableData *_utf8Buffer;
+    NSMutableString *_accumulatedText;
+    NSMutableSet<NSString *> *_emittedSongs;
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *_streamedResults;
+    NSString *_stopReason;
+    NSInteger _statusCode;
+    BOOL _reportedThinking;
+    BOOL _reportedWriting;
+}
+
+- (instancetype)init {
+    if (!(self = [super init])) return nil;
+    _rawBuffer = [NSMutableData data];
+    _utf8Buffer = [NSMutableData data];
+    _accumulatedText = [NSMutableString string];
+    _emittedSongs = [NSMutableSet set];
+    _streamedResults = [NSMutableDictionary dictionary];
+    return self;
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    if ([response isKindOfClass:NSHTTPURLResponse.class]) {
+        _statusCode = ((NSHTTPURLResponse *)response).statusCode;
+    }
+    completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)processSSEEventLine:(NSString *)line {
+    NSString *trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (![trimmed hasPrefix:@"data:"]) return;
+    NSString *payload = [[trimmed substringFromIndex:5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    if (!payload.length || [payload isEqualToString:@"[DONE]"]) return;
+    
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:[payload dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![json isKindOfClass:NSDictionary.class]) return;
+    
+    BOOL sawThought = NO;
+    NSMutableString *deltaText = [NSMutableString string];
+    NSString *tag = self.provider->tag;
+    
+    if ([tag isEqualToString:@"gemini"]) {
+        NSString *blocked = string(dig(json, @[@"promptFeedback", @"blockReason"]));
+        if (blocked.length) _stopReason = blocked;
+        NSArray *candidates = json[@"candidates"];
+        NSDictionary *first = [candidates isKindOfClass:NSArray.class] ? candidates.firstObject : nil;
+        NSString *finish = [first isKindOfClass:NSDictionary.class] ? string(first[@"finishReason"]) : nil;
+        if (finish.length && ![finish isEqualToString:@"STOP"]) _stopReason = finish;
+        NSArray *parts = [first isKindOfClass:NSDictionary.class] ? first[@"content"][@"parts"] : nil;
+        if ([parts isKindOfClass:NSArray.class]) {
+            for (NSDictionary *part in parts) {
+                if (![part isKindOfClass:NSDictionary.class]) continue;
+                if ([part[@"thought"] respondsToSelector:@selector(boolValue)] && [part[@"thought"] boolValue]) {
+                    sawThought = YES;
+                } else if ([part[@"text"] isKindOfClass:NSString.class]) {
+                    [deltaText appendString:part[@"text"]];
+                }
+            }
+        }
+    } else if ([tag isEqualToString:@"openai"]) {
+        NSArray *choices = json[@"choices"];
+        NSDictionary *first = [choices isKindOfClass:NSArray.class] ? choices.firstObject : nil;
+        NSString *finish = [first isKindOfClass:NSDictionary.class] ? string(first[@"finish_reason"]) : nil;
+        if (finish.length && ![finish isEqualToString:@"stop"]) _stopReason = finish;
+        NSDictionary *delta = [first isKindOfClass:NSDictionary.class] ? first[@"delta"] : nil;
+        if ([delta isKindOfClass:NSDictionary.class]) {
+            if ([delta[@"reasoning_content"] isKindOfClass:NSString.class] || [delta[@"reasoning"] isKindOfClass:NSString.class]) {
+                sawThought = YES;
+            }
+            if ([delta[@"content"] isKindOfClass:NSString.class]) {
+                [deltaText appendString:delta[@"content"]];
+            }
+        }
+    } else if ([tag isEqualToString:@"anthropic"]) {
+        NSDictionary *delta = json[@"delta"];
+        NSString *stop = ([delta isKindOfClass:NSDictionary.class] ? string(delta[@"stop_reason"]) : nil) ?: string(json[@"stop_reason"]);
+        if (stop.length && ![stop isEqualToString:@"end_turn"]) _stopReason = stop;
+        if ([delta isKindOfClass:NSDictionary.class]) {
+            NSString *type = delta[@"type"];
+            if ([type isEqualToString:@"thinking_delta"] || [delta[@"thinking"] isKindOfClass:NSString.class]) {
+                sawThought = YES;
+            } else if ([delta[@"text"] isKindOfClass:NSString.class]) {
+                [deltaText appendString:delta[@"text"]];
+            }
+        }
+    }
+    
+    if (sawThought && !_reportedThinking && !_reportedWriting) {
+        _reportedThinking = YES;
+        if (self.onPhase) {
+            void (^phaseBlock)(NSString *) = self.onPhase;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                phaseBlock(@"Thinking…");
+            });
+        }
+    }
+    if (deltaText.length > 0) {
+        if (!_reportedWriting) {
+            _reportedWriting = YES;
+            if (self.onPhase) {
+                void (^phaseBlock)(NSString *) = self.onPhase;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    phaseBlock(@"Writing");
+                });
+            }
+        }
+        [_accumulatedText appendString:deltaText];
+        scanCompletedSongsInStream(_accumulatedText, self.songs, _emittedSongs, _streamedResults, self.onSong);
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    [_rawBuffer appendData:data];
+    if (_statusCode != 200) return;
+    [_utf8Buffer appendData:data];
+    
+    const uint8_t *bytes = _utf8Buffer.bytes;
+    NSUInteger length = _utf8Buffer.length;
+    NSUInteger lineStart = 0;
+    for (NSUInteger i = 0; i < length; i++) {
+        if (bytes[i] == '\n') {
+            NSData *lineData = [_utf8Buffer subdataWithRange:NSMakeRange(lineStart, i - lineStart)];
+            NSString *lineStr = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+            if (lineStr) [self processSSEEventLine:lineStr];
+            lineStart = i + 1;
+        }
+    }
+    if (lineStart > 0) {
+        [_utf8Buffer replaceBytesInRange:NSMakeRange(0, lineStart) withBytes:NULL length:0];
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    if (_statusCode == 200 && _utf8Buffer.length > 0) {
+        NSString *tail = [[NSString alloc] initWithData:_utf8Buffer encoding:NSUTF8StringEncoding];
+        if (tail.length) [self processSSEEventLine:tail];
+        [_utf8Buffer setLength:0];
+    }
+    if (self.completion) {
+        self.completion(_rawBuffer, _accumulatedText, _streamedResults, _stopReason, _statusCode, error);
+    }
+}
+
+@end
+
+static void sendBatchStream(const SGAIProvider *p,
+                            NSURLRequest *request,
+                            NSURLRequest *plain,
+                            NSDictionary<NSString *, NSArray<NSString *> *> *songs,
+                            NSUInteger attempt,
+                            void (^onPhase)(NSString *phase),
+                            void (^onSong)(NSString *trackKey, NSArray<NSString *> *lines),
+                            void (^done)(NSData *rawData, NSString *accumulatedText, NSDictionary<NSString *, NSArray<NSString *> *> *streamedResults, NSString *stopReason, NSInteger status, NSError *error)) {
+    SGAIBatchStreamDelegate *del = [SGAIBatchStreamDelegate new];
+    del.provider = p;
+    del.songs = songs;
+    del.onPhase = onPhase;
+    del.onSong = onSong;
+    del.completion = ^(NSData *rawData, NSString *accumulatedText, NSDictionary<NSString *, NSArray<NSString *> *> *streamedResults, NSString *stopReason, NSInteger status, NSError *error) {
+        NSString *reply = status == 400 && rawData ? [[NSString alloc] initWithData:rawData encoding:NSUTF8StringEncoding] : nil;
+        for (NSUInteger i = 0; plain && reply && i < 4 && p->plainWhen[i]; i++) {
+            if (![reply localizedCaseInsensitiveContainsString:p->plainWhen[i]]) continue;
+            SGLog(@"ai batch: %@ turned down %@, asking without the optional fields", p->tag, p->plainWhen[i]);
+            sendBatchStream(p, plain, nil, songs, attempt, onPhase, onSong, done);
+            return;
+        }
+        BOOL transient = (error && error.code != NSURLErrorTimedOut && error.code != NSURLErrorCancelled) ||
+                         status == 408 || status == 429 || status >= 500;
+        if (transient && attempt < 2 && streamedResults.count == 0) {
+            int64_t delay = (1LL << attempt) * NSEC_PER_SEC + (int64_t)arc4random_uniform(250) * NSEC_PER_MSEC;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                sendBatchStream(p, request, plain, songs, attempt + 1, onPhase, onSong, done);
+            });
+            return;
+        }
+        done(rawData, accumulatedText, streamedResults, stopReason, status, error);
+    };
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    config.timeoutIntervalForRequest = aiTimeout();
+    config.timeoutIntervalForResource = MAX(aiTimeout() * (songs.count ?: 1), 600.0);
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config delegate:del delegateQueue:nil];
+    [[session dataTaskWithRequest:request] resume];
+    [session finishTasksAndInvalidate];
+}
+
+void SGLyricsTranslateBatchWithAI(NSDictionary<NSString *, NSArray<NSString *> *> *songs,
+                                  NSString *languageTag,
+                                  void (^onPhase)(NSString *phase),
+                                  void (^onSong)(NSString *trackKey, NSArray<NSString *> *lines),
+                                  void (^done)(NSDictionary<NSString *, NSArray<NSString *> *> *results, NSString *error)) {
+    const SGAIProvider *p = chosen();
+    NSString *key = storedSecret(p, kKeyAccount), *modelID = model(p), *template = SGLyricsBatchPromptTemplate();
+    if (!key || !modelID) {
+        done(nil, [NSString stringWithFormat:@"Set up %@ in Mod Settings", p->name]);
+        return;
+    }
+    if (!songs.count) {
+        done(@{}, nil);
+        return;
+    }
+    NSString *language = [[NSLocale localeWithLocaleIdentifier:@"en"] localizedStringForLocaleIdentifier:languageTag] ?: languageTag;
+    NSData *inputData = [NSJSONSerialization dataWithJSONObject:songs options:NSJSONWritingPrettyPrinted error:nil];
+    NSString *inputJSON = inputData ? [[NSString alloc] initWithData:inputData encoding:NSUTF8StringEncoding] : @"{}";
+    
+    NSString *instructions = template;
+    instructions = [[instructions stringByReplacingOccurrencesOfString:@"{language}" withString:language]
+                    stringByReplacingOccurrencesOfString:@"{count}" withString:@(songs.count).stringValue];
+    NSString *prompt = [NSString stringWithFormat:@"%@\n\n%@", instructions, inputJSON];
+    
+    NSURLRequest *request = batchRequest(p, modelID, prompt, key, NO, YES);
+    NSURLRequest *plain = batchRequest(p, modelID, prompt, key, YES, YES);
+    if (!request) {
+        done(nil, @"Invalid server URL");
+        return;
+    }
+    SGLog(@"ai batch: asking %@ %@ (%lu songs, streaming) into %@, prompt %@", p->tag, modelID, (unsigned long)songs.count, languageTag, fingerprint(template));
+    sendBatchStream(p, request, plain, songs, 0, onPhase, onSong, ^(NSData *data, NSString *accumulatedText, NSDictionary<NSString *, NSArray<NSString *> *> *streamedResults, NSString *streamStopped, NSInteger status, NSError *error) {
+        NSString *who = speaker(p);
+        NSString *stopped = streamStopped;
+        NSDictionary *rawDict = nil;
+        if (status == 200) {
+            if (accumulatedText.length > 0) {
+                rawDict = batchMapIn(accumulatedText);
+            }
+            if (!rawDict && data.length > 0) {
+                id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                if (root) rawDict = batchMapIn(p->answer(root, who, &stopped));
+            }
+        }
+        
+        NSMutableDictionary<NSString *, NSArray<NSString *> *> *results = [NSMutableDictionary dictionaryWithDictionary:streamedResults ?: @{}];
+        if (rawDict) {
+            NSUInteger songIndex = 0;
+            for (NSString *trackKey in songs) {
+                NSString *bareID = [trackKey hasPrefix:@"spotify:track:"] ? [trackKey substringFromIndex:@"spotify:track:".length] : trackKey;
+                NSString *uriID = [@"spotify:track:" stringByAppendingString:bareID];
+                id rawLines = rawDict[trackKey] ?: rawDict[bareID] ?: rawDict[uriID];
+                if (!rawLines) {
+                    for (NSString *k in rawDict) {
+                        if ([k caseInsensitiveCompare:trackKey] == NSOrderedSame ||
+                            [k caseInsensitiveCompare:bareID] == NSOrderedSame ||
+                            [k caseInsensitiveCompare:uriID] == NSOrderedSame) {
+                            rawLines = rawDict[k];
+                            break;
+                        }
+                    }
+                }
+                if (!rawLines) {
+                    rawLines = rawDict[@(songIndex).stringValue];
+                }
+                if ([rawLines isKindOfClass:NSDictionary.class]) {
+                    if ([rawLines[@"lines"] isKindOfClass:NSArray.class]) rawLines = rawLines[@"lines"];
+                    else if ([rawLines[@"translations"] isKindOfClass:NSArray.class]) rawLines = rawLines[@"translations"];
+                }
+                if ([rawLines isKindOfClass:NSArray.class]) {
+                    NSMutableArray<NSString *> *clean = [NSMutableArray array];
+                    for (id l in rawLines) [clean addObject:[l isKindOfClass:NSString.class] ? l : [l description]];
+                    NSArray<NSString *> *expected = songs[trackKey];
+                    if (expected && clean.count == expected.count) {
+                        results[trackKey] = clean;
+                        results[bareID] = clean;
+                    }
+                }
+                songIndex++;
+            }
+        }
+        
+        NSUInteger answered = results.count / 2;
+        NSString *problem = nil;
+        if (answered >= songs.count) {
+            // All songs in the chunk completed.
+        } else if (error) {
+            problem = error.code == NSURLErrorTimedOut
+                ? [NSString stringWithFormat:@"%@ timed out", who]
+                : [NSString stringWithFormat:@"Could not reach %@", who];
+        } else if (status == 401 || status == 403) {
+            problem = [NSString stringWithFormat:@"%@ rejected API key", who];
+        } else if (status == 429) {
+            problem = [NSString stringWithFormat:@"%@ rate limit reached", who];
+        } else if (status >= 500) {
+            problem = [NSString stringWithFormat:@"%@ is busy, try again", who];
+        } else if (status != 200) {
+            problem = [NSString stringWithFormat:@"%@ error (%ld)", who, (long)status];
+        } else if (stopped) {
+            problem = [NSString stringWithFormat:@"%@ stopped early", who];
+        } else if (!answered) {
+            problem = @"Could not read reply";
+        } else {
+            problem = [NSString stringWithFormat:@"%@ translated %lu of %lu songs", who, (unsigned long)answered, (unsigned long)songs.count];
+        }
+        
+        SGLog(@"ai batch: %@ answered %lu of %lu songs into %@: %@", p->tag, (unsigned long)answered, (unsigned long)songs.count, languageTag, problem ?: @"ok");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            done(results.count ? results : nil, problem);
         });
     });
 }
@@ -643,15 +1235,23 @@ static NSArray<NSString *> *modelMenu(const SGAIProvider *p) {
 // The prompt in a sheet: the checkmark stores it, Default puts Vitrine's back in the field. Stored equal to the
 // default, or empty, it is removed, so a later change to the default reaches it.
 @interface SGPromptEditor : UIViewController
+- (instancetype)initWithBatch:(BOOL)batch;
 @end
 
 @implementation SGPromptEditor {
     UITextView *_text;
+    BOOL _batch;
+}
+
+- (instancetype)initWithBatch:(BOOL)batch {
+    if (!(self = [super init])) return nil;
+    _batch = batch;
+    return self;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Translation prompt";
+    self.title = _batch ? @"Batch prompt" : @"Translation prompt";
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     _text = [UITextView new];
     _text.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
@@ -660,12 +1260,14 @@ static NSArray<NSString *> *modelMenu(const SGAIProvider *p) {
     _text.textContainerInset = UIEdgeInsetsMake(16, 16, 16, 16);
     _text.alwaysBounceVertical = YES;
     _text.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
-    _text.text = promptTemplate();
+    _text.text = _batch ? SGLyricsBatchPromptTemplate() : promptTemplate();
     _text.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_text];
     UILabel *note = [UILabel new];
-    note.text = @"For every AI translator. {language} and {count} are filled in for each song; the translator is then "
-                @"told the shape of its answer, and the song's lines follow as a JSON array.";
+    note.text = _batch ? @"For multi-song batch translations. {language} and {count} are filled in for each batch; "
+                         @"the songs' lines follow as a JSON object mapping track IDs to arrays of lines."
+                       : @"For every AI translator. {language} and {count} are filled in for each song; the translator is then "
+                         @"told the shape of its answer, and the song's lines follow as a JSON array.";
     note.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     note.adjustsFontForContentSizeCategory = YES;
     note.textColor = UIColor.secondaryLabelColor;
@@ -695,14 +1297,16 @@ static NSArray<NSString *> *modelMenu(const SGAIProvider *p) {
 }
 
 - (void)reset {
-    _text.text = kDefaultPrompt;
+    _text.text = _batch ? kDefaultBatchPrompt : kDefaultPrompt;
 }
 
 - (void)save {
     NSString *prompt = [_text.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (!prompt.length || [prompt isEqualToString:kDefaultPrompt]) [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyAIPrompt];
-    else [NSUserDefaults.standardUserDefaults setObject:prompt forKey:SGKeyAIPrompt];
-    SGLog(@"ai: prompt %@", storedString(SGKeyAIPrompt) ? [@"edited, " stringByAppendingString:fingerprint(prompt)] : @"default");
+    NSString *def = _batch ? kDefaultBatchPrompt : kDefaultPrompt;
+    NSString *key = _batch ? SGKeyLyricsBatchPrompt : SGKeyAIPrompt;
+    if (!prompt.length || [prompt isEqualToString:def]) [NSUserDefaults.standardUserDefaults removeObjectForKey:key];
+    else [NSUserDefaults.standardUserDefaults setObject:prompt forKey:key];
+    SGLog(@"ai: %@ prompt %@", _batch ? @"batch" : @"", storedString(key) ? [@"edited, " stringByAppendingString:fingerprint(prompt)] : @"default");
     [self close];
 }
 @end
@@ -744,5 +1348,45 @@ NSArray<SGModRow *> *SGAITranslatorRows(void) {
         SGPresentDark(nav);
         [SGTopController() presentViewController:nav animated:YES completion:nil];
     });
-    return @[provider, key, models, prompt];
+    // Low first: 3.8 Flash refuses minimal.
+    NSArray<NSString *> *thinkingLevels = @[@"Low", @"Medium", @"High"];
+    SGModRow *thinking = SGMenuRow(@"Thinking", thinkingLevels, ^NSString *{
+        return geminiThinkingLevel().capitalizedString;
+    }, ^(NSInteger index) {
+        if (index == 0) [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyAIThinking];
+        else [NSUserDefaults.standardUserDefaults setObject:thinkingLevels[index].lowercaseString forKey:SGKeyAIThinking];
+        translatorChanged();
+    });
+    thinking.visible = ^{ return [chosen()->tag isEqualToString:@"gemini"]; };
+
+    NSArray<NSNumber *> *timeoutSeconds = @[@30, @60, @90, @(kDefaultAITimeout), @180, @240, @300];
+    NSMutableArray<NSString *> *timeouts = [NSMutableArray array];
+    for (NSNumber *seconds in timeoutSeconds) [timeouts addObject:[NSString stringWithFormat:@"%@ s", seconds]];
+    SGModRow *timeout = SGMenuRow(@"Timeout", timeouts, ^NSString *{
+        return [NSString stringWithFormat:@"%ld s", (long)aiTimeout()];
+    }, ^(NSInteger index) {
+        NSInteger seconds = timeoutSeconds[index].integerValue;
+        if (seconds == kDefaultAITimeout) [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyAITimeout];
+        else [NSUserDefaults.standardUserDefaults setInteger:seconds forKey:SGKeyAITimeout];
+    });
+
+    NSArray<NSNumber *> *batchSizes = @[@10, @20, @30, @40, @50, @0];
+    NSArray<NSString *> *batchSizeOptions = @[@"10 songs", @"20 songs", @"30 songs", @"40 songs", @"50 songs", @"All at once"];
+    SGModRow *batchSizeRow = SGMenuRow(@"Songs per batch", batchSizeOptions, ^NSString *{
+        NSUInteger idx = [batchSizes indexOfObject:@(SGLyricsBatchSize())];
+        return batchSizeOptions[idx != NSNotFound ? idx : 1];
+    }, ^(NSInteger index) {
+        NSUInteger size = batchSizes[index].unsignedIntegerValue;
+        if (size == 20) [NSUserDefaults.standardUserDefaults removeObjectForKey:SGKeyLyricsBatchSize];
+        else [NSUserDefaults.standardUserDefaults setInteger:size forKey:SGKeyLyricsBatchSize];
+    });
+    SGModRow *batchPromptRow = SGStatActionRow(@"Batch prompt", @"Prompt used when translating multiple songs at once",
+                                               ^NSString *{ return storedString(SGKeyLyricsBatchPrompt) ? @"Edited" : @"Default"; }, ^{
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:[[SGPromptEditor alloc] initWithBatch:YES]];
+        nav.modalPresentationStyle = UIModalPresentationPageSheet;
+        SGPresentDark(nav);
+        [SGTopController() presentViewController:nav animated:YES completion:nil];
+    });
+    SGModRow *skipSavedRow = SGSwitchRow(@"Skip saved translations", @"Skip songs that already have a saved translation", SGKeyLyricsBatchSkipSaved);
+    return @[provider, key, models, thinking, timeout, prompt, batchSizeRow, batchPromptRow, skipSavedRow];
 }

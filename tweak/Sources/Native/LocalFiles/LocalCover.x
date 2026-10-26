@@ -15,6 +15,8 @@
 static const CGFloat kCoverMinWidth = 200;
 static char kImageKey, kTrackKey;
 static __weak UIScrollView *sg_list;
+// The image views holding a picture of the mod's, weakly.
+static NSHashTable<UIImageView *> *sg_filled;
 
 static BOOL isCoverCell(UIView *view) {
     static Class cell, legacy;
@@ -49,14 +51,26 @@ static void fill(UIImageView *view) {
     view.image = cover;
     objc_setAssociatedObject(view, &kImageKey, cover, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, &kTrackKey, uri, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    if (!sg_filled) sg_filled = [NSHashTable weakObjectsHashTable];
+    if (cover) [sg_filled addObject:view]; else [sg_filled removeObject:view];
+}
+
+// With no picture of the mod's on screen and no local file playing, fill changes nothing (no view is
+// ours, and SGLocalFileFallbackCover answers nil for any other track before doing anything), so the
+// walk for the image view is spared on every layout of the list.
+static BOOL nothingToFill(void) {
+    // A weak table's count can still include freed views; enumeration skips them.
+    for (__unused UIView *view in sg_filled) return NO;
+    return !SGLocalFileIs(SGURIString(SGPlayerState().track.URI));
 }
 
 static void fillFront(UIScrollView *list) {
     CGFloat middle = list.contentOffset.x + list.bounds.size.width / 2;
+    BOOL idle = nothingToFill();
     for (UIView *cell in list.subviews) {
         if (!isCoverCell(cell) || middle < CGRectGetMinX(cell.frame) || middle > CGRectGetMaxX(cell.frame)) continue;
         sg_list = list;
-        fill(largestImageIn(cell));
+        if (!idle) fill(largestImageIn(cell));
     }
 }
 
@@ -92,9 +106,9 @@ static void fillFront(UIScrollView *list) {
     BOOL player = NO;
     for (UIView *view = tilt.superview; view; view = view.superview) {
         if (isCoverCell(view)) return;
-        player = player || [NSStringFromClass(view.class) containsString:@"NowPlaying"];
+        player = player || SGClassNamed(view.class, @"NowPlaying");
     }
-    if (player) fill(largestImageIn(tilt));
+    if (player && !nothingToFill()) fill(largestImageIn(tilt));
 }
 %end
 

@@ -160,7 +160,14 @@ static UIView *backdropIn(UIView *plane) {
     tilt.layer.shadowOpacity = 0.45;
     tilt.layer.shadowRadius = 32;
     tilt.layer.shadowOffset = CGSizeMake(0, 12);
-    tilt.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:tilt.bounds cornerRadius:kArtRadius].CGPath;
+    // A path made once per size, kept while the layer still holds that very path: one Spotify sets is replaced.
+    static char kShadowPathKey;
+    CGPathRef path = tilt.layer.shadowPath;
+    if (!path || path != (__bridge CGPathRef)objc_getAssociatedObject(tilt, &kShadowPathKey)
+        || !CGRectEqualToRect(CGPathGetBoundingBox(path), tilt.bounds)) {
+        tilt.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:tilt.bounds cornerRadius:kArtRadius].CGPath;
+        objc_setAssociatedObject(tilt, &kShadowPathKey, (__bridge id)tilt.layer.shadowPath, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 }
 %end
 

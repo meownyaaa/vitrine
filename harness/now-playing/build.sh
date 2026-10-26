@@ -18,7 +18,7 @@ SDK=$(xcrun --sdk macosx --show-sdk-path)
 xcrun clang -target arm64-apple-ios18.0-macabi -isysroot "$SDK" -iframework "$SDK/System/iOSSupport/System/Library/Frameworks" \
     -fobjc-arc -g -O0 -Wall -I"$SRC" -I"$SRC/Shared/LockScreenLyrics" \
     "$(dirname "$0")/main.m" "$OUT/gen/LockScreenLyrics.m" "$OUT/gen/NowPlayingExtras.m" \
-    "$SRC/Shared/Lyrics/KaraokeTiming.m" "$SRC/Shared/AdBlock/Protobuf.m" \
+    "$SRC/Shared/Lyrics/KaraokeTiming.m" "$SRC/Shared/Lyrics/Romanise.m" "$SRC/Shared/AdBlock/Protobuf.m" \
     -framework UIKit -framework MediaPlayer -o "$OUT/now-playing"
 
 "$OUT/now-playing"

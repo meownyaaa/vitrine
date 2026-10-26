@@ -32,9 +32,9 @@ static UIView *switchIn(UIView *root, int depth) {
         logged = YES;
         SGLog(@"player: Switch to video hidden, %@ %@", NSStringFromClass(videoSwitch.class), NSStringFromCGRect(videoSwitch.frame));
     }
-    videoSwitch.alpha = 0;
-    videoSwitch.userInteractionEnabled = NO;
-    videoSwitch.accessibilityElementsHidden = YES;
+    if (videoSwitch.alpha != 0) videoSwitch.alpha = 0;
+    if (videoSwitch.userInteractionEnabled) videoSwitch.userInteractionEnabled = NO;
+    if (!videoSwitch.accessibilityElementsHidden) videoSwitch.accessibilityElementsHidden = YES;
 }
 %end
 

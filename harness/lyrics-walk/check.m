@@ -9,6 +9,7 @@
 #import "Settings/SGSourcesPage.h"
 #import "Settings/SGPageStyle.h"
 #import "Core/SGFlagForce.h"
+#import "Core/SGPrefs.h"
 #import "Headers/SPTPlayer.h"
 
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAILED line %d: %s\n", __LINE__, #cond); exit(1); } } while (0)
@@ -227,6 +228,24 @@ int main(int argc, char **argv) {
         [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
         CHECK(!SGLyricsChosenSource(@"t3") && [sg_askedAgain isEqualToArray:@[@"t3"]] && !sg_shown[@"t3"]);
         CHECK(!fetch(@"t3"));
+
+        // Prefer word-by-word timing (#111): a timed imported file first in the order ends the walk, though it is
+        // timed by the line. Below a source timed as finely, it does not: the first in the order among equals stays.
+        sg_answers[@"importedLRC"] = lines(YES);
+        sg_answers[@"musixmatch"] = lines(YES);
+        sg_answers[@"lrclib"] = lines(YES);
+        [NSUserDefaults.standardUserDefaults setVolatileDomain:@{SGKeyLyricsProviders: @[@"importedLRC", @"musixmatch", @"lrclib"],
+                                                                 SGKeyLyricsPreferWordTiming: @YES} forName:NSArgumentDomain];
+        SGPrefsChanged();
+        [sg_asked removeAllObjects];
+        got = fetch(@"t4");
+        CHECK([sg_asked isEqualToArray:@[@"importedLRC:t4"]] && [got.provider isEqualToString:@"Imported LRC"]);
+        [NSUserDefaults.standardUserDefaults setVolatileDomain:@{SGKeyLyricsProviders: @[@"musixmatch", @"importedLRC", @"lrclib"],
+                                                                 SGKeyLyricsPreferWordTiming: @YES} forName:NSArgumentDomain];
+        SGPrefsChanged();
+        [sg_asked removeAllObjects];
+        got = fetch(@"t5");
+        CHECK([sg_asked isEqualToArray:(@[@"musixmatch:t5", @"importedLRC:t5", @"lrclib:t5"])] && [got.provider isEqualToString:@"Musixmatch"]);
 
         printf("lyrics-walk: all checks passed\n");
     }

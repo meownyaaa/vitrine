@@ -100,6 +100,30 @@ static UICollectionView *listOf(UIView *cell) {
     return nil;
 }
 
+static char kPageListKey;
+
+// Bumped each time a different page is found. A cell measured before Spotify names its page keeps a NO only until then.
+static NSInteger pagesFound;
+static __weak UIView *lastPage;
+
+// Whether the cell is a row of the page's own list: a card inside a carousel is a cell of the same class, and its row
+// decides. Worked out once the cell is in a window and kept on it, since a cell never leaves its list nor the list its
+// page; every cell of the class asks on every pass, Home's and Search's included. Kept as -1 for YES, or as
+// pagesFound when it said NO.
+static BOOL onPageList(UICollectionViewCell *cell) {
+    NSNumber *known = objc_getAssociatedObject(cell, &kPageListKey);
+    if (known.integerValue == -1) return YES;
+    if (known && known.integerValue == pagesFound) return NO;
+    UICollectionView *list = listOf(cell);
+    UIView *page = list && ![listOf(list) isKindOfClass:UICollectionView.class] ? SGRArtistPageOf(cell) : nil;
+    if (page && page != lastPage) {
+        lastPage = page;
+        pagesFound++;
+    }
+    if (cell.window) objc_setAssociatedObject(cell, &kPageListKey, @(page ? -1 : pagesFound), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return page != nil;
+}
+
 static void settle(UICollectionViewCell *cell, CGFloat natural) {
     UIView *content = cell.contentView;
     objc_setAssociatedObject(cell, &kSettledKey, @(natural), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -160,9 +184,9 @@ static void logOnce(NSString *what) {
 %hook _TtC12Element_List18CollectionViewCell
 - (UICollectionViewLayoutAttributes *)preferredLayoutAttributesFittingAttributes:(UICollectionViewLayoutAttributes *)attributes {
     UICollectionViewCell *cell = (UICollectionViewCell *)self;
-    UICollectionView *list = listOf(cell);
     // Only the page's own list: a card inside a carousel is a cell of the same class, and its row decides.
-    BOOL page = list && ![listOf(list) isKindOfClass:UICollectionView.class] && SGRArtistPageOf(cell) && attributes.indexPath;
+    BOOL page = onPageList(cell) && attributes.indexPath;
+    UICollectionView *list = page ? listOf(cell) : nil;
     if (!page) {
         if (objc_getAssociatedObject(cell, &kSettledKey)) unsettle(cell);
         return %orig;
@@ -195,8 +219,7 @@ static void logOnce(NSString *what) {
     UICollectionViewCell *cell = (UICollectionViewCell *)self;
     NSNumber *settled = objc_getAssociatedObject(self, &kSettledKey);
     if (settled) settle(cell, settled.doubleValue);
-    UICollectionView *list = listOf(cell);
-    if (list && ![listOf(list) isKindOfClass:UICollectionView.class] && SGRArtistPageOf(cell)) {
+    if (onPageList(cell)) {
         // What the cell paints over the field -- the "You liked" row, every carousel's collection and the
         // fade Popular's "See more" draws over its last track (device, trees/continuous/3.txt 2026-09-18).
         SGRClearCellPaint(cell);

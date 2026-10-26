@@ -26,6 +26,9 @@ CGRect SGRPlayerCoverFrameIn(UIView *host) {
     return sg_cover.window ? [host convertRect:sg_cover.bounds fromView:sg_cover] : CGRectNull;
 }
 void SGRPlayerSetCoverHidden(BOOL hidden) { sg_cover.alpha = hidden ? 0 : 1; }
+// A playing cover at full size, and no animated artwork over it (PlayerMotion.x).
+CGFloat SGRPlayerCoverScale(void) { return 1; }
+BOOL SGRPlayerMotionShowing(void) { return NO; }
 id SGRPlayerField(void) { return nil; }
 UIImage *SGRNowPlayingArtwork(NSString **uri, NSString **identity) { return sg_art; }
 const CGFloat SGRRadiusArtwork = 12;

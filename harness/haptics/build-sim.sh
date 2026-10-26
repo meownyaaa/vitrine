@@ -28,7 +28,7 @@ SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
 xcrun -sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator -fobjc-arc -g -O1 -isysroot "$SDK" -Wno-deprecated-declarations \
     $EXTRA -I"$SRC" -I"$SRC/Shared/Haptics" -I"$SRC/Shared/Player" -Isim \
     sim/main.m sim/fakehaptics.m ../scene.m "$OUT/gen/MusicHaptics.m" "$OUT/gen/SpeedPitch.m" "$SRC/Shared/Player/SGTimePitch.m" "$HAPTICS/SGMusicAnalyzer.m" $SETTINGS \
-    "$SRC/Core/SGRebind.m" "$SRC/Core/SGLog.m" "$SRC/Core/SGPrefs.m" "$SRC/Core/SGUIMode.m" "$SRC/Core/SGViewTree.m" "$SRC/Core/SGFlagForce.m" \
+    "$SRC/Core/SGRebind.m" "$SRC/Core/SGLog.m" "$SRC/Core/SGPrefs.m" "$SRC/Core/SGUIMode.m" "$SRC/Core/SGViewTree.m" "$SRC/Core/SGGlass.m" "$SRC/Core/SGFlagForce.m" \
     -framework UIKit -framework QuartzCore -framework CoreGraphics -framework AudioToolbox -framework AVFoundation -framework Foundation \
     -o "$OUT/HapticsHarness.app/HapticsHarness"
 cat > "$OUT/HapticsHarness.app/Info.plist" <<'PLIST'

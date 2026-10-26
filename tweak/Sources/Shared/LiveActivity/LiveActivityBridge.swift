@@ -79,7 +79,8 @@ public final class SGLiveActivityBridge: NSObject {
             if pending.sending, let at = pending.sentAt, Date().timeIntervalSince(at) < kStuckAfter { return false }
             if pending.sending { log.notice("[spotifyglass] live activity: an update has not landed in \(kStuckAfter, privacy: .public) s, sending on past it") }
             pending.sending = true
-            pending.sentAt = nil
+            // Set now, not when send() takes its first change: a nil here reads as stuck to the next call.
+            pending.sentAt = Date()
             return true
         }
         if start { Task { await send() } }
@@ -136,6 +137,22 @@ public final class SGLiveActivityBridge: NSObject {
         return true
     }
 
+    // The last state sent, to tell which updates are worth the second copy.
+    private static let lastSent = OSAllocatedUnfairLock<State?>(initialState: nil)
+
+    // A dropped line is replaced by the next line or kRefresh's resend within seconds, and an unchanged state
+    // was already sent, so only a change to the track, controls or timer gets the second copy.
+    private static func onlyLinesChanged(_ state: State) -> Bool {
+        lastSent.withLock { last in
+            defer { last = state }
+            guard var before = last else { return false }
+            before.line = state.line
+            before.nextLine = state.nextLine
+            before.translation = state.translation
+            return before == state
+        }
+    }
+
     private static func send() async {
         // One task over the whole run of queued changes, so none of them goes out without it.
         let task = BackgroundTask()
@@ -152,8 +169,9 @@ public final class SGLiveActivityBridge: NSObject {
         }) {
             switch change {
             case .update(let id, let content, let background):
+                let again = !onlyLinesChanged(content.state) && background
                 await update(id, content)
-                if background, await quietForASecond(since: taken) { await update(id, content) }
+                if again, await quietForASecond(since: taken) { await update(id, content) }
             case .end(let ids, let background):
                 await end(ids)
                 // Rare, and ending one already ended does nothing: a second later it goes again whatever came since.

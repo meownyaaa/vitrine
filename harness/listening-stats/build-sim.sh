@@ -13,7 +13,7 @@ xcrun -sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator -fobjc-ar
     "$(dirname "$0")/sim/main.m" "$(dirname "$0")/sim/stubs.m" "$(dirname "$0")/../scene.m" "$OUT/gen/ListeningStats.m" \
     "$SRC"/Shared/ListeningStats/ListeningStatsPage.m "$SRC"/Shared/ListeningStats/SGPlayLog.m \
     "$SRC"/Settings/SGPage.m "$SRC"/Settings/SGPageStyle.m "$SRC"/Settings/SGModPage.m "$SRC"/Settings/SGGlowSwitch.m \
-    "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m "$SRC"/Core/SGViewTree.m "$SRC"/Core/SGFlagForce.m "$SRC"/Core/SGUIMode.m \
+    "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m "$SRC"/Core/SGViewTree.m "$SRC"/Core/SGGlass.m "$SRC"/Core/SGFlagForce.m "$SRC"/Core/SGUIMode.m \
     -framework UIKit -framework QuartzCore -framework CoreGraphics -framework Foundation -framework UniformTypeIdentifiers \
     -o "$OUT/ListeningStatsHarness.app/ListeningStatsHarness"
 

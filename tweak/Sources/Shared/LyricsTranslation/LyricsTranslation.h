@@ -24,6 +24,16 @@ NSArray<SGModRow *> *SGOnDeviceTranslatorRows(void);
 // is kept in the Keychain beside its key, not here. All read at each translation.
 #define SGKeyAITranslator @"spotifyglass.lyrics.ai"
 #define SGKeyAIPrompt @"spotifyglass.lyrics.prompt"
+// Gemini's thinking level (unset: low) and the request timeout in seconds for every provider (unset: 120).
+#define SGKeyAIThinking @"spotifyglass.lyrics.gemini.thinking"
+#define SGKeyAITimeout @"spotifyglass.lyrics.ai.timeout"
+#define SGKeyLyricsBatchPrompt @"spotifyglass.lyrics.batch.prompt"
+#define SGKeyLyricsBatchSize @"spotifyglass.lyrics.batch.size"
+#define SGKeyLyricsBatchSkipSaved @"spotifyglass.lyrics.batch.skip_saved"
+
+NSString *SGLyricsBatchPromptTemplate(void);
+NSUInteger SGLyricsBatchSize(void);
+BOOL SGLyricsBatchSkipSaved(void);
 
 // Who made a translation: an AI provider's id with its model, or one of the two on the iPhone. A translation
 // saved before sources were kept has neither, and reads as unknown.
@@ -51,6 +61,12 @@ SGTranslationSource *SGAITranslatorSource(void);
 // same language, provider, model and prompt is asked once a launch.
 void SGLyricsTranslateWithAI(NSString *trackID, NSArray<SGKaraokeLine *> *lines, NSString *languageTag,
                              void (^done)(NSArray<NSString *> *translations, NSString *error));
+// Multiple songs translated in one prompt, keyed by track URI (or ID). Streams live phase ("Thinking…",
+// "Writing") and per-song completions as each song's array closes in the SSE stream. Main queue.
+void SGLyricsTranslateBatchWithAI(NSDictionary<NSString *, NSArray<NSString *> *> *songs, NSString *languageTag,
+                                  void (^onPhase)(NSString *phase),
+                                  void (^onSong)(NSString *trackKey, NSArray<NSString *> *lines),
+                                  void (^done)(NSDictionary<NSString *, NSArray<NSString *> *> *results, NSString *error));
 // Forgets the song's answers kept for the launch, so it is asked again; a nil track forgets every song's.
 void SGLyricsForgetAITranslation(NSString *trackID, NSString *languageTag);
 
@@ -78,7 +94,8 @@ NSArray<SGModRow *> *SGAITranslatorRows(void);
 @interface SGOnDeviceTranslation : NSObject
 @property (class, readonly) BOOL translationAvailable;
 + (BOOL)appleIntelligenceAvailable:(NSString *)languageTag;
-+ (void)translate:(NSArray<NSString *> *)lines to:(NSString *)languageTag done:(void (^)(NSArray<NSString *> *lines, NSString *error))done;
++ (void)openTranslateSettings;
++ (void)translate:(NSArray<NSString *> *)lines to:(NSString *)languageTag from:(UIView *)view done:(void (^)(NSArray<NSString *> *lines, NSString *error))done;
 // Apple Intelligence works through the song a batch at a time: `progress` gets the lines so far, "" for the rest.
 + (void)translateWithAppleIntelligence:(NSArray<NSString *> *)lines to:(NSString *)languageTag song:(NSString *)song
                               progress:(void (^)(NSArray<NSString *> *lines))progress
@@ -91,6 +108,9 @@ NSArray<SGModRow *> *SGAITranslatorRows(void);
 // Syncing gives the saved file's source, nil when none of its lines shows; saving gives the new one. Main thread.
 SGTranslationSource *SGLyricsSyncSavedTranslation(NSString *track, NSString *language, NSArray<SGKaraokeLine *> *lines);
 SGTranslationSource *SGLyricsSaveTranslation(NSString *track, NSString *language, NSArray<SGKaraokeLine *> *lines, SGTranslationSource *source);
+BOOL SGLyricsHasSavedTranslation(NSString *track, NSString *language);
+// Whether a song's lines read as another language than `language`.
+BOOL SGKaraokeInAnotherLanguage(NSArray<SGKaraokeLine *> *lines, NSString *language);
 // Deletes the song's saved translation and the launch's answers for it, then posts SGLyricsTranslationsDidChangeNotification.
 void SGLyricsDeleteSavedTranslation(NSString *track, NSString *language);
 // A saved file read: its lines (text to translation) and its source, or nil. A file from before sources were

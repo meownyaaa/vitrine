@@ -6,7 +6,6 @@
 // Threading: main thread. A picture found is kept per track; a miss is tried again after a second, since
 // the now playing info may not have caught up with the track yet.
 #import <MediaPlayer/MediaPlayer.h>
-#import <objc/message.h>
 #import "Core/SGCore.h"
 #import "Headers/SPTPlayer.h"
 #import "Shared/Player/PlayerState.h"
@@ -19,18 +18,18 @@ static const CGFloat kSide = 1200;
 static NSMutableDictionary<NSString *, UIImage *> *sg_found;
 static NSMutableDictionary<NSString *, NSDate *> *sg_missed;
 
-// A file URL, an absolute path, or Spotify's own reading of a value (-[NSURL spt_localFileImagePath],
-// asked only when the object answers it as a getter of an object).
+// A file URL, an absolute path, or a spotify:localfileimage:<percent-encoded path> address. Spotify's
+// -[NSURL spt_localFileImagePath] reads the same part but throws on an address with fewer parts (#157).
 static NSString *pathIn(id value) {
-    if ([value isKindOfClass:NSString.class] && [value hasPrefix:@"/"]) return value;
-    NSURL *url = [value isKindOfClass:NSURL.class] ? value : [value isKindOfClass:NSString.class] ? [NSURL URLWithString:value] : nil;
+    NSString *string = [value isKindOfClass:NSURL.class] ? [value absoluteString] : value;
+    if (![string isKindOfClass:NSString.class]) return nil;
+    if ([string hasPrefix:@"/"]) return string;
+    NSURL *url = [NSURL URLWithString:string];
     if (url.isFileURL) return url.path;
-    SEL getter = NSSelectorFromString(@"spt_localFileImagePath");
-    if (![url respondsToSelector:getter]) return nil;
-    NSMethodSignature *signature = [url methodSignatureForSelector:getter];
-    if (signature.numberOfArguments != 2 || signature.methodReturnType[0] != '@') return nil;
-    id path = ((id (*)(id, SEL))objc_msgSend)(url, getter);
-    return [path isKindOfClass:NSString.class] && [path length] ? path : nil;
+    NSArray<NSString *> *parts = [string componentsSeparatedByString:@":"];
+    if (parts.count < 3 || ![parts[0] isEqualToString:@"spotify"] || ![parts[1] isEqualToString:@"localfileimage"]) return nil;
+    NSString *path = parts[2].stringByRemovingPercentEncoding;
+    return path.length ? path : nil;
 }
 
 static UIImage *fromMetadata(NSDictionary *metadata) {

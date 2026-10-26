@@ -114,6 +114,7 @@ static void arm(void) {
         // Heard on the writing thread and handed to main without waiting (AGENTS.md).
         [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:nil
                                                     usingBlock:^(NSNotification *note) {
+            SGPrefsChanged();
             dispatch_async(dispatch_get_main_queue(), ^{ arm(); });
         }];
         SGLog(@"lock star: %@", atLaunch ? @"on, Spotify's like and dislike buttons forced off" : @"off");

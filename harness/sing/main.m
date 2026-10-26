@@ -714,7 +714,7 @@ static void checkStarved(void) {
     SGSingEngineSetOn(engine, true);
     Source source = {tone, 0, true, 0}, *pulled = &source;
     __block double worst = 0, leadAt6 = 0, leastInStall = 100, leadAt12 = 0;
-    __block unsigned long long stopsAt6 = 0, stopsAt12 = 0;
+    __block unsigned long long stopsAt6 = 0, stopsAt12 = 0, windowsAt8 = 0, windowsAt12 = 0;
     malloc_logger = countAllocation;
     Audio out = play(engine, tone, &source, 1024, 12.5, ^(double played) {
         // Decoded at 1.5 times what plays from a quarter second in, stalled from 6 s to 8 s.
@@ -726,9 +726,11 @@ static void checkStarved(void) {
             stopsAt6 = SGSingEngineReadStats(engine).aheadStops;
         }
         if (played >= 6 && played < 8.1) leastInStall = fmin(leastInStall, SGSingEngineLead(engine));
+        if (played >= 8 && !windowsAt8) windowsAt8 = SGSingEngineReadStats(engine).windows;
         if (played >= 12 && !leadAt12) {
             leadAt12 = SGSingEngineLead(engine);
             stopsAt12 = SGSingEngineReadStats(engine).aheadStops;
+            windowsAt12 = SGSingEngineReadStats(engine).windows;
         }
     });
     malloc_logger = NULL;
@@ -738,6 +740,8 @@ static void checkStarved(void) {
           "filling as the decoder let it (%.2f s at 6 s)", stopsAt6, leadAt6);
     CHECK(leastInStall > 0.5 && leastInStall < leadAt6 - 1, "a 2 s stall of the decoder at 6 s plays through on the lead (down to %.2f s)", leastInStall);
     CHECK(leadAt12 > 2 && stopsAt12 > stopsAt6, "after it the lead is read again (%.2f s at 12 s, %llu stops)", leadAt12, stopsAt12);
+    CHECK(windowsAt12 > windowsAt8, "and the model runs windows again, the worker asleep through the stall woken (%llu by 8 s, %llu by 12 s)",
+          windowsAt8, windowsAt12);
     double gap = 0;
     for (size_t i = 0; i < 12 * kSGSingRate; i++) gap = fmax(gap, fabsf(out.left[i] - tone.left[i]));
     CHECK(gap < 1e-6, "what plays is the song with no gap and every frame in order, the stall included (%.2g)", gap);

@@ -1,6 +1,7 @@
 // Whether the user follows the page's artist, read from Spotify's collection state (following saves the
 // artist to the collection) rather than the Follow button, whose only state is its localized title.
 // The provider is the one Spotify's own code uses, kept weakly.
+#import <os/lock.h>
 #import "Core/SGCore.h"
 #import "Artist.h"
 
@@ -15,29 +16,35 @@
 @end
 
 static __weak id sg_provider;
+// Guards sg_provider and keepProvider's `logged`; a lock of this file's own, so Spotify's threads binding rows
+// never queue behind another file's.
+static os_unfair_lock sg_providerLock = OS_UNFAIR_LOCK_INIT;
 
 // Called from wherever Spotify reaches for its provider, any thread.
 static void keepProvider(id provider) {
     if (!provider || ![provider respondsToSelector:@selector(subscribeCollectionStateForURL:completion:)]) return;
+    // Nearly every call brings the provider already kept; a weak load is atomic, and the lock below decides.
+    if (provider == sg_provider) return;
     static NSMutableSet<NSString *> *logged;
-    @synchronized (NSObject.class) {
-        if (provider == sg_provider) return;
+    NSString *name = nil;
+    os_unfair_lock_lock(&sg_providerLock);
+    if (provider != sg_provider) {
         sg_provider = provider;
         if (!logged) logged = [NSMutableSet set];
-        NSString *name = NSStringFromClass([provider class]);
-        if ([logged containsObject:name]) return;
-        [logged addObject:name];
+        name = NSStringFromClass([provider class]);
+        if ([logged containsObject:name]) name = nil;
+        else [logged addObject:name];
     }
-    SGLog(@"redesign artist: collection state from %@", NSStringFromClass([provider class]));
+    os_unfair_lock_unlock(&sg_providerLock);
+    if (name) SGLog(@"redesign artist: collection state from %@", name);
 }
 
 static __weak id sg_platform;
 
 static id currentProvider(void) {
-    id provider;
-    @synchronized (NSObject.class) {
-        provider = sg_provider;
-    }
+    os_unfair_lock_lock(&sg_providerLock);
+    id provider = sg_provider;
+    os_unfair_lock_unlock(&sg_providerLock);
     if (!provider && [sg_platform respondsToSelector:@selector(stateProvider)]) {
         provider = [sg_platform performSelector:@selector(stateProvider)];
         keepProvider(provider);

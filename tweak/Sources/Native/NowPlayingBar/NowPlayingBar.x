@@ -6,15 +6,16 @@
 #import "Core/SGCore.h"
 #import "NowPlayingBar.h"
 
+// `marker` is a literal: SGClassNamed keeps its answers by the marker's address.
 static BOOL insideClass(UIView *view, NSString *marker) {
-    for (UIView *v = view; v; v = v.superview) if ([NSStringFromClass(v.class) containsString:marker]) return YES;
+    for (UIView *v = view; v; v = v.superview) if (SGClassNamed(v.class, marker)) return YES;
     return NO;
 }
 
 static void hideConnectButton(UIView *bar) {
     SGForEachView(bar, ^(UIView *v) {
-        NSString *name = NSStringFromClass(v.class);
-        if (![name containsString:@"ConnectButtonView"] && ![name containsString:@"ConnectStateView"]) return;
+        Class cls = v.class;
+        if (!SGClassNamed(cls, @"ConnectButtonView") && !SGClassNamed(cls, @"ConnectStateView")) return;
         if (insideClass(v, @"InformationContainer")) return;
         UIView *item = v;
         while (item.superview && ![item.superview isKindOfClass:UIStackView.class]) item = item.superview;

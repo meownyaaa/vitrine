@@ -173,8 +173,9 @@ static void measureSoon(void) {
         if (!collapsed) {
             sg_changes++;
             measureSoon();
+            // Described on the first drop only: a cell measured again while collapsed holds the same content.
+            logOnce([@"dropped " stringByAppendingString:describe(root)]);
         }
-        logOnce([@"dropped " stringByAppendingString:describe(root)]);
     } else if (kind == SGRSearchKindKeep && collapsed) {
         // Cells are reused across kinds: one collapsed before holds a card now.
         expand(cell);

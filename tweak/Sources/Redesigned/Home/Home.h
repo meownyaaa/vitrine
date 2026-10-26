@@ -15,6 +15,7 @@
 //     HomeTiles.m      a shortcut tile's picture run across the tile, blurred behind its title
 //     HomeTopPicks.x   Top picks: the shelf nearest the top drawn large and moved above the shortcuts, each card
 //                      the cover over a footer in its color
+//     MadeForYouCovers.x  Made For You, a Hub page opened from Home: its cards' covers at Home's radius
 //     HomePerf.x       FLEX builds: the frames of each scroll of Home and the time the hooks above took
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
@@ -33,6 +34,12 @@ BOOL SGRHomeLook(void);
 #define SGRKeyHomeTopPicksFrom @"spotifyglass.redesign.home.topPicksFrom"
 // The footer of a large card in its cover's color. On until switched off; off, the footer is the plain surface.
 #define SGRKeyHomeTopPicksColour @"spotifyglass.redesign.home.topPicksColour"
+// Top picks keeps Spotify's heading over its cards (drawn at the size of the other shelves' headings, HomeHeadings.x)
+// when set; unset, the heading and the band it takes go. Read at launch.
+#define SGRKeyHomeTopPicksHeading @"spotifyglass.redesign.home.topPicksHeading"
+// The title row stays where it is as the feed scrolls under it, over the feed's hard top edge shaped to the row
+// (HomeHeader.x), rather than rising and fading away. Off until switched on; read at launch.
+#define SGRKeyHomeKeepTitle @"spotifyglass.redesign.home.keepTitle"
 // Parts of Home hidden when set (HomeSections.x): the shortcuts grid and the DJ.
 #define SGRKeyHomeHideShortcuts @"spotifyglass.redesign.home.hide.shortcuts"
 #define SGRKeyHomeHideDJ @"spotifyglass.redesign.home.hide.dj"
@@ -86,10 +93,12 @@ void SGRHomeTintForCover(UIImage *image, void (^completion)(UIColor *color));
 // cover's color under the cover. NO, and the card left as Spotify's, for one at Spotify's own size.
 BOOL SGRHomeStyleLargeCard(UIView *card);
 
-// Whether `view` is in the shelf Top picks draws large (HomeTopPicks.x), whose heading goes (HomeHeadings.x).
+// Whether `view` is in the shelf Top picks draws large (HomeTopPicks.x), whose heading goes unless Show Top picks
+// heading is on (HomeHeadings.x).
 BOOL SGRHomeInTopPicks(UIView *view);
 // Spotify's "Show all" of the shelf Top picks draws, while the shelf is on screen and offers one, and the shelf's
-// title with it: the header's menu offers it (HomeHeader.x), the heading it sits in being gone.
+// title with it: the header's menu offers it (HomeHeader.x), the heading it sits in being gone. nil while Show Top
+// picks heading keeps the heading.
 UIControl *SGRHomeTopPicksShowAll(NSString **title);
 // The page's color from the first large card's cover (HomeHeader.x draws it behind the title, fading to black);
 // nil for none.

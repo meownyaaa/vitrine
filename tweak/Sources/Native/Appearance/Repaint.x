@@ -9,15 +9,25 @@ __weak UIView *sg_npvBackdropRoot = nil;
 
 %hook CALayer
 - (void)setBackgroundColor:(CGColorRef)color {
-    if (color && (sg_lyricsCardRoot || sg_lyricsPageRoot || sg_homeRoot || sg_npvBackdropRoot)) {
+    if (!color) {
+        %orig;
+        return;
+    }
+    UIView *cardRoot = sg_lyricsCardRoot, *pageRoot = sg_lyricsPageRoot, *homeRoot = sg_homeRoot, *npvRoot = sg_npvBackdropRoot;
+    if (cardRoot || pageRoot || homeRoot || npvRoot) {
         UIView *view = (UIView *)self.delegate;
         if ([view isKindOfClass:UIView.class] && view.layer == self && !SGKeepsColor(view)) {
-            if (SGIsInside(view, sg_lyricsCardRoot) || SGIsInside(view, sg_lyricsPageRoot)) {
+            // One walk answers SGIsInside for all four roots: each stops at the same first effect view.
+            BOOL lyrics = NO, home = NO;
+            for (UIView *v = view; v && !lyrics; v = v.superview) {
+                if ([v isKindOfClass:UIVisualEffectView.class]) break;
+                // The album color arrives on the backdrop plane per track, outside any layout pass.
+                lyrics = v == cardRoot || v == pageRoot || v == npvRoot;
+                home = home || v == homeRoot;
+            }
+            if (lyrics) {
                 color = NULL;
-            } else if (SGIsInside(view, sg_npvBackdropRoot)) {
-                // The album color arrives on the plane per track, outside any layout pass.
-                color = NULL;
-            } else if (SGIsBaseSurface(color) && SGIsInside(view, sg_homeRoot)) {
+            } else if (home && SGIsBaseSurface(color)) {
                 // Home keeps its cards and its placeholders; only the base surface the gradient
                 // of Native/Home/HomeGradient.x sits behind goes.
                 color = NULL;

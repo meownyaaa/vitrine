@@ -190,10 +190,19 @@ static void logOnce(NSString *what) {
 - (UICollectionViewLayoutAttributes *)preferredLayoutAttributesFittingAttributes:(UICollectionViewLayoutAttributes *)attributes {
     UICollectionViewCell *cell = (UICollectionViewCell *)self;
     UIView *content = cell.contentView.subviews.firstObject;
+    NSArray<NSNumber *> *settled = objc_getAssociatedObject(cell, &kSettledKey);
     // Cells are reused across kinds, and one settled before can hold a track row now.
     if (!isFooterContent(content) || !SGRAlbumPageOf(cell)) {
-        if (objc_getAssociatedObject(cell, &kSettledKey)) unsettle(cell);
+        if (settled) unsettle(cell);
         return %orig;
+    }
+    // A kept cell is measured from the top and settled again below: content settle() moved down its lead measures
+    // that much taller on every pass, and the collection view asks again until the answer holds still. Only the
+    // lead is undone; a dropped cell's content is never squeezed to the cell's 0 (see the top of the file).
+    if (settled[1].doubleValue > 0) {
+        CGRect frame = cell.contentView.frame;
+        frame.origin.y = 0;
+        cell.contentView.frame = frame;
     }
     UICollectionViewLayoutAttributes *result = %orig;
     CGFloat natural = MAX(1, result.size.height);
@@ -203,7 +212,7 @@ static void logOnce(NSString *what) {
         result.size = CGSizeMake(result.size.width, natural + kLead);
         logOnce(@"the album's own line and its copyright kept under the tracks");
     } else if (shown(cell, content, attributes.indexPath, NO)) {
-        if (objc_getAssociatedObject(cell, &kSettledKey)) unsettle(cell);
+        if (settled) unsettle(cell);
         logOnce(@"a section under the tracks shown, its switch off");
     } else {
         settle(cell, natural, 0);

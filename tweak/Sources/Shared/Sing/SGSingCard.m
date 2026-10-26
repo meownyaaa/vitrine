@@ -13,8 +13,8 @@
 // Reading the lines is how Sing knows the page shows ("the lines" in its log are these two, not the lyrics' lines):
 // at As sung with Spatial voice off, where Sing otherwise rests, it separates the playing song while they are read,
 // so the lines move and the slider and the three stops are heard at once, and rests again a second after the last
-// read. The timer stops with the page off screen (popped, or covered by another page) and reads nothing while
-// Spotify is in the background. At any other level Sing separates whether the page shows or not. Every other gate
+// read. The timer stops with the page off screen (popped, or covered by another page) and while Spotify is in the
+// background. At any other level Sing separates whether the page shows or not. Every other gate
 // (the switch, the model, the heat, memory, Runs on, the model kept a minute after resting) stays Sing.x's.
 //
 // Threading: main thread.
@@ -237,8 +237,17 @@ static CGFloat height(float rms) {
     _card.accessibilityElements = @[_song, _play, _column];
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(stateTapped:)];
     [_card addGestureRecognizer:tap];
+    // Spotify in the background plays on, and tick reads nothing there: the timer goes with the app and comes back with it.
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(stopTimer) name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [center addObserver:self selector:@selector(startTimer) name:UIApplicationWillEnterForegroundNotification object:nil];
     [self refresh];
     return self;
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    [_timer invalidate];
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
@@ -272,15 +281,25 @@ static CGFloat height(float rms) {
 
 - (void)didMoveToWindow {
     [super didMoveToWindow];
-    [_timer invalidate];
-    _timer = nil;
+    [self stopTimer];
     if (!self.window) return;
+    // Pushed while in the background, the timer waits for WillEnterForeground.
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateBackground) [self startTimer];
+    _track = nil;
+    [self refresh];
+}
+
+- (void)startTimer {
+    if (_timer || !self.window) return;
     __weak typeof(self) weakSelf = self;
     // In the common modes, so the lines go on while the page is scrolled.
     _timer = [NSTimer timerWithTimeInterval:kPoll repeats:YES block:^(NSTimer *timer) { [weakSelf tick]; }];
     [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
-    _track = nil;
-    [self refresh];
+}
+
+- (void)stopTimer {
+    [_timer invalidate];
+    _timer = nil;
 }
 
 #pragma mark - what it shows
@@ -330,7 +349,8 @@ static CGFloat height(float rms) {
 }
 
 - (void)tick {
-    // Spotify in the background plays on and so runs this timer: no reads then, so Sing rests as with the page gone.
+    // A tick before the background notification stops the timer, or from a page put in a window there: no reads
+    // then, so Sing rests as with the page gone.
     if (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) return;
     // The words ten times a second, the lines at every read.
     if (_ticks++ % 3 == 0) [self refresh];

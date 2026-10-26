@@ -106,7 +106,7 @@ UIViewController *SGNavbarPage(void) {
 // Pronunciation, romanized lines, translation, word sweeping and line meanings exist only in the redesign's lyrics view.
 static UIViewController *lyricsPage(void) {
     BOOL redesigned = SGRedesignedUIStored();
-    NSMutableArray<SGModRow *> *more = [NSMutableArray arrayWithObject:SGLockScreenLyricsRow()];
+    NSMutableArray<SGModRow *> *more = [NSMutableArray arrayWithObjects:SGLockScreenLyricsRow(), SGLockScreenTranslationRow(), nil];
     if (!redesigned) [more insertObject:SGGlassLyricsRow() atIndex:0];
     SGModRow *sing = SGPageRow(@"Karaoke", ^UIViewController *{ return SGSingSettingsPage(); });
     sing.value = ^NSString *{ return SGSingSummary(); };
@@ -116,8 +116,8 @@ static UIViewController *lyricsPage(void) {
         @"Every line shows this much later than the song, for Bluetooth headphones that play a little behind the lyrics. Applies at once.");
     if (redesigned) {
         [sections addObjectsFromArray:@[
-            SGSection(@"Display", @[SGRLyricsTextSizesRow(), SGLyricsWordTimingRow(), SGLyricsRomanisedRow(),
-                SGSwitchRow(@"Hide the controls", @"A few seconds after the last touch, the lyrics take the whole player", SGRKeyLyricsAutoHide),
+            SGSection(@"Display", @[SGRLyricsTextSizesRow(), SGLyricsWordTimingRow(), SGLyricsRomanisedRow(), SGLyricsRomanisedReplaceRow(),
+                SGRLyricsHideRow(),
                 SGSwitchRow(@"Landscape lyrics", @"Turn the phone with the lyrics open", SGRKeyLyricsLandscape)]),
             timing,
             SGSection(@"Translation", [[[@[SGLyricsTranslationLanguageRow(), SGTranslateEverySongRow()] arrayByAddingObjectsFromArray:SGOnDeviceTranslatorRows()]
@@ -158,9 +158,13 @@ UIViewController *SGPlayerSettingsPage(void) {
         [sections addObjectsFromArray:SGNativePlayerScreenSections()];
     }
     // Switch to video is the same chip of Spotify's player under either look.
-    [sections addObject:SGSection(native ? nil : @"Hide on the player", @[
-        SGHideRow(@"Switch to video", @"The chip over the title of a song with a music video", SGKeyHideVideoSwitch),
-    ])];
+    SGModRow *video = SGHideRow(@"Switch to video", @"The chip over the title of a song with a music video", SGKeyHideVideoSwitch);
+    // Spotify's own, under either look: a tap on the cover opens it full screen, where it turns a little with the phone.
+    SGModRow *tilt = SGHideRow(@"Full screen cover", @"What a tap on the cover opens", SGKeyHideFullScreenCover);
+    // The native look's Shuffle and Repeat rows are in its Hide on the player section, with their own keys.
+    NSArray<SGModRow *> *hidden = native ? @[video, tilt]
+        : @[SGHideRow(@"Shuffle", nil, SGRKeyPlayerHideShuffle), SGHideRow(@"Repeat", nil, SGRKeyPlayerHideRepeat), video, tilt];
+    [sections addObject:SGSection(native ? nil : @"Hide on the player", hidden)];
 
     [sections addObject:SGNotedSection(@"Lossless", @[
         SGOptionRow(@"Lossless files", @"Your own FLACs in place of Spotify's stream", SGKeyLossless),

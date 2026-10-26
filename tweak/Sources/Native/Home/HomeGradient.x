@@ -169,7 +169,7 @@ static UIScrollView *pageList(UIView *view) {
     %orig;
     for (UIView *wrapper in ((UIViewController *)self).viewIfLoaded.subviews) {
         for (UIView *view in wrapper.subviews) {
-            if ([NSStringFromClass(view.class) containsString:@"GradientView"]) view.hidden = YES;
+            if (SGClassNamed(view.class, @"GradientView")) view.hidden = YES;
         }
     }
 }

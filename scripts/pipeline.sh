@@ -113,7 +113,8 @@ else
 fi
 
 # Spotify's widget reads what the app writes through App Group suites the re-signed IPA is not entitled
-# to; this dylib, loaded by the app and by the widget, puts both on a group the signature does have.
+# to, and Siri reads the login from a keychain group it is not entitled to either; this dylib, loaded by
+# the app and its extensions, puts them all on groups the signature does have.
 echo "==> building the App Group shim"
 GROUPS_DYLIB="$ROOT/out/SpotifyGlassAppGroups.dylib"
 xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 -dynamiclib -fobjc-arc -Os -framework Foundation -framework Security \
@@ -158,21 +159,30 @@ if [ -n "$KEEP_WATCH" ]; then
   (cd "$PATCH" && zip -q -r "$OUT_ABS" "${APP_DIR}Watch")
   rm -rf "$PATCH"
 fi
-echo "==> loading the App Group shim in the home screen widget"
-WIDGET_BIN="${APP_DIR}PlugIns/WidgetExtension.appex/WidgetExtension"
-if unzip -l "$OUT" "$WIDGET_BIN" >/dev/null 2>&1; then
-  PATCH="$(mktemp -d)"
-  unzip -q "$OUT" "$WIDGET_BIN" -d "$PATCH"
-  "$ROOT/scripts/insert-dylib.py" "$PATCH/$WIDGET_BIN" @rpath/SpotifyGlassAppGroups.dylib
-  # Fakesigned again with its own entitlements, the way cyan -s left it, for TrollStore.
-  ldid -e "$PATCH/$WIDGET_BIN" > "$PATCH/ents.plist"
-  ldid -S"$PATCH/ents.plist" "$PATCH/$WIDGET_BIN"
+# The widget reads the App Group suites; Siri (IntentsExtension) and the notification service sign in
+# with the credentials the app keeps in the keychain (extension/AppGroups/AppGroups.m, issue #60).
+PATCH="$(mktemp -d)"
+EXT_BINS=()
+for EXT in WidgetExtension IntentsExtension NotificationServiceExtension; do
+  echo "==> loading the App Group shim in $EXT"
+  EXT_BIN="${APP_DIR}PlugIns/$EXT.appex/$EXT"
+  if unzip -l "$OUT" "$EXT_BIN" >/dev/null 2>&1; then
+    unzip -q "$OUT" "$EXT_BIN" -d "$PATCH"
+    "$ROOT/scripts/insert-dylib.py" "$PATCH/$EXT_BIN" @rpath/SpotifyGlassAppGroups.dylib
+    # Fakesigned again with its own entitlements, the way cyan -s left it, for TrollStore.
+    ldid -e "$PATCH/$EXT_BIN" > "$PATCH/ents.plist"
+    ldid -S"$PATCH/ents.plist" "$PATCH/$EXT_BIN"
+    EXT_BINS+=("$EXT_BIN")
+  else
+    echo "    no $EXT.appex in this IPA"
+  fi
+done
+# One zip pass: each update rewrites the whole IPA.
+if [ ${#EXT_BINS[@]} -gt 0 ]; then
   OUT_ABS="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
-  (cd "$PATCH" && zip -q "$OUT_ABS" "$WIDGET_BIN")
-  rm -rf "$PATCH"
-else
-  echo "    no WidgetExtension.appex in this IPA"
+  (cd "$PATCH" && zip -q "$OUT_ABS" "${EXT_BINS[@]}")
 fi
+rm -rf "$PATCH"
 
 shopt -s nullglob
 ICONS=("$ROOT"/icons/*.png)

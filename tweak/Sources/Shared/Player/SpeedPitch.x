@@ -38,12 +38,10 @@
 //
 // Spotify's clock keeps running at its own speed between the player's reports: -[SPTPlayerState position]
 // is positionAsOfTimestamp minus timeIntervalSinceNow times [self playbackSpeed] (disassembly,
-// 0x1057735ec), so playbackSpeed is hooked to include this speed. Away from 1x the player's reports fall
-// behind the sound: on 9.1.90 at 1.5x, after about 30 s it reports a stall every 3 s that the sound never
-// has, each 1.2 s, and its clock stays that far behind until a seek or the next track (24 s after 100 s).
-// So from the moment the speed leaves 1x, -position counts its own clock: Spotify's position then, plus the
-// song the mixer has handed over since (sg_clock). A seek, skip, stop or new track hands the clock back to
-// Spotify's, and away from 1x takes Spotify's next report as the new start.
+// 0x1057735ec), so playbackSpeed is hooked to include this speed. From the moment the speed leaves 1x,
+// -position counts its own clock: Spotify's position then, plus the song the mixer has handed over since
+// (sg_clock). A seek, skip, stop, new track or stall (SGSpeedObserver) hands the clock back to Spotify's, and
+// away from 1x takes Spotify's next report as the new start.
 //
 // When the music's output was never connected, pitch falls back to the way it first shipped: a render notify
 // on the RemoteIO unit runs each finished buffer through a unit working in place; speed is then unavailable.
@@ -122,7 +120,7 @@ static _Atomic(Output *) sg_music;           // the output carrying the processo
 static pthread_mutex_t sg_outputsLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
 static dispatch_queue_t sg_outputsQueue;
 static SGPlayerOutputWatcher sg_watchers[kMaxWatchers];
-static BOOL sg_reachable;                    // Spotify's AudioOutputUnitStart could be rebound
+static BOOL sg_reachable;                    // Spotify's AudioOutputUnitStart could be rebound or hooked
 
 // The unit in use and whether the render thread runs it: in the music's chain (pull), else in place (pitch only).
 static _Atomic(SGTimePitch *) sg_pull, sg_inPlace;
@@ -824,19 +822,28 @@ static OSStatus setProperty(AudioUnit unit, AudioUnitPropertyID property, AudioU
 
 static OSStatus (*sg_startOutput)(AudioUnit unit);
 
-// The silence check, a couple of times a second from Spotify's first start; it returns at once unless two
-// outputs run.
-static void startChecking(void) {
-    static dispatch_once_t once;
-    static dispatch_source_t timer;   // kept, or it stops with its last reference
-    dispatch_once(&once, ^{
+// The silence check, a couple of times a second while two outputs run, as it does nothing with fewer. Under
+// sg_outputsLock, after any output starts, stops or goes.
+static void updateChecking(void) {
+    static dispatch_source_t timer;   // kept for good: a source must not be released while suspended
+    static BOOL checking;
+    if (!timer) {
         timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, sg_outputsQueue);
-        dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0), (uint64_t)(kCheckEvery * NSEC_PER_SEC), NSEC_PER_SEC / 10);
         dispatch_source_set_event_handler(timer, ^{
             checkSilence();
         });
-        dispatch_resume(timer);
-    });
+    }
+    int running = 0;
+    for (int i = 0; i < kMaxOutputs; i++) running += atomic_load(&sg_outputs[i].unit) && atomic_load(&sg_outputs[i].running);
+    if ((running > 1) == checking) return;
+    checking = running > 1;
+    if (!checking) {
+        dispatch_suspend(timer);
+        return;
+    }
+    uint64_t every = (uint64_t)(kCheckEvery * NSEC_PER_SEC);
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)every), every, NSEC_PER_SEC / 10);
+    dispatch_resume(timer);
 }
 
 static OSStatus startOutput(AudioUnit unit) {
@@ -844,11 +851,11 @@ static OSStatus startOutput(AudioUnit unit) {
     pthread_mutex_lock(&sg_outputsLock);
     Output *output = outputFor(unit);
     if (output) {
-        startChecking();
         AudioStreamBasicDescription client, hardware;
         NSString *why = settle(output, &client, &hardware);
         markEvent(output);
         atomic_store(&output->running, true);
+        updateChecking();
         if (!output->listened) {
             output->listened = YES;
             AudioUnitAddRenderNotify(unit, rendered, output);
@@ -873,6 +880,7 @@ static OSStatus stopOutput(AudioUnit unit) {
     pthread_mutex_lock(&sg_outputsLock);
     Output *output = outputOf(unit);
     if (output && atomic_exchange(&output->running, false)) {
+        updateChecking();
         reselect(NO, @"its output stopped");
         SGLog(@"audio: output %p stopped (Spotify's side %.0f Hz); the processors are on %@", unit, rateOf(&output->client), describe(music()));
     }
@@ -907,7 +915,10 @@ static OSStatus disposeUnit(AudioComponentInstance unit) {
             changed = YES;
         }
     }
-    if (changed) reselect(NO, @"a unit disposed");
+    if (changed) {
+        updateChecking();
+        reselect(NO, @"a unit disposed");
+    }
     // Under the lock, so its slot is not used again while its last render may still be running.
     OSStatus status = sg_dispose(unit);
     pthread_mutex_unlock(&sg_outputsLock);
@@ -1066,11 +1077,26 @@ static NSString *trackOf(SPTPlayerState *state) {
     return [state.track.URI description];
 }
 
-// Spotify's clock again from here; away from 1x, its next report starts the own clock over.
-static void handBack(void) {
+// Away from 1x, Spotify's next report from now starts the own clock over.
+static void rearmClock(void) {
     os_unfair_lock_lock(&sg_clockLock);
     sg_clock = (typeof(sg_clock)){.armed = loadFloat(&sg_speedBits) != 1, .notBefore = CFAbsoluteTimeGetCurrent()};
     os_unfair_lock_unlock(&sg_clockLock);
+}
+
+// Drops what the unit holds from before (93 ms when it is in).
+static void resetUnit(void) {
+    SGTimePitch *unit = atomic_load(tapped() ? &sg_pull : &sg_inPlace);
+    if (!unit) return;
+    disengage();
+    SGTimePitchReset(unit);
+    if (sg_speed != 1 || sg_semitones != 0) atomic_store(&sg_engaged, true);
+}
+
+// Spotify's clock again from here, and the unit starts clean at the new place.
+static void handBack(void) {
+    rearmClock();
+    resetUnit();
 }
 
 void SGSetPlayerSpeed(double speed) {
@@ -1140,6 +1166,41 @@ BOOL SGPlayerMusicClientFormat(AudioStreamBasicDescription *format) {
     return read;
 }
 
+// The jailbreak's way in (SGHookFunctionInline), where Spotify's import page cannot be written: the functions
+// themselves are hooked, every caller comes through, and only Spotify's own calls go to the replacements above,
+// as only they would through its imports. The rest, the system's frameworks and the mod's own units, go straight
+// to the original.
+#define SG_FROM_SPOTIFY SGCalledFromMainExecutable(__builtin_return_address(0))
+
+static OSStatus inlineSetProperty(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,
+                                  const void *data, UInt32 size) {
+    return SG_FROM_SPOTIFY ? setProperty(unit, property, scope, element, data, size) : sg_setProperty(unit, property, scope, element, data, size);
+}
+
+static OSStatus inlineStartOutput(AudioUnit unit) {
+    return SG_FROM_SPOTIFY ? startOutput(unit) : sg_startOutput(unit);
+}
+
+static OSStatus inlineStopOutput(AudioUnit unit) {
+    return SG_FROM_SPOTIFY ? stopOutput(unit) : sg_stopOutput(unit);
+}
+
+static OSStatus inlineDisposeUnit(AudioComponentInstance unit) {
+    return SG_FROM_SPOTIFY ? disposeUnit(unit) : sg_dispose(unit);
+}
+
+// Start, stop and dispose all or none: a start seen without its stop or its dispose would leave an output the mod
+// thinks is running. A hook cannot be undone, so stop and dispose go first, then start, which makes the output the
+// mod's, and only then the optional speed hook, which would otherwise take Spotify's output with no start seen.
+static BOOL hookInline(void) {
+    if (!SGHookFunctionInline((void *)AudioOutputUnitStop, (void *)inlineStopOutput, (void **)&sg_stopOutput)) return NO;
+    if (!SGHookFunctionInline((void *)AudioComponentInstanceDispose, (void *)inlineDisposeUnit, (void **)&sg_dispose)) return NO;
+    if (!SGHookFunctionInline((void *)AudioOutputUnitStart, (void *)inlineStartOutput, (void **)&sg_startOutput)) return NO;
+    if (!sg_setProperty) SGHookFunctionInline((void *)AudioUnitSetProperty, (void *)inlineSetProperty, (void **)&sg_setProperty);
+    SGLog(@"audio: Spotify's output reached through the jailbreak's hooks (speed %@)", sg_setProperty ? @"too" : @"not");
+    return YES;
+}
+
 static void rebind(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -1147,20 +1208,20 @@ static void rebind(void) {
         mach_timebase_info(&timebase);
         sg_secondsPerTick = (double)timebase.numer / timebase.denom / 1e9;
         sg_outputsQueue = dispatch_queue_create("spotifyglass.outputs", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
-        if (!SGRebindImport("AudioUnitSetProperty", setProperty, (void **)&sg_setProperty) || !sg_setProperty) {
-            sg_setProperty = NULL;
-            SGLog(@"redesign speed: Spotify does not import AudioUnitSetProperty, the menu offers pitch only");
-        }
+        if (!SGRebindImport("AudioUnitSetProperty", setProperty, (void **)&sg_setProperty) || !sg_setProperty) sg_setProperty = NULL;
         sg_reachable = SGRebindImport("AudioOutputUnitStart", startOutput, (void **)&sg_startOutput) && sg_startOutput;
         if (!sg_reachable) {
-            SGLog(@"audio: Spotify does not import AudioOutputUnitStart, its output cannot be reached");
-            return;
+            sg_startOutput = NULL;
+            sg_reachable = hookInline();
+            if (!sg_reachable) SGLog(@"audio: Spotify's AudioOutputUnitStart could be neither rebound nor hooked, its output cannot be reached");
+        } else {
+            if (!SGRebindImport("AudioOutputUnitStop", stopOutput, (void **)&sg_stopOutput) || !sg_stopOutput) sg_stopOutput = AudioOutputUnitStop;
+            if (!SGRebindImport("AudioComponentInstanceDispose", disposeUnit, (void **)&sg_dispose) || !sg_dispose) {
+                sg_dispose = AudioComponentInstanceDispose;
+                SGLog(@"audio: Spotify does not import AudioComponentInstanceDispose, a disposed output is not seen");
+            }
         }
-        if (!SGRebindImport("AudioOutputUnitStop", stopOutput, (void **)&sg_stopOutput) || !sg_stopOutput) sg_stopOutput = AudioOutputUnitStop;
-        if (!SGRebindImport("AudioComponentInstanceDispose", disposeUnit, (void **)&sg_dispose) || !sg_dispose) {
-            sg_dispose = AudioComponentInstanceDispose;
-            SGLog(@"audio: Spotify does not import AudioComponentInstanceDispose, a disposed output is not seen");
-        }
+        if (!sg_setProperty) SGLog(@"redesign speed: Spotify's AudioUnitSetProperty could be neither rebound nor hooked, the menu offers pitch only");
     });
 }
 
@@ -1243,12 +1304,35 @@ BOOL SGPlayerWatchMusicOutput(SGPlayerOutputWatcher watcher) {
 }
 %end
 
+// Away from 1x, Spotify's core cannot keep up and stalls: the driver queue empties, the mixer hands over zeros
+// and the core reports speed 0 at the place it stopped, then resumes from there (notes/speed-rebuffer.md). Its
+// clock is right and the own one, which counted the zeros, is ahead. Each stall report hands the clock back to
+// Spotify's, and the report that resumes starts it over at the right place.
+@interface SGSpeedObserver : NSObject <SGPlayerStateObserver>
+@end
+
+@implementation SGSpeedObserver
+- (void)playerStateDidChange:(SPTPlayerState *)state {}
+- (void)playerStateDidReport:(SPTPlayerState *)state {
+    if (loadFloat(&sg_speedBits) == 1 || !state.isPlaying || state.isPaused) return;
+    static SEL isBuffering;
+    if (!isBuffering) isBuffering = NSSelectorFromString(@"isBuffering");
+    BOOL buffering = [state respondsToSelector:isBuffering] && [[state valueForKey:@"isBuffering"] boolValue];
+    if (buffering || state.playbackSpeed == 0) rearmClock();
+}
+@end
+
 %ctor {
     storeFloat(&sg_speedBits, 1);
     storeFloat(&sg_gainBits, 1);
     rebind();
     %init;
     SGRequireClasses(@[@"SPTPlayerState"]);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        static SGSpeedObserver *observer;
+        observer = [SGSpeedObserver new];
+        SGAddPlayerStateObserver(observer);
+    });
 }
 
 #if SG_DRIVER

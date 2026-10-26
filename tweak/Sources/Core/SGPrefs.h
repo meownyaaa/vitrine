@@ -18,6 +18,20 @@ void SGSetEnabled(NSString *key, BOOL on);
 NSInteger SGInt(NSString *key, NSInteger fallback);
 void SGSetInt(NSString *key, NSInteger value);
 
+// What -stringForKey: answers (a string as it is, a number as its stringValue, else nil), kept like the switches.
+// A writer of such a key calls SGPrefsChanged() after its write, as SGSetInt does.
+NSString *SGString(NSString *key);
+// What -arrayForKey: answers (an array as it is, else nil), kept like the switches; same rule for its writers.
+NSArray *SGArray(NSString *key);
+
+// The accessors keep what they read until the defaults change. An observer of NSUserDefaultsDidChangeNotification
+// that reads them calls this first, as observers are not called in a set order.
+void SGPrefsChanged(void);
+// Runs `write`, whose defaults writes go to keys the accessors never read (a counter, the last track), without
+// dropping what they keep: the change notification such a write posts, on this thread before it returns, is
+// passed over, as is any SGPrefsChanged() made inside. Nothing in `write` may change a key the accessors read.
+void SGPrefsWriteUnmemoized(void (^write)(void));
+
 // Overrides of Spotify's remote-config flags, stored under SGFlagOverridePrefix + flag key;
 // nil keeps Spotify's value. Shared/Flags reads them, the All flags page and flag rows write them.
 extern NSString *const SGFlagOverridePrefix;

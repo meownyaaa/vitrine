@@ -83,7 +83,9 @@ static float SGSleepTimerGainAt(NSTimeInterval left) {
 }
 
 NSInteger SGKaraokePositionMs(void) { return sg_positionMs; }
-id SGKaraokePlayer(void) { return sg_player; }
+// How often the player's state was asked for: SpotifySleepTimer.m's check asks it four times a second.
+static NSInteger sg_playerAsks;
+id SGKaraokePlayer(void) { sg_playerAsks++; return sg_player; }
 void SGPlayerSetGain(float gain) { sg_gain = gain; }
 NSString *SGURIString(id uri) {
     if ([uri isKindOfClass:NSString.class]) return uri;
@@ -127,7 +129,9 @@ static SPTSleepTimer *spotifyTimer(NSUInteger type, NSTimeInterval seconds) {
     return timer;
 }
 
+// The core reports a new state with every change, the timer's too: told to the observer before the wait.
 static void runFor(NSTimeInterval seconds) {
+    [sg_observer playerStateDidReport:sg_player.state];
     [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
 }
 
@@ -311,8 +315,10 @@ int main(void) {
         sg_player.state = state(a, @[b, c], @[], NO);
         sg_player.state.isPlaying = YES;
         [sg_observer playerStateDidChange:sg_player.state];
-        runFor(0.4);
+        NSInteger asks = sg_playerAsks;
+        runFor(0.6);
         CHECK(sg_gain == 1, "Spotify's: playing with no timer, full volume");
+        CHECK(sg_playerAsks == asks, "Spotify's: playing with no timer, no check runs");
         sg_player.state.sleepTimer = spotifyTimer(1, 20);
         runFor(0.4);
         CHECK(sg_gain < SGSleepTimerGain(20.5, 30) && sg_gain > SGSleepTimerGain(19, 30), "Spotify's, at a time 20 s on: faded as 20 s into a 30 s fade");

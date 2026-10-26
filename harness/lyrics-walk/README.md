@@ -12,6 +12,8 @@ redesigned player's ⋯ (`LyricsPick.m`, issue #67). Every source is answered by
   the pick is dropped;
 - a pick made while a walk runs stands, and when that walk began on an earlier pick, Automatic puts back
   what the track showed before any pick and the next request walks the order again;
+- with Prefer word-by-word timing, a timed imported LRC first in the order ends the walk (#111), and one below
+  a source timed as finely does not;
 - Automatic for a track whose record is gone (40 picks later) asks for the track again as on a first play,
   and never drops the lines shown for none.
 

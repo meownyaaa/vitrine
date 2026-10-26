@@ -15,7 +15,7 @@ PAGE(SGAboutPage) PAGE(SGAdsSettingsPage) PAGE(SGAllFlagsPage) PAGE(SGArtistBloc
 PAGE(SGGesturesSettingsPage) PAGE(SGHeadGesturesSettingsPage) PAGE(SGHomeSettingsPage) PAGE(SGLabsPage)
 PAGE(SGListeningStatsPage) PAGE(SGLiveActivitySettingsPage) PAGE(SGLockScreenWidgetPage) PAGE(SGNavbarSettingsPage)
 PAGE(SGNowPlayingBarSettingsPage) PAGE(SGQueueSettingsPage) PAGE(SGRAlbumSettingsPage) PAGE(SGRArtistSettingsPage)
-PAGE(SGRNavbarSettingsPage)
+PAGE(SGRNavbarSettingsPage) PAGE(SGRHomeSettingsPage)
 PAGE(SGSingSettingsPage) PAGE(SGSpatialVoiceSettingsPage) PAGE(SGVibrationsSettingsPage)
 UIViewController *SGRPlayerSettingsPage(NSArray *more) { return blank(@"SGRPlayerSettingsPage"); }
 UIViewController *SGRLyricsSettingsPage(NSString *title, NSString *intro, NSArray<SGModSection *> *sections) { return blank(title); }
@@ -24,6 +24,8 @@ UIViewController *SGRLyricsSettingsPage(NSString *title, NSString *intro, NSArra
 NSArray<SGModRow *> *SGAITranslatorRows(void) { return @[SGPageRow(@"SGAITranslatorRows", ^UIViewController *{ return nil; })]; }
 ROW(SGAppIconRow) ROW(SGGlassLyricsRow) ROW(SGLockScreenLyricsRow) ROW(SGLyricsMeaningsRow)
 ROW(SGLyricsTranslationLanguageRow) ROW(SGLyricsWordTimingRow) ROW(SGRLyricsTextSizesRow) ROW(SGLyricsDelayRow)
+ROW(SGSavedTranslationsRow) ROW(SGTranslateEverySongRow)
+NSArray<SGModRow *> *SGOnDeviceTranslatorRows(void) { return @[SGPageRow(@"SGOnDeviceTranslatorRows", ^UIViewController *{ return nil; })]; }
 NSArray<SGModRow *> *SGAppFontRows(void) { return @[]; }
 NSArray<SGModRow *> *SGNativeAppearanceRows(void) { return @[]; }
 NSArray<SGModRow *> *SGRAppearanceRows(void) { return @[]; }

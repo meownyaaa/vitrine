@@ -10,7 +10,10 @@ NSString *SGURIString(id uri) {
 
 static NSHashTable<id<SGPlayerStateObserver>> *sg_stateObservers;
 static SPTPlayerState *sg_playerState;
-static NSString *sg_stateKey;
+// What the last change was told from, so a report that moved none of them tells observers nothing.
+static BOOL sg_stateSeen;
+static NSString *sg_stateTrack, *sg_stateContext;
+static int sg_stateBits;
 // Set once the now playing platform has reported; the mod's own observer on the player stands down.
 static BOOL sg_platformReported = NO;
 
@@ -24,22 +27,27 @@ SPTPlayerState *SGPlayerState(void) {
     return sg_playerState;
 }
 
-// What an observer is told about; the state object itself is new with every position report.
-static NSString *keyOf(SPTPlayerState *state) {
-    SPTPlayerOptions *options = [state respondsToSelector:@selector(options)] ? state.options : nil;
-    BOOL shuffling = [options respondsToSelector:@selector(shufflingContext)] && options.shufflingContext;
-    return [NSString stringWithFormat:@"%@|%@|%d%d%d%d", SGURIString(state.track.URI), SGURIString(state.contextURI),
-            state.isPaused, state.isPlaying, [state respondsToSelector:@selector(isLoading)] && state.isLoading, shuffling];
+static BOOL sameURI(NSString *a, NSString *b) {
+    return a == b || [a isEqualToString:b];
 }
 
+// What an observer is told about; the state object itself is new with every position report.
 static void publish(SPTPlayerState *state) {
     sg_playerState = state;
     for (id<SGPlayerStateObserver> observer in sg_stateObservers.allObjects) {
         if ([observer respondsToSelector:@selector(playerStateDidReport:)]) [observer playerStateDidReport:state];
     }
-    NSString *key = keyOf(state);
-    if ([key isEqualToString:sg_stateKey]) return;
-    sg_stateKey = key;
+    NSString *track = SGURIString(state.track.URI), *context = SGURIString(state.contextURI);
+    SPTPlayerOptions *options = [state respondsToSelector:@selector(options)] ? state.options : nil;
+    BOOL paused = state.isPaused, playing = state.isPlaying;
+    BOOL loading = [state respondsToSelector:@selector(isLoading)] && state.isLoading;
+    BOOL shuffling = [options respondsToSelector:@selector(shufflingContext)] && options.shufflingContext;
+    int bits = paused | playing << 1 | loading << 2 | shuffling << 3;
+    if (sg_stateSeen && bits == sg_stateBits && sameURI(track, sg_stateTrack) && sameURI(context, sg_stateContext)) return;
+    sg_stateSeen = YES;
+    sg_stateTrack = track;
+    sg_stateContext = context;
+    sg_stateBits = bits;
     for (id<SGPlayerStateObserver> observer in sg_stateObservers.allObjects) [observer playerStateDidChange:state];
 }
 

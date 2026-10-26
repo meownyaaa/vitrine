@@ -57,7 +57,7 @@ typedef NS_ENUM(NSInteger, SGRMotion) {
     // An ease out over 0.15 s, for what goes once the finger has let it go (the hold's 2x badge): nothing is
     // watched on its way out. Kept under Reduce Motion like a fade.
     SGRMotionExit,
-    // A spring with no overshoot over 0.34 s, for the tab bar minimizing and expanding with the now playing card:
+    // A spring with no overshoot over 0.26 s, for the tab bar minimizing and expanding with the now playing card:
     // it happens many times a session, so it is quicker than a layout spring. At once under Reduce Motion.
     SGRMotionBar,
 };

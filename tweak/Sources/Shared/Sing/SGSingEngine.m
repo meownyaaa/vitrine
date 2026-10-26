@@ -30,8 +30,10 @@ static const uint64_t kReturn = kSGSingEngineHop;
 static const uint64_t kBudget = kSGSingRate * 8;
 // The loudness the Sing page draws: per tenth of a second of the song, kept for the last kLevelSlots of them.
 enum { kLevelBlock = kSGSingRate / 10, kLevelSlots = 128 };
-// How often the worker looks for a new window.
+// How often the worker looks for a new window; and after this many looks at a `written` that has not moved (0.5 s,
+// longer than any IO buffer: Spotify paused, or its decoder stalled) it sleeps until a render moves it.
 static const useconds_t kPoll = 10000;
+static const unsigned kStillPolls = 500000 / kPoll;
 // Spatial voice: at 90 degrees the pan goes this far of the way to one ear, the far ear hears the voice this
 // many frames late (0.65 ms, sound's way around a head) and through a one-pole low-pass of this coefficient
 // (about 3 kHz); the angle glides to where it is set over this long.
@@ -91,6 +93,8 @@ struct SGSingEngine {
     // The worker's.
     pthread_t worker;
     atomic_bool alive;
+    dispatch_semaphore_t wake;    // slept on while off, held or without a model; the setters and Destroy signal it
+    atomic_bool sleeping;         // asleep on `wake` until `written` moves: the one render that moves it signals
     os_unfair_lock lock;          // the separator, the error and `asked`
     void *separator;              // retained
     NSString *error;
@@ -236,7 +240,10 @@ OSStatus SGSingEngineRender(SGSingEngine *engine, UInt32 frames, float *left, fl
             return status;
         }
         written += need + ahead;
-        atomic_store_explicit(&engine->written, written, memory_order_release);
+        // Sequentially consistent, with the worker's store of `sleeping` and its re-read of `written`: one of the two
+        // threads sees the other's write, so a worker going to sleep as this moves `written` is never left asleep.
+        atomic_store(&engine->written, written);
+        if (need + ahead && atomic_load(&engine->sleeping) && atomic_exchange(&engine->sleeping, false)) dispatch_semaphore_signal(engine->wake);
     }
 
     uint64_t ready = atomic_load_explicit(&engine->ready, memory_order_acquire);
@@ -409,8 +416,8 @@ static void measureLevels(SGSingEngine *engine, uint64_t start, uint64_t ready) 
 static void *work(void *argument) {
     SGSingEngine *engine = argument;
     pthread_setname_np("spotifyglass.sing");
-    unsigned generation = UINT_MAX;
-    uint64_t start = 0, previousEnd = 0;
+    unsigned generation = UINT_MAX, still = 0;
+    uint64_t start = 0, previousEnd = 0, lastWritten = 0;
     while (atomic_load(&engine->alive)) {
         unsigned now = atomic_load(&engine->generation);
         if (now != generation) {
@@ -422,7 +429,21 @@ static void *work(void *argument) {
         SGSingSeparator *separator = currentSeparator(engine);
         uint64_t written = atomic_load_explicit(&engine->written, memory_order_acquire);
         uint64_t played = atomic_load_explicit(&engine->played, memory_order_relaxed);
-        if (!separator || !atomic_load(&engine->on) || atomic_load(&engine->paused) || written < start + kSGSingWindowFrames) {
+        if (!separator || !atomic_load(&engine->on) || atomic_load(&engine->paused)) {
+            dispatch_semaphore_wait(engine->wake, DISPATCH_TIME_FOREVER);
+            continue;
+        }
+        if (written < start + kSGSingWindowFrames) {
+            if (written != lastWritten) {
+                lastWritten = written;
+                still = 0;
+            } else if (++still >= kStillPolls) {
+                // Woken with `written` as it was (a setter, a stray signal), it comes straight back here and sleeps on.
+                atomic_store(&engine->sleeping, true);
+                if (atomic_load(&engine->written) == written) dispatch_semaphore_wait(engine->wake, DISPATCH_TIME_FOREVER);
+                atomic_store(&engine->sleeping, false);
+                continue;
+            }
             usleep(kPoll);
             continue;
         }
@@ -483,6 +504,7 @@ SGSingEngine *SGSingEngineCreate(void) {
     SGSingEngine *engine = calloc(1, sizeof *engine);
     if (!engine) return NULL;
     engine->lock = OS_UNFAIR_LOCK_INIT;
+    engine->wake = dispatch_semaphore_create(0);
     engine->left = calloc(kRing, sizeof(float));
     engine->right = calloc(kRing, sizeof(float));
     engine->vocalsLeft = calloc(kRing, sizeof(float));
@@ -521,7 +543,11 @@ SGSingEngine *SGSingEngineCreate(void) {
 void SGSingEngineDestroy(SGSingEngine *engine) {
     if (!engine) return;
     atomic_store(&engine->alive, false);
-    if (engine->worker) pthread_join(engine->worker, NULL);
+    if (engine->worker) {
+        dispatch_semaphore_signal(engine->wake);
+        pthread_join(engine->worker, NULL);
+    }
+    engine->wake = nil;
     if (engine->separator) CFRelease(engine->separator);
     engine->error = nil;
     for (int c = 0; c < 2; c++) {
@@ -545,17 +571,19 @@ void SGSingEngineSetSeparator(SGSingEngine *engine, SGSingSeparator *separator) 
     engine->separator = retained;
     os_unfair_lock_unlock(&engine->lock);
     atomic_store(&engine->hasSeparator, retained != NULL);
+    if ((old != NULL) != (retained != NULL)) dispatch_semaphore_signal(engine->wake);
     // Released outside the lock; the worker holds its own reference while it runs one.
     if (old) CFRelease(old);
 }
 
 void SGSingEngineSetOn(SGSingEngine *engine, bool on) {
+    bool was = atomic_exchange(&engine->on, on);
     // Switched on again, it tries again with a full budget.
-    if (on && !atomic_exchange(&engine->on, true)) {
+    if (on && !was) {
         atomic_store(&engine->freshBudget, true);
         atomic_store(&engine->gaveUp, false);
     }
-    atomic_store(&engine->on, on);
+    if (was != on) dispatch_semaphore_signal(engine->wake);
 }
 
 void SGSingEngineHoldBudget(SGSingEngine *engine, bool held) {
@@ -590,7 +618,7 @@ void SGSingEngineSetVoiceAngle(SGSingEngine *engine, float radians) {
 }
 
 void SGSingEngineSetPaused(SGSingEngine *engine, bool paused) {
-    atomic_store(&engine->paused, paused);
+    if (atomic_exchange(&engine->paused, paused) != paused) dispatch_semaphore_signal(engine->wake);
 }
 
 void SGSingEngineSetLeadCap(SGSingEngine *engine, double seconds) {

@@ -129,6 +129,11 @@ void SGLyricsGetJSON(NSURL *url, NSDictionary<NSString *, NSString *> *headers, 
 // body says why. response is nil when the request never got an answer.
 void SGLyricsGetJSONReply(NSURL *url, NSDictionary<NSString *, NSString *> *headers, void (^done)(id root, NSHTTPURLResponse *response));
 void SGLyricsGetText(NSURL *url, void (^done)(NSString *text));
+// The same two with a `parse` that reads the reply on the session's queue, so a TTML or an embed page is
+// read off the main queue; `done` gets what it returns, on the main queue. `parse` must touch no state of
+// the main queue's.
+void SGLyricsGetJSONThen(NSURL *url, NSDictionary<NSString *, NSString *> *headers, id (^parse)(id root), void (^done)(id parsed));
+void SGLyricsGetTextThen(NSURL *url, id (^parse)(NSString *text), void (^done)(id parsed));
 // For the one source that is asked a question rather than sent to an address. body is anything
 // NSJSONSerialization writes; nothing is sent at all when it is not.
 void SGLyricsPostJSON(NSURL *url, NSDictionary<NSString *, NSString *> *headers, id body, void (^done)(id root));

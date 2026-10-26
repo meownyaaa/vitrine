@@ -44,8 +44,10 @@ static NSString *trackKey(SPTPlayerTrack *track) {
 static NSDictionary *blockedArtistOf(SPTPlayerTrack *track) {
     NSArray<NSDictionary *> *artists = SGArtistsOfTrack(track);
     if (!SGFlag(SGKeyArtistBlockFeatured, NO) && artists.count > 1) artists = @[artists.firstObject];
+    // The list is read from defaults once for the track, not once per credited artist.
+    NSArray<NSString *> *blocked = [SGBlockedArtists() valueForKey:SGArtistURI];
     for (NSDictionary *artist in artists) {
-        if (SGArtistBlocked(artist[SGArtistURI])) return artist;
+        if ([blocked containsObject:artist[SGArtistURI]]) return artist;
     }
     return nil;
 }

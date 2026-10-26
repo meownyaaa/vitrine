@@ -25,16 +25,35 @@ static const struct { __unsafe_unretained NSString *marker, *key; } cards[] = {
     {@"RelatedContentRecommendations", SGHideRecommendations},
 };
 
-// Class names of everything in the cell. Lists nested in the cell are laid out first so the
+enum { kCards = sizeof(cards) / sizeof(cards[0]) };
+
+static BOOL anyCardSwitch(void) {
+    for (size_t i = 0; i < kCards; i++) {
+        if (SGHidden(cards[i].key)) return YES;
+    }
+    return NO;
+}
+
+// Whether the cell is one of the player's cards: its own first subview or its content view's names the page.
+// Spotify's cell has held the name in both places (Redesigned/Player/PlayerCards.x, and the trees above).
+static BOOL onPlayer(UICollectionViewCell *cell) {
+    return SGClassNamed(cell.subviews.firstObject.class, @"NowPlaying_ScrollAPI")
+        || SGClassNamed(cell.contentView.subviews.firstObject.class, @"NowPlaying_ScrollAPI");
+}
+
+// The first switched-on card a class in the cell names. Lists nested in the cell are laid out first so the
 // cells that name the card (video cards) exist.
-static NSString *classNamesIn(UIView *cell) {
-    NSMutableString *names = [NSMutableString string];
+static NSString *switchedCardIn(UIView *cell) {
+    unsigned hidden = 0;   // a bit per switched-on card (a block cannot capture an array)
+    for (size_t i = 0; i < kCards; i++) if (SGHidden(cards[i].key)) hidden |= 1u << i;
+    __block size_t first = kCards;
     SGForEachView(cell, ^(UIView *v) {
         if (v != cell && [v isKindOfClass:UICollectionView.class]) [v layoutIfNeeded];
-        [names appendString:NSStringFromClass(v.class)];
-        [names appendString:@"\n"];
+        for (size_t i = 0; i < first; i++) {
+            if ((hidden & 1u << i) && SGClassNamed(v.class, cards[i].marker)) first = i;
+        }
     });
-    return names;
+    return first < kCards ? cards[first].key : nil;
 }
 
 // An ad among the cards (a sponsored playlist's "Advertisement" card, 9.1.78): built of Encore's own views, it is
@@ -48,22 +67,16 @@ static BOOL holdsAd(UIView *cell) {
 }
 
 static NSString *hiddenKeyFor(UICollectionViewCell *cell) {
+    // Only the player's cards are looked into: they name the page, which every other list's cells do not.
+    BOOL hideAds = SGHidden(SGKeyHideAds), anyCard = anyCardSwitch();
+    if (!(hideAds || anyCard) || !onPlayer(cell)) return nil;
     // A cell inside another card's list: the outer card decides.
     for (UIView *v = cell.superview; v; v = v.superview) {
         if ([v isKindOfClass:cell.class]) return nil;
     }
-    NSString *names = nil;
-    // Only the player's cards are looked into: their content view names the page, which every other list's does not.
-    if (SGHidden(SGKeyHideAds)) {
-        UIView *content = cell.contentView.subviews.firstObject;
-        if ([NSStringFromClass(content.class) containsString:@"NowPlaying_ScrollAPI"] && holdsAd(cell)) return SGKeyHideAds;
-    }
-    for (size_t i = 0; i < sizeof(cards) / sizeof(cards[0]); i++) {
-        if (!SGHidden(cards[i].key)) continue;
-        if (!names) names = classNamesIn(cell);
-        if ([names containsString:@"NowPlaying_ScrollAPI"] && [names containsString:cards[i].marker]) return cards[i].key;
-    }
-    return nil;
+    // The ad card has been seen only with the name on its content view, so only that shape is searched for ads.
+    if (hideAds && SGClassNamed(cell.contentView.subviews.firstObject.class, @"NowPlaying_ScrollAPI") && holdsAd(cell)) return SGKeyHideAds;
+    return anyCard ? switchedCardIn(cell) : nil;
 }
 
 %hook _TtC12Element_List18CollectionViewCell
@@ -96,11 +109,13 @@ static void finish(UIViewController *unit, BOOL changed) {
 %hook _TtC20NowPlaying_ModesImpl28PlaybackControlsElementsUnit
 - (void)viewDidLayoutSubviews {
     %orig;
+    BOOL hideShuffle = SGHidden(SGHideShuffle), hideRepeat = SGHidden(SGHideRepeat);
+    if (!hideShuffle && !hideRepeat) return;
     NSArray<UIView *> *items = SGRowIn(((UIViewController *)self).viewIfLoaded).arrangedSubviews;
     if (items.count != 5 || !SGHasClass(items[2], @"PlayButton")) return;
     BOOL changed = NO;
-    if (SGHidden(SGHideShuffle)) changed |= vanish(items[0]);
-    if (SGHidden(SGHideRepeat)) changed |= vanish(items[4]);
+    if (hideShuffle) changed |= vanish(items[0]);
+    if (hideRepeat) changed |= vanish(items[4]);
     finish((UIViewController *)self, changed);
 }
 %end
@@ -108,15 +123,17 @@ static void finish(UIViewController *unit, BOOL changed) {
 %hook _TtC20NowPlaying_ModesImpl18FooterElementsUnit
 - (void)viewDidLayoutSubviews {
     %orig;
+    BOOL hideConnect = SGHidden(SGHideConnect), hideQueue = SGHidden(SGHideQueue), hideShare = SGHidden(SGHideShare);
+    if (!hideConnect && !hideQueue && !hideShare) return;
     BOOL changed = NO;
     for (UIView *item in SGRowIn(((UIViewController *)self).viewIfLoaded).arrangedSubviews) {
         if (item.hidden || item.bounds.size.width < 20) continue;
         if (SGHasClass(item, @"Connect")) {
-            if (SGHidden(SGHideConnect)) changed |= vanish(item);
+            if (hideConnect) changed |= vanish(item);
         } else if (SGHasClass(item, @"QueueButton")) {
-            if (SGHidden(SGHideQueue)) changed |= vanish(item);
+            if (hideQueue) changed |= vanish(item);
         } else if (item.bounds.size.width <= 48 && SGHasClass(item, @"EncoreButton")) {
-            if (SGHidden(SGHideShare)) changed |= vanish(item);
+            if (hideShare) changed |= vanish(item);
         }
     }
     finish((UIViewController *)self, changed);

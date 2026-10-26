@@ -50,13 +50,21 @@ void SGHideGlassFrom(UIView *host, NSUInteger count) {
 }
 
 void SGShapeGlass(UIView *glass, CGFloat radius, BOOL capsule) {
-    Class config = NSClassFromString(@"UICornerConfiguration");
-    Class cornerRadius = NSClassFromString(@"UICornerRadius");
+    // The classes and what they answer to are fixed once loaded; whether this pane takes a configuration is asked each time.
+    static Class config, cornerRadius;
+    static BOOL capsules, uniform;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        config = NSClassFromString(@"UICornerConfiguration");
+        cornerRadius = NSClassFromString(@"UICornerRadius");
+        capsules = [config respondsToSelector:@selector(capsuleConfiguration)];
+        uniform = [config respondsToSelector:@selector(configurationWithUniformRadius:)] && [cornerRadius respondsToSelector:@selector(fixedRadius:)];
+    });
     id shape = nil;
     if (config && [glass respondsToSelector:@selector(setCornerConfiguration:)]) {
-        if (capsule && [config respondsToSelector:@selector(capsuleConfiguration)]) {
+        if (capsule && capsules) {
             shape = [config capsuleConfiguration];
-        } else if ([config respondsToSelector:@selector(configurationWithUniformRadius:)] && [cornerRadius respondsToSelector:@selector(fixedRadius:)]) {
+        } else if (uniform) {
             shape = [config configurationWithUniformRadius:[cornerRadius fixedRadius:radius]];
         }
     }

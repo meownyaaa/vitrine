@@ -63,7 +63,7 @@ static void restyle(UIView *button) {
     if (!heading) return;
     // The heading names the shelf (HomeShelves.m). The page's list may have sized the shelf before the heading
     // was in; one switched off, or the one Top picks is to draw, is then measured again now that it is known. The
-    // large shelf's heading goes with the band above its cards (HomeTopPicks.x).
+    // large shelf's heading goes with the band above its cards, unless Show Top picks heading is on (HomeTopPicks.x).
     UIView *shelf = heading.superview;
     while (shelf && ![shelf isKindOfClass:UICollectionView.class]) shelf = shelf.superview;
     NSString *identity = SGRHomeShelfIdentity(shelf);

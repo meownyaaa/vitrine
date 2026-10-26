@@ -4,8 +4,26 @@
 import Foundation
 import FoundationModels
 import NaturalLanguage
+import SwiftUI
 import Translation
+import UIKit
 import os
+
+// Apple's sheet that downloads the song's languages: Translation shows it only from a SwiftUI view.
+@available(iOS 26.0, *)
+private struct SGPrepareTranslationView: View {
+    let configuration: TranslationSession.Configuration
+    let onComplete: () -> Void
+
+    var body: some View {
+        Color.clear
+            .translationTask(configuration) { session in
+                try? await session.prepareTranslation()
+                onComplete()
+            }
+            .onDisappear { onComplete() }
+    }
+}
 
 @objc(SGOnDeviceTranslation)
 // Locale.Language, and everything this class reaches through it, is iOS 16. Only ObjC calls in here
@@ -56,13 +74,67 @@ public final class SGOnDeviceTranslation: NSObject {
 
     // MARK: Translation framework
 
+    // Over the player, a clear full-screen pane that the sheet is presented from, dark as SGPresentDark makes the
+    // mod's: a sheet's glass is its presentation's, which a child controller's override does not reach. The pane
+    // goes when prepareTranslation() returns or throws, or when the pane is taken away.
+    @available(iOS 26.0, *)
+    @MainActor
+    private static func prepareLanguageDownload(source: Locale.Language, target: Locale.Language, from view: UIView) async {
+        await withCheckedContinuation { continuation in
+            var finished = false
+            var controller: UIViewController?
+            // Run now, or after the transition under way: UIKit drops a present or dismiss made during one.
+            let afterTransition = { (of: UIViewController, run: @escaping () -> Void) in
+                if let transition = of.transitionCoordinator ?? of.presentedViewController?.transitionCoordinator,
+                   transition.animate(alongsideTransition: nil, completion: { _ in run() }) {} else { run() }
+            }
+            let finish = {
+                guard !finished else { return }
+                finished = true
+                if let host = controller { afterTransition(host) { host.presentingViewController?.dismiss(animated: false) } }
+                controller = nil
+                continuation.resume()
+            }
+            // Chosen now, not at the tap: the menu the item was in may have gone since. Not a controller on its way out.
+            guard var top = view.window?.rootViewController else { return finish() }
+            while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+            afterTransition(top) {
+                guard top.viewIfLoaded?.window != nil, top.presentedViewController == nil else { return finish() }
+                let host = UIHostingController(rootView: SGPrepareTranslationView(configuration: .init(source: source, target: target), onComplete: finish))
+                controller = host
+                host.view.backgroundColor = .clear
+                host.modalPresentationStyle = .overFullScreen
+                host.overrideUserInterfaceStyle = .dark
+                host.presentationController?.overrideTraitCollection = UITraitCollection(userInterfaceStyle: .dark)
+                top.present(host, animated: false)
+            }
+        }
+    }
+
+    @objc public static func openTranslateSettings() {
+        DispatchQueue.main.async {
+            let app = UIApplication.shared
+            // Translate's page in Settings; private schemes, so it may open only Settings' top level.
+            let candidates = ["App-Prefs:TRANSLATE", "prefs:root=TRANSLATE"]
+            func tryOpen(index: Int) {
+                guard index < candidates.count, let url = URL(string: candidates[index]) else { return }
+                app.open(url, options: [:]) { success in
+                    if !success {
+                        tryOpen(index: index + 1)
+                    }
+                }
+            }
+            tryOpen(index: 0)
+        }
+    }
+
     @objc public static var translationAvailable: Bool {
         if #available(iOS 26.0, *) { return true }
         return false
     }
 
     // One translation per line, "" for a line with no words; or nil and why not.
-    @objc public static func translate(_ lines: [String], to languageTag: String, done: @escaping ([String]?, String?) -> Void) {
+    @objc public static func translate(_ lines: [String], to languageTag: String, from view: UIView, done: @escaping ([String]?, String?) -> Void) {
         guard #available(iOS 26.0, *) else { return finish(done, nil, "Translating on this iPhone needs iOS 26.") }
         let target = Locale.Language(identifier: languageTag)
         guard let source = sourceLanguage(lines, target: target) else { return finish(done, nil, "The song's language could not be told from its words.") }
@@ -72,7 +144,11 @@ public final class SGOnDeviceTranslation: NSObject {
             case .unsupported:
                 return finish(done, nil, "Apple's Translate does not translate \(name(source)) into \(name(target)).")
             case .supported:
-                return finish(done, nil, "Download \(name(source)) and \(name(target)) in Settings > Apps > Translate > Languages, then try again.")
+                await prepareLanguageDownload(source: source, target: target, from: view)
+                if await LanguageAvailability().status(from: source, to: target) != .installed {
+                    // SGRKaraokeView offers Open Settings for the message that starts "Download ".
+                    return finish(done, nil, "Download \(name(source)) and \(name(target)) in Settings > Apps > Translate > Languages, then try again.")
+                }
             case .installed:
                 break
             @unknown default:

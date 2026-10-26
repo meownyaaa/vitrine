@@ -14,7 +14,7 @@ static BOOL ads, premium;
 static NSDate *started;
 static NSObject *cacheLock;
 static NSData *cachedCustomize;   // the last rewritten customize body, for a 304 and the re-fetches
-static char kBufferKey, kServedKey, kPassKey, kCoreAdKey;
+static char kBufferKey, kServedKey, kPassKey, kCoreAdKey, kKindKey;
 
 typedef NS_ENUM(NSInteger, SGNet) { SGNetPass, SGNetBlock, SGNetPatch };
 
@@ -75,7 +75,8 @@ static BOOL isAd(NSURL *url, NSString *path) {
     if (isEsperantoAd(path)) return YES;
     NSString *host = url.host.lowercaseString ?: @"";
     return has(host, @"doubleclick") || has(host, @"googlesyndication") || [host hasPrefix:@"aet."]
-        || [@[@"ad.spotify.com", @"ads.spotify.com", @"aet.spotify.com"] containsObject:host];
+        || [host isEqualToString:@"ad.spotify.com"] || [host isEqualToString:@"ads.spotify.com"]
+        || [host isEqualToString:@"aet.spotify.com"];
 }
 
 // The first thirty seconds are a fresh login's: signup/public and customize are part of it, and
@@ -86,14 +87,28 @@ static BOOL isRefetch(NSString *path) {
         || has(path, @"pushka-tokens") || has(path, @"apresolve") || has(path, @"pses/screenconfig") || isCustomize(path);
 }
 
-static SGNet classify(NSURL *url) {
+// What a request's URL makes it, worked out once per task: its data comes in many chunks.
+enum { kBlocked = 1, kRefetch = 2, kPatched = 4 };
+
+static unsigned kindOf(NSURL *url) {
     NSString *path = url.path.lowercaseString ?: @"";
-    if (premium && isLogout(path)) return SGNetBlock;
-    if (ads && isAd(url, path)) return SGNetBlock;
-    if (premium && elapsed() > 30 && isRefetch(path)) return SGNetBlock;
-    if (premium && (isBootstrap(path) || isCustomize(path))) return SGNetPatch;
-    if (ads && isFeed(path)) return SGNetPatch;
-    return SGNetPass;
+    return ((premium && isLogout(path)) || (ads && isAd(url, path)) ? kBlocked : 0)
+         | (premium && isRefetch(path) ? kRefetch : 0)
+         | ((premium && (isBootstrap(path) || isCustomize(path))) || (ads && isFeed(path)) ? kPatched : 0);
+}
+
+// The thirty seconds are read at each call, as the task's data and its end arrive.
+// The kind is worked out once per URL the task is on: a redirect moves it to another, which is classified again.
+static SGNet classify(NSURLSessionTask *task) {
+    NSURL *url = task.currentRequest.URL;
+    NSArray *stored = objc_getAssociatedObject(task, &kKindKey);   // @[url, kind]
+    if (!stored || (stored[0] != url && ![stored[0] isEqual:url])) {
+        stored = @[url ?: NSNull.null, @(kindOf(url))];
+        objc_setAssociatedObject(task, &kKindKey, stored, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    unsigned kind = [stored[1] unsignedIntValue];
+    if ((kind & kBlocked) || ((kind & kRefetch) && elapsed() > 30)) return SGNetBlock;
+    return kind & kPatched ? SGNetPatch : SGNetPass;
 }
 
 static NSData *cached(void) {
@@ -155,7 +170,7 @@ static NSHTTPURLResponse *replayFor(NSURLSessionTask *task, NSURLResponse *respo
 // one whose reply is rewritten when it finishes.
 static BOOL holds(NSURLSessionTask *task, NSData *data) {
     if (objc_getAssociatedObject(task, &kPassKey)) return NO;
-    switch (classify(task.currentRequest.URL)) {
+    switch (classify(task)) {
         case SGNetBlock:
             return YES;
         case SGNetPatch: {
@@ -179,7 +194,7 @@ static void complete(id<NSURLSessionDataDelegate> delegate, NSURLSession *sessio
         return;
     }
     SGAdBlockSawOne(@"Requests");
-    switch (classify(url)) {
+    switch (classify(task)) {
         case SGNetBlock:
             SGAdBlockCountOne(@"Requests");
             SGLog(@"answered %@ empty", path);
@@ -269,10 +284,12 @@ static void complete(id<NSURLSessionDataDelegate> delegate, NSURLSession *sessio
 %hook NSURLSessionTask
 - (void)resume {
     NSURL *url = self.currentRequest.URL ?: self.originalRequest.URL;
-    NSString *host = url.host.lowercaseString ?: @"", *path = url.path.lowercaseString ?: @"";
+    NSString *host = url.host.lowercaseString ?: @"";
     BOOL spotify = has(host, @"spotify") || has(host, @"spclient");
-    if (spotify && elapsed() > 30 && (has(path, @"deletetoken") || has(path, @"signup/public") || has(path, @"pses/screenconfig")
-                                      || isCustomize(path) || has(host, @"apresolve"))) {
+    // The path is lowercased only for the requests the tests below can cancel.
+    NSString *path = spotify && elapsed() > 30 ? url.path.lowercaseString ?: @"" : nil;
+    if (path && (has(path, @"deletetoken") || has(path, @"signup/public") || has(path, @"pses/screenconfig")
+                 || isCustomize(path) || has(host, @"apresolve"))) {
         SGAdBlockSawOne(@"Requests");
         SGAdBlockCountOne(@"Requests");
         SGLog(@"canceled %@%@ before it left", host, path);

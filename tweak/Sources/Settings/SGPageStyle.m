@@ -1,7 +1,8 @@
 #import "SGPageStyle.h"
 #import "Core/SGCore.h"
 
-static UIFont *sg_spotifyFont;
+// The rows' title font of Spotify's settings list ([0]) and of its side drawer ([1]).
+static UIFont *sg_spotifyFont[2];
 
 // The dark appearance's secondary label, fixed rather than dynamic so a view that is not set dark reads it too.
 UIColor *SGGrey(void) { return [UIColor colorWithRed:0xEB / 255.0 green:0xEB / 255.0 blue:0xF5 / 255.0 alpha:0.6]; }
@@ -62,7 +63,7 @@ CGFloat SGLayOutSliderText(UILabel *title, UILabel *value, UILabel *subtitle, CG
     return y;
 }
 
-UIFont *SGSpotifyListFont(void) { return sg_spotifyFont ?: [UIFont systemFontOfSize:13 weight:UIFontWeightBold]; }
+UIFont *SGSpotifyListFont(BOOL drawer) { return sg_spotifyFont[drawer] ?: [UIFont systemFontOfSize:13 weight:UIFontWeightBold]; }
 
 UIImageView *SGSymbolView(NSString *name, CGFloat size, UIImageSymbolWeight weight, CGFloat box) {
     UIImage *image = [UIImage systemImageNamed:name withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:size weight:weight]];
@@ -267,14 +268,30 @@ UITableViewCell *SGDequeueCell(UITableView *table, NSString *identifier) {
         ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
 }
 
-// Spotify's list titles carry its typeface at 13pt.
-void SGAdoptFonts(UIView *list, UIView *row) {
-    if (sg_spotifyFont) return;
+// The rows' titles are the font most of the list's labels between 13 and 18 pt have: 13 pt in 9.1.78's settings
+// list (App/ModSettings.x), larger in the drawer and in 9.1.90's, where the 13 pt subtitles are as many as the
+// titles, so a tie goes to the larger. The drawer's 13 pt labels count only when it has no larger one: the
+// first 13 pt label, which it once took, was there a badge another tweak adds, bold, and the row read smaller and
+// heavier than its neighbours (the phone, 2026-10-23).
+BOOL SGAdoptFonts(UIView *list, UIView *row, BOOL drawer) {
+    if (sg_spotifyFont[drawer]) return NO;
+    NSCountedSet<UIFont *> *titles = [NSCountedSet set];
+    __block UIFont *best = nil, *small = nil;
     SGForEachView(list, ^(UIView *v) {
-        if (sg_spotifyFont || ![v isKindOfClass:UILabel.class] || SGIsInside(v, row)) return;
+        if (![v isKindOfClass:UILabel.class] || SGIsInside(v, row)) return;
         UILabel *label = (UILabel *)v;
-        if (label.text.length >= 2 && label.font.pointSize == 13) sg_spotifyFont = label.font;
+        CGFloat size = label.font.pointSize;
+        if (label.text.length < 2 || size < 13 || size > 18) return;
+        if (drawer && size < 14) {
+            if (!small) small = label.font;
+            return;
+        }
+        [titles addObject:label.font];
+        NSUInteger count = [titles countForObject:label.font], most = [titles countForObject:best];
+        if (!best || count > most || (count == most && size > best.pointSize)) best = label.font;
     });
+    sg_spotifyFont[drawer] = best ?: small;
+    return sg_spotifyFont[drawer] != nil;
 }
 
 UIViewController *SGTopController(void) {

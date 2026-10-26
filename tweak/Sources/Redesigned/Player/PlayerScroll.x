@@ -22,7 +22,7 @@ static __weak UIScrollView *sg_loggedList;
 // list's own layout, since the first scroll waits for a finger.
 static void hideTopEdge(UIScrollView *list) {
     if (@available(iOS 26.0, *)) {
-        if (!list.topEdgeEffect.hidden && [list.accessibilityIdentifier isEqualToString:kListIdentifier]) list.topEdgeEffect.hidden = YES;
+        if ([list.accessibilityIdentifier isEqualToString:kListIdentifier] && !list.topEdgeEffect.hidden) list.topEdgeEffect.hidden = YES;
     }
 }
 

@@ -62,7 +62,10 @@ void SGMotionSongsWithISRC(NSString *isrc, void (^done)(NSArray *songs));
 #define SGKeyMotionSources @"spotifyglass.motion.sources"
 NSArray<NSString *> *SGMotionSourceOrder(void);
 BOOL SGMotionAppleMusicOn(void);
-// The track's Canvas video as its metadata names it (canvas.url, of a canvas.type that is a video), or nil.
+// The redesign moves a track's canvas.* metadata keys under this prefix, so Spotify's player makes no Canvas cell.
+#define SGMotionHiddenCanvas @"spotifyglass."
+// The track's Canvas video as its metadata names it (canvas.url, of a canvas.type that is a video, under either
+// name), or nil.
 NSURL *SGMotionCanvasIn(NSDictionary *metadata);
 // The first clip the order finds for the track `uri`, as a local file, or nil, and the key of the source it
 // came from. `canvas` is the track's Canvas video, nil when its metadata names none, and then Spotify's

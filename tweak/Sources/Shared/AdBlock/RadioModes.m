@@ -34,32 +34,40 @@ static id object(id receiver, SEL selector) {
 }
 
 static char sg_radioEvidenceKey;
+static SEL sg_playbackSelector, sg_contextSelector, sg_restrictionsSelector;
+static Class sg_restrictionsClass;
 // Some optimistic state updates have empty restrictions until the next core update.
 // Keep positive radio evidence only for the same playback and context. An explicit
 // non-radio reason replaces it immediately; a different playback starts afresh.
 static NSArray *commandReasons(id player, id state) {
-    id playback = object(state, sel_registerName("playbackId"));
-    id context = object(state, sel_registerName("contextURI"));
-    id limits = object(state, sel_registerName("restrictions"));
-    if (!playback || !context || ![limits isKindOfClass:objc_getClass("SPTPlayerRestrictions")]) {
+    id playback = object(state, sg_playbackSelector);
+    id context = object(state, sg_contextSelector);
+    id limits = object(state, sg_restrictionsSelector);
+    if (!playback || !context || ![limits isKindOfClass:sg_restrictionsClass]) {
         @synchronized (player) {
             objc_setAssociatedObject(player, &sg_radioEvidenceKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         return nil;
     }
-    NSArray *identity = @[playback, context];
+    id raw[3];
+    for (NSUInteger i = 0; i < 3; i++) raw[i] = sg_rawReasons[i](limits, sg_reasonSelectors[i]) ?: NSNull.null;
     @synchronized (player) {
         NSDictionary *prior = objc_getAssociatedObject(player, &sg_radioEvidenceKey);
-        NSArray *old = [prior[@"identity"] isEqual:identity] ? prior[@"reasons"] : nil;
+        NSArray *seen = prior[@"inputs"];
+        // Spotify reads the state every frame; the same objects give the same evidence.
+        if (seen[0] == playback && seen[1] == context && seen[2] == raw[0] && seen[3] == raw[1] && seen[4] == raw[2])
+            return prior[@"reasons"];
+        NSArray *old = [seen[0] isEqual:playback] && [seen[1] isEqual:context] ? prior[@"reasons"] : nil;
         NSMutableArray *result = [NSMutableArray new];
         for (NSUInteger i = 0; i < 3; i++) {
-            id reasons = sg_rawReasons[i](limits, sg_reasonSelectors[i]);
+            id reasons = raw[i];
             if ([reasons isKindOfClass:NSSet.class] && ![reasons count] && old && SGRadioModeReasonsOnly(old[i]))
                 reasons = old[i];
-            [result addObject:reasons ?: NSNull.null];
+            [result addObject:reasons];
         }
         NSArray *snapshot = [result copy];
-        objc_setAssociatedObject(player, &sg_radioEvidenceKey, @{@"identity":identity, @"reasons":snapshot}, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(player, &sg_radioEvidenceKey,
+            @{@"inputs":@[playback, context, raw[0], raw[1], raw[2]], @"reasons":snapshot}, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         return snapshot;
     }
 }
@@ -104,6 +112,8 @@ __attribute__((constructor)) static void SGRadioModesInstall(void) {
     BOOL compatible = signature(class_getInstanceMethod(options, setOverride), @encode(void), @encode(BOOL)) &&
         signature(class_getInstanceMethod(player, stateSelector), @encode(id), NULL) &&
         signature(class_getInstanceMethod(objc_getClass("SPTPlayerState"), restrictionsSelector), @encode(id), NULL);
+    sg_playbackSelector = sel_registerName("playbackId"); sg_contextSelector = sel_registerName("contextURI");
+    sg_restrictionsSelector = restrictionsSelector; sg_restrictionsClass = restrictions;
     for (NSString *name in @[@"playbackId", @"contextURI"])
         compatible &= signature(class_getInstanceMethod(objc_getClass("SPTPlayerState"), NSSelectorFromString(name)), @encode(id), NULL);
     char encoding[16];

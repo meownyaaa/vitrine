@@ -11,6 +11,9 @@
 #pragma mark - SGRAccent.x, SGRRepaint.x
 
 UIColor *SGRAccentColor(void) { return nil; }
+// Spotify's own green is kept, so no color is swapped (PlayerCoverAccent.x asks).
+NSInteger SGRAccentRGB(void) { return 0x1ED760; }
+BOOL SGRAccentSwap(CGFloat *r, CGFloat *g, CGFloat *b) { return NO; }
 __weak UIView *sgr_nowPlayingRoot = nil;
 NSHashTable<UIView *> *sgr_nowPlayingPainted = nil;
 __weak UIView *sgr_lyricsPageRoot = nil;
@@ -106,7 +109,7 @@ NSNotificationName const SGKaraokeLinesKeptNotification = @"harness.karaokeLines
 BOOL SGKaraokeLooking(NSString *trackID) { return NO; }
 id SGKaraokePlayer(void) { return nil; }
 SPTPlayerTrack *SGKaraokeTrackFor(NSString *trackID) { return nil; }
-void SGKaraokeRememberTrack(SPTPlayerTrack *track) {}
+void SGKaraokeRememberTrack(SPTPlayerTrack *track, NSString *trackID) {}
 
 // The song runs on from the moment the harness started it, so the sweep is alive in a screenshot.
 NSInteger SGKaraokeDelayMs(void) { return [NSUserDefaults.standardUserDefaults integerForKey:SGKeyLyricsDelay]; }
@@ -134,6 +137,30 @@ BOOL SGAITranslatorReady(void) { return NO; }
 NSString *SGLyricsTranslationTarget(void) { return @"en"; }
 void SGLyricsTranslateWithAI(NSString *trackID, NSArray<SGKaraokeLine *> *lines, NSString *languageTag,
                              void (^done)(NSArray<NSString *> *translations, NSString *error)) { done(nil, @"harness"); }
+// No translation language is asked for, so none of these is reached past its name.
+NSString *SGLyricsTranslationLanguage(void) { return nil; }
+NSString *SGAITranslatorName(void) { return @"Gemini"; }
+NSString *SGAITranslatorRecipient(void) { return @"Google"; }
+NSString *SGLyricsSongName(NSString *trackID) { return @"the harness's song"; }
+@implementation SGTranslationSource
++ (instancetype)by:(NSString *)by model:(NSString *)model made:(NSDate *)made { return [self new]; }
+- (NSString *)name { return @"Unknown"; }
+- (BOOL)deletable { return NO; }
+@end
+SGTranslationSource *SGAITranslatorSource(void) { return [SGTranslationSource by:@"gemini" model:nil made:nil]; }
+@implementation SGOnDeviceTranslation
++ (BOOL)translationAvailable { return NO; }
++ (BOOL)appleIntelligenceAvailable:(NSString *)languageTag { return NO; }
++ (void)translate:(NSArray<NSString *> *)lines to:(NSString *)languageTag done:(void (^)(NSArray<NSString *> *, NSString *))done { done(nil, @"harness"); }
++ (void)translateWithAppleIntelligence:(NSArray<NSString *> *)lines to:(NSString *)languageTag song:(NSString *)song
+                              progress:(void (^)(NSArray<NSString *> *))progress done:(void (^)(NSArray<NSString *> *, NSString *))done { done(nil, @"harness"); }
+@end
+NSNotificationName const SGLyricsTranslationsDidChangeNotification = @"harness.lyricsTranslationsDidChange";
+SGTranslationSource *SGLyricsSyncSavedTranslation(NSString *track, NSString *language, NSArray<SGKaraokeLine *> *lines) { return nil; }
+SGTranslationSource *SGLyricsSaveTranslation(NSString *track, NSString *language, NSArray<SGKaraokeLine *> *lines, SGTranslationSource *source) { return source; }
+void SGLyricsDeleteSavedTranslation(NSString *track, NSString *language) {}
+// LyricsPick.m: no source is picked by hand in the harness.
+NSNotificationName const SGLyricsSourceChosenNotification = @"harness.lyricsSourceChosen";
 
 // Local files: no edits in the harness, so the name is all PlayerLyrics.x needs to watch for one.
 #import "Shared/LocalFiles/LocalFiles.h"
@@ -207,14 +234,17 @@ NSString *SGSingModelError(void) { return nil; }
 NSString *SGSingModelSizeText(void) { return @""; }
 void SGSingDownloadModel(void) {}
 void SGSingCancelModelDownload(void) {}
+NSNotificationName const SGSingButtonDidChangeNotification = @"harness.singButtonDidChange";
 
 // MotionSources.m: the default order, Canvas then Apple Music, over the catalog the harness builds. No
 // Canvas service: a track whose metadata names no Canvas goes to Apple Music.
 #import "Shared/AnimatedArtwork/AnimatedArtwork.h"
 NSArray<NSString *> *SGMotionSourceOrder(void) { return @[@"canvas", @"applemusic"]; }
 NSURL *SGMotionCanvasIn(NSDictionary *metadata) {
-    id address = metadata[@"canvas.url"];
-    return [metadata[@"canvas.type"] hasPrefix:@"VIDEO"] && [address isKindOfClass:NSString.class] ? [NSURL URLWithString:address] : nil;
+    // PlayerField.x moves the keys under SGMotionHiddenCanvas, as on the phone.
+    id type = metadata[@"canvas.type"] ?: metadata[SGMotionHiddenCanvas @"canvas.type"];
+    id address = metadata[@"canvas.url"] ?: metadata[SGMotionHiddenCanvas @"canvas.url"];
+    return [type hasPrefix:@"VIDEO"] && [address isKindOfClass:NSString.class] ? [NSURL URLWithString:address] : nil;
 }
 void SGMotionClipFor(NSString *uri, NSURL *canvas, NSString *artist, NSString *album, SGMotionShape shape, CGFloat pixels,
                      void (^done)(NSURL *file, NSString *source)) {

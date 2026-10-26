@@ -17,6 +17,10 @@
 // (386x100, the track card at y = 44). It paints the strip, or a view around the strip and the track, as
 // well, so the card is the painted view that holds the track and has no strip in it. The strip stays out
 // of the card's glass and gets a pane of its own above it, since its own paint goes clear with the rest.
+// The strip's class is modelled, not recorded: no tree has a Jam in it yet. The 9.1.90 binary has the Jam's
+// hat under Jam_AttachmentsImpl.HatRootViewController, so the strip is also known by its controller.
+// In the minimized tab bar's row the card docks as it does outside a Jam, and the strip rides above it at
+// its width, on its own pane.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRRepaint.h"
 #import "Redesigned/Kit/SGRGlass.h"
@@ -31,6 +35,9 @@ static const CGFloat kStripInset = 4;
 static char kGlassKey, kStripGlassKey;
 static __weak UIView *sg_card;
 static CGRect sg_stripFrame;
+// The track's glass frame in the container's view as the bar was last styled, the strip cut off: the row
+// takes the card's height and middle from it, never the bar's, which in a Jam has the strip on top.
+static CGRect sg_trackFrame = {{INFINITY, INFINITY}, {0, 0}};
 static __weak UIVisualEffectView *sg_cardGlass;
 static __weak UIView *sg_cardArtwork;
 static __weak UIView *sg_progress;
@@ -45,16 +52,25 @@ CGRect SGRNowPlayingCardFrameIn(UIView *host, CGFloat *radius) {
     return [host convertRect:glass.bounds fromView:glass];
 }
 
+CGFloat SGRNowPlayingStripHeight(void) {
+    return sg_stripFrame.size.height;
+}
+
 CGRect SGRNowPlayingArtworkFrameIn(UIView *host) {
     UIView *artwork = sg_cardArtwork;
     if (!artwork.window || !host) return CGRectNull;
     return [host convertRect:artwork.bounds fromView:artwork];
 }
 
-// The Jam strip. The height keeps out a view of the same module that can hold the track card too.
+// The Jam strip, by its class or by its controller's (Jam_AttachmentsImpl.HatRootViewController, whose view
+// can be any hosting view). Only the Jam's: the bar's other hats (ads, sponsors) keep the card out of the row.
+// The height keeps out a view of the same module that can hold the track card too.
 static BOOL isStrip(UIView *view) {
-    NSString *name = NSStringFromClass(view.class);
-    return view.bounds.size.height <= 60 && [name containsString:@"AttachmentsImpl"] && [name containsString:@"Hat"];
+    if (view.bounds.size.height > 60) return NO;
+    if (SGClassNamed(view.class, @"AttachmentsImpl") && SGClassNamed(view.class, @"Hat")) return YES;
+    UIResponder *next = view.nextResponder;
+    if (![next isKindOfClass:UIViewController.class]) return NO;
+    return SGClassNamed(next.class, @"Jam") && SGClassNamed(next.class, @"Hat");
 }
 
 static BOOL inStrip(UIView *view, UIView *root) {
@@ -74,7 +90,7 @@ static UIView *trackMarker(UIView *bar) {
     __block UIView *info = nil, *artwork = nil;
     SGForEachView(bar, ^(UIView *v) {
         if (info || inStrip(v, bar)) return;
-        if ([NSStringFromClass(v.class) containsString:@"InformationContainer"]) info = v;
+        if (SGClassNamed(v.class, @"InformationContainer")) info = v;
         CGSize size = v.bounds.size;
         BOOL square = size.width >= 36 && size.width <= 48 && fabs(size.width - size.height) < 1;
         if (!artwork && square && ![v isKindOfClass:UIControl.class]) artwork = v;
@@ -161,7 +177,8 @@ static void restyleCardContent(UIView *card) {
     }
 }
 
-// The strip's own pane, a strip high less the gaps, on the card's side the strip is on. It is measured from
+// The strip's own pane, a strip high less the gaps, on the card's side the strip is on. It is the card's glass,
+// one material with it; the strip's white text reads over a bright page by the fade under the bars (TabBar.x). It is measured from
 // the card's settled frame and the strip's height, not from the strip's frame: Spotify animates the strip
 // in, and a pane taken from it mid-way sat about 12pt off and cut its ⋯ button. The glass comes in and goes
 // by its effect, never by alpha (SGRGlass.h).
@@ -391,13 +408,39 @@ static void placeTexts(UIView *bar) {
 
 // In the minimized tab bar's row (TabBar.x): the bar narrowed to the slot by its edges, so Spotify's content
 // lays itself out to the width, and moved down by a transform on the container's view, which Spotify's
-// layout leaves alone. Outside a Jam only: its strip has no room in the row.
+// layout leaves alone. The slot is the track card's height and the card is centred in it; in a Jam the strip,
+// on the bar above the card, rides above the row. A bar taller than its card for any other reason (a hat this
+// file does not know) stays above the tab bar.
+static const CGFloat kHatMin = 20;
+
+// The Jam strip the bar was last styled with, shown or not: the tab bar's move lays the bar out again without
+// styling it, and a second walk of the bar on each pass for it was a cost of its own.
+static __weak UIView *sg_strip;
+
+// Class names and frames only: a hat's labels can hold the track and the names of the people in a Jam.
+static void appendShape(UIView *view, NSUInteger depth, NSMutableString *out) {
+    [out appendFormat:@"%*s%@ %@\n", (int)depth * 2, "", NSStringFromClass(view.class), NSStringFromCGRect(view.frame)];
+    if (depth < 8) for (UIView *sub in view.subviews) appendShape(sub, depth + 1, out);
+}
+
 static void placeInline(UIViewController *container) {
     UIView *view = container.view;
     UIView *bar = container.childViewControllers.firstObject.viewIfLoaded;
-    UIView *strip = bar ? stripIn(bar) : nil;
-    BOOL jam = strip && !strip.hidden && strip.alpha >= 0.01 && strip.window && strip.bounds.size.height >= 1;
-    CGRect slot = !bar || bar.superview != view || jam ? CGRectNull : SGRTabBarInlineSlot(view.superview, bar.bounds.size.height);
+    CGRect track = CGRectIsNull(sg_trackFrame) ? bar.frame : sg_trackFrame;
+    // A hat is a row of its own (the Jam's is 44pt); a few points between card and bar are not one.
+    BOOL hat = bar && bar.bounds.size.height - track.size.height >= kHatMin;
+    UIView *strip = hat && [sg_strip isDescendantOfView:bar] ? sg_strip : nil;
+    BOOL known = !hat || strip;
+    if (!known) {
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            NSMutableString *shape = [NSMutableString string];
+            appendShape(bar, 0, shape);
+            SGLogLong(@"now playing bar", [NSString stringWithFormat:@"a hat on the bar that is not the Jam's keeps the card out of the "
+                                          @"tab bar's row: card %@, bar %@\n%@", NSStringFromCGRect(track), NSStringFromCGRect(bar.frame), shape]);
+        });
+    }
+    CGRect slot = !bar || bar.superview != view || !known ? CGRectNull : SGRTabBarInlineSlot(view.superview, track.size.height);
     // Where the view stands untransformed, in the slot's coordinates.
     CGPoint origin = CGPointMake(view.center.x - view.bounds.size.width / 2, view.center.y - view.bounds.size.height / 2);
     if (CGRectIsNull(slot) || !setEdges(bar, CGRectGetMinX(slot) - origin.x, CGRectGetMaxX(slot) - origin.x)) {
@@ -408,7 +451,7 @@ static void placeInline(UIViewController *container) {
         if (bar) placeTexts(bar);
         return;
     }
-    CGAffineTransform move = CGAffineTransformMakeTranslation(0, CGRectGetMidY(slot) - origin.y - CGRectGetMidY(bar.frame));
+    CGAffineTransform move = CGAffineTransformMakeTranslation(0, CGRectGetMidY(slot) - origin.y - CGRectGetMidY(track));
     if (!CGAffineTransformEqualToTransform(view.transform, move)) view.transform = move;
     tuckExtras(bar, YES);
     sg_inline = view;
@@ -418,6 +461,12 @@ static void placeInline(UIViewController *container) {
         NSMutableString *clips = [NSMutableString string];
         for (UIView *v = view.superview; v; v = v.superview) if (v.clipsToBounds) [clips appendFormat:@" %@", v.class];
         SGLog(@"now playing bar in the tab bar's row at %@, clipped by:%@", NSStringFromCGRect(slot), clips.length ? clips : @" nothing");
+    });
+    // Whether the strip followed the bar's narrowed edges, which no recorded tree shows.
+    static dispatch_once_t jamOnce;
+    if (strip) dispatch_once(&jamOnce, ^{
+        SGLog(@"now playing bar in the tab bar's row in a Jam: strip %@, bar %@, card %@ (in the container's view)",
+              NSStringFromCGRect(SGFrameIn(strip, view)), NSStringFromCGRect(bar.frame), NSStringFromCGRect(track));
     });
 }
 
@@ -429,6 +478,44 @@ void SGRNowPlayingBarFollowTabBar(void) {
     [container.view layoutIfNeeded];
 }
 
+CGRect SGRNowPlayingStripFrameIn(UIView *host) {
+    UIView *strip = sg_strip;
+    if (SGRNowPlayingStripHeight() <= 0 || !host || ![strip isDescendantOfView:host]) return CGRectNull;
+    return [host convertRect:strip.bounds fromView:strip];
+}
+
+// The tab bar's moves under way (one can start before the last one ends), and the relayout owed to their end.
+static NSInteger sg_barMoves;
+static BOOL sg_owedLayout, sg_owedRefresh;
+
+static void relayoutBar(UIView *host, BOOL taller) {
+    if (sg_barMoves > 0) {
+        sg_owedLayout = YES;
+        sg_owedRefresh |= taller;
+        return;
+    }
+    [host setNeedsLayout];
+    if (taller) SGRRefreshTabBar();
+}
+
+void SGRNowPlayingBarMoving(BOOL moving) {
+    UIView *strip = sg_strip;
+    if (moving) {
+        // Spotify's own strip-in animation would race the tab bar's spring: the strip goes to where it is set.
+        if (sg_barMoves++ == 0 && SGRNowPlayingStripHeight() > 0 && strip.window && strip.layer.animationKeys.count) [strip.layer removeAllAnimations];
+        return;
+    }
+    if (sg_barMoves == 0 || --sg_barMoves > 0) return;
+    UIView *host = sg_container.viewIfLoaded;
+    if (sg_owedLayout && host) relayoutBar(host, sg_owedRefresh);
+    sg_owedLayout = sg_owedRefresh = NO;
+    static dispatch_once_t once;
+    if (host && SGRNowPlayingStripHeight() > 0 && [strip isDescendantOfView:host]) dispatch_once(&once, ^{
+        SGLog(@"now playing bar: tab bar move ended in a Jam, strip %@, card glass %@ (in the container's view)",
+              NSStringFromCGRect(SGFrameIn(strip, host)), NSStringFromCGRect(SGFrameIn(sg_cardGlass, host)));
+    });
+}
+
 // The same bar class also stands at the top of Spotify's sheets (the DJ request one: Up next, device, play).
 // It is not the tab bar's card there: the sheet has its own blue ground and corners, and a dark 24pt pane of
 // the bar's full width on it reads as a frame round the track. It is left as Spotify draws it, and it must not
@@ -436,9 +523,26 @@ void SGRNowPlayingBarFollowTabBar(void) {
 // frame from those.
 static BOOL inSheet(UIView *view) {
     for (UIView *v = view.superview; v; v = v.superview) {
-        if ([v.accessibilityIdentifier isEqualToString:@"sheet-view"] || [NSStringFromClass(v.class) containsString:@"SheetImpl"]) return YES;
+        if ([v.accessibilityIdentifier isEqualToString:@"sheet-view"] || SGClassNamed(v.class, @"SheetImpl")) return YES;
     }
     return NO;
+}
+
+// The card's glass frame in `host`: the card, else the box round the track's content, with the strip cut
+// out from its side, all of it when the card is a view around both, else as much as overlaps. CGRectNull
+// when there is no card to speak of.
+static CGRect trackFrame(UIView *bar, UIView *card, UIView *strip, CGRect stripFrame, UIView *host, BOOL *stripAbove) {
+    CGRect frame = card ? SGFrameIn(card, host) : contentBounds(bar, host);
+    if (CGRectIsNull(frame)) return frame;
+    *stripAbove = NO;
+    if (strip) {
+        *stripAbove = CGRectGetMidY(stripFrame) < CGRectGetMidY(frame);
+        CGFloat cut = card && [strip isDescendantOfView:card] ? strip.bounds.size.height : CGRectIntersection(frame, stripFrame).size.height;
+        frame.size.height -= cut;
+        if (*stripAbove) frame.origin.y += cut;
+    }
+    frame.size.height = MIN(frame.size.height, 80);
+    return frame.size.height < 30 || frame.size.width < 100 ? CGRectNull : frame;
 }
 
 static void styleNowPlayingBar(UIViewController *container) {
@@ -463,35 +567,44 @@ static void styleNowPlayingBar(UIViewController *container) {
     UIView *card = sg_card;
     if (!card || !isGoodCard(card, bar, marker) || stripIn(card)) card = sg_card = chooseCard(bar, marker);
 
+    // The strip before the bar's paint goes, so the log says what it was made of.
+    UIView *strip = sg_strip = stripIn(bar);
+    if (strip && (strip.hidden || strip.alpha < 0.01 || !strip.window)) strip = nil;
+    static dispatch_once_t stripOnce;
+    if (strip) dispatch_once(&stripOnce, ^{
+        NSMutableString *tree = [NSMutableString string];
+        SGForEachView(strip, ^(UIView *v) {
+            CGColorRef paint = v.layer.backgroundColor;
+            [tree appendFormat:@"%@ %@ a=%.2f%@\n", v.class, NSStringFromCGRect(SGFrameIn(v, strip)), v.alpha,
+                                paint ? [NSString stringWithFormat:@" paint=%@", [UIColor colorWithCGColor:paint]] : @""];
+        });
+        SGLogLong(@"now playing bar", [NSString stringWithFormat:@"Jam strip %@, controller %@, in the bar: %@ (Spotify's paint inside the "
+                                       @"bar is cleared as it is set, SGRRepaint.x)\n%@", strip.class, strip.nextResponder.class,
+                                       [strip isDescendantOfView:bar] ? @"yes" : @"no", tree]);
+    });
+
     container.view.layer.backgroundColor = NULL;
     SGStripBackgrounds(bar);
 
-    UIView *strip = stripIn(bar);
-    if (strip && (strip.hidden || strip.alpha < 0.01 || !strip.window)) strip = nil;
     // Spotify lays the strip out after the bar and moves it in, so the bar is styled again a moment after
-    // the strip has moved, until it stays put.
+    // the strip has moved, until it stays put. A strip that comes, goes or changes height moves the fade too.
     CGRect stripFrame = strip ? SGFrameIn(strip, container.view) : CGRectZero;
     if (!CGRectEqualToRect(stripFrame, sg_stripFrame)) {
+        BOOL taller = stripFrame.size.height != sg_stripFrame.size.height;
         sg_stripFrame = stripFrame;
         UIView *host = container.view;
-        dispatch_async(dispatch_get_main_queue(), ^{ [host setNeedsLayout]; });
+        // During the tab bar's move it waits for the move's end (SGRNowPlayingBarMoving).
+        dispatch_async(dispatch_get_main_queue(), ^{ relayoutBar(host, taller); });
     }
     if (strip.bounds.size.height < 1) strip = nil;
-    placeInline(container);
-
-    CGRect frame = card ? SGFrameIn(card, container.view) : contentBounds(bar, container.view);
-    if (CGRectIsNull(frame)) return;
-    // The strip comes out of the card's glass from its side: all of it when the card is a view around both,
-    // else as much as overlaps.
+    // The track's frame for the row, then again for the glass: the row narrows the bar, which the card follows.
     BOOL stripAbove = NO;
-    if (strip) {
-        stripAbove = CGRectGetMidY(stripFrame) < CGRectGetMidY(frame);
-        CGFloat cut = card && [strip isDescendantOfView:card] ? strip.bounds.size.height : CGRectIntersection(frame, stripFrame).size.height;
-        frame.size.height -= cut;
-        if (stripAbove) frame.origin.y += cut;
-    }
-    frame.size.height = MIN(frame.size.height, 80);
-    if (frame.size.height < 30 || frame.size.width < 100) return;
+    // A card's, or in a Jam the box round the track's content; outside a Jam without a card the bar's own
+    // frame stands for it, as before, since that box is padded.
+    sg_trackFrame = card || strip ? trackFrame(bar, card, strip, stripFrame, container.view, &stripAbove) : CGRectNull;
+    placeInline(container);
+    CGRect frame = trackFrame(bar, card, strip, stripFrame, container.view, &stripAbove);
+    if (CGRectIsNull(frame)) return;
 
     CGFloat radius = MIN(kCardRadius, frame.size.height / 2);
     if (card) {
@@ -576,7 +689,7 @@ static void styleNowPlayingBar(UIViewController *container) {
 - (void)viewDidLayoutSubviews {
     %orig;
     UIViewController *parent = ((UIViewController *)self).parentViewController;
-    if ([NSStringFromClass(parent.class) containsString:@"NowPlayingBarContainer"]) styleNowPlayingBar(parent);
+    if (SGClassNamed(parent.class, @"NowPlayingBarContainer")) styleNowPlayingBar(parent);
 }
 %end
 

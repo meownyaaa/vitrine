@@ -8,15 +8,25 @@
 // ("mrhba"), Thai in ISO 11940's spelling rather than the one signs use, and a line mixing Latin with
 // another script loses the Latin part's accents ("Café" as "Cafe"). A reading per language is the upgrade.
 #import "Lyrics.h"
+#import <objc/runtime.h>
 
 NSNotificationName const SGLyricsRomanisedDidChangeNotification = @"spotifyglass.lyricsRomanisedDidChange";
 
-static BOOL has(NSString *text, NSString *pattern) {
-    return [text rangeOfString:pattern options:NSRegularExpressionSearch].location != NSNotFound;
+typedef NS_ENUM(NSUInteger, SGScript) { SGScriptKana, SGScriptNotLatin, SGScriptHan };
+
+// Compiled once: every line on the page is looked at.
+static BOOL has(NSString *text, SGScript script) {
+    static NSRegularExpression *patterns[3];
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray<NSString *> *sources = @[@"[\\p{Hiragana}\\p{Katakana}]", @"[\\p{L}&&[^\\p{Latin}]]", @"\\p{Han}"];
+        for (NSUInteger i = 0; i < 3; i++) patterns[i] = [NSRegularExpression regularExpressionWithPattern:sources[i] options:0 error:NULL];
+    });
+    return [patterns[script] rangeOfFirstMatchInString:text options:0 range:NSMakeRange(0, text.length)].location != NSNotFound;
 }
 
 static BOOL hasKana(NSString *text) {
-    return has(text, @"[\\p{Hiragana}\\p{Katakana}]");
+    return has(text, SGScriptKana);
 }
 
 BOOL SGLyricsLooksJapanese(NSArray<SGKaraokeLine *> *lines) {
@@ -50,21 +60,92 @@ static NSString *readJapanese(NSString *text) {
 }
 
 NSString *SGLyricsRomanised(NSString *text, BOOL japanese) {
-    // Only a line with a letter of another script: Latin with accents (German, Vietnamese) is left alone.
-    if (!text.length || !has(text, @"[\\p{L}&&[^\\p{Latin}]]")) return nil;
+    if (!text.length) return nil;
     static NSCache<NSString *, NSString *> *kept;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ kept = [NSCache new]; });
     NSString *key = japanese ? [@"ja:" stringByAppendingString:text] : text;
     NSString *romanised = [kept objectForKey:key];
     if (romanised) return romanised.length ? romanised : nil;
+    // Only a line with a letter of another script: Latin with accents (German, Vietnamese) is left alone.
+    if (!has(text, SGScriptNotLatin)) {
+        [kept setObject:@"" forKey:key];
+        return nil;
+    }
     BOOL kana = japanese || hasKana(text);
     NSString *source = kana ? readJapanese(text) : text;
     // Han left over is Chinese: its pinyin keeps the tones, and only its punctuation is made ASCII.
-    NSString *transform = !kana && has(text, @"\\p{Han}") ? @"Any-Latin; [[:P:][:Zs:]] Latin-ASCII" : @"Any-Latin; Latin-ASCII";
+    NSString *transform = !kana && has(text, SGScriptHan) ? @"Any-Latin; [[:P:][:Zs:]] Latin-ASCII" : @"Any-Latin; Latin-ASCII";
     romanised = [[source stringByApplyingTransform:transform reverse:NO]
                  stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] ?: @"";
     if ([romanised caseInsensitiveCompare:text] == NSOrderedSame) romanised = @"";
     [kept setObject:romanised forKey:key];
     return romanised.length ? romanised : nil;
+}
+
+static char kRomanisedLineKey;
+
+SGKaraokeLine *SGLyricsRomanisedLine(SGKaraokeLine *line, BOOL japanese) {
+    if (!line) return nil;
+    id cached = objc_getAssociatedObject(line, &kRomanisedLineKey);
+    if (cached) {
+        if (cached == NSNull.null) return nil;
+        SGKaraokeLine *r = (SGKaraokeLine *)cached;
+        r.translation = line.translation;
+        r.translationMade = line.translationMade;
+        return r;
+    }
+
+    NSString *text = SGKaraokeLineText(line);
+    NSString *pronText = line.pronunciation.words.count ? SGKaraokeLineText(line.pronunciation) : nil;
+    SGKaraokeLine *romanised = nil;
+    if (pronText.length && has(text, SGScriptNotLatin) && !has(pronText, SGScriptNotLatin)) {
+        romanised = [line.pronunciation copy];
+        romanised.translation = line.translation;
+        romanised.translationMade = line.translationMade;
+        if (line.backing) {
+            romanised.backing = SGLyricsRomanisedLine(line.backing, japanese) ?: line.backing;
+        }
+    } else {
+        NSString *romanisedText = SGLyricsRomanised(text, japanese);
+        if (romanisedText.length && [romanisedText caseInsensitiveCompare:text] != NSOrderedSame) {
+            if (line.timing == SGKaraokeTimingNone) {
+                romanised = SGKaraokeStaticLines(@[romanisedText]).firstObject;
+            } else {
+                NSInteger start = line.start;
+                NSInteger end = line.end > line.start ? line.end : line.start + 3000;
+                romanised = SGKaraokeEstimatedLines(@[@(start), @(end)], @[romanisedText, @""]).firstObject;
+                if (romanised && line.end > start) {
+                    NSInteger targetSpan = line.end - start;
+                    NSInteger genSpan = romanised.end - start;
+                    if (genSpan > 0 && genSpan != targetSpan) {
+                        for (SGKaraokeWord *w in romanised.words) {
+                            w.start = start + (NSInteger)llround((double)(w.start - start) * targetSpan / genSpan);
+                            w.end = start + (NSInteger)llround((double)(w.end - start) * targetSpan / genSpan);
+                        }
+                    }
+                    romanised.start = start;
+                    romanised.end = line.end;
+                }
+            }
+            if (romanised) {
+                romanised.align = line.align;
+                romanised.voice = line.voice;
+                romanised.translation = line.translation;
+                romanised.translationMade = line.translationMade;
+                if (line.backing) {
+                    romanised.backing = SGLyricsRomanisedLine(line.backing, japanese) ?: line.backing;
+                }
+            }
+        } else if (line.backing) {
+            SGKaraokeLine *romanisedBacking = SGLyricsRomanisedLine(line.backing, japanese);
+            if (romanisedBacking) {
+                romanised = [line copy];
+                romanised.backing = romanisedBacking;
+            }
+        }
+    }
+
+    objc_setAssociatedObject(line, &kRomanisedLineKey, romanised ?: NSNull.null, OBJC_ASSOCIATION_RETAIN);
+    return romanised;
 }

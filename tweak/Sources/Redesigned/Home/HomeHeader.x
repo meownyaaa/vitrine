@@ -1,7 +1,8 @@
 // Home redesign: the header the way the Music app has it. The filter pills (All, Music, Podcasts) go and
 // a large title takes their place at the leading edge; the avatar that opens the side drawer moves to the
 // trailing edge; the scrim Spotify lays behind the header goes too, the soft scroll edge (Kit/SGREdgeEffect.x)
-// being what keeps the page scrolling under it soft; the title itself scrolls away (followScroll).
+// being what keeps the page scrolling under it soft; the title itself scrolls away (followScroll), or stays
+// with the feed's hard edge under it (keepTitle).
 //
 // Tree (trees/clean/home/10.txt:3018-3051): FunkisViewController's view holds a 402x112 UIView around
 // Reprise_LiquidGlassKit LiquidGlass.GradientView (the scrim) and, at {0, 62}, an
@@ -28,7 +29,7 @@ static const NSUInteger kTitleTries = 8;
 static char kTitleKey, kTabKey, kPillGlassKey, kGlassKey, kButtonsKey, kConnectKey, kTintKey, kWatchKey;
 // The title row's pill: a glass capsule around the filter button and the avatar, 44pt tall, as the reference has
 // it; the menu drives Spotify's own filter chips, hidden in the stack, and offers the device picker when Spotify
-// has one (a now playing bar) and the large shelf's Show all, its heading being gone (HomeTopPicks.x).
+// has one (a now playing bar) and the large shelf's Show all while its heading is gone (HomeTopPicks.x).
 static const CGFloat kPillHeight = 44, kPillButton = 44, kPillPad = 6;
 // The page's color behind the title (SGRHomeSetPageTint), fading to black over this height.
 static const CGFloat kTintHeight = 480;
@@ -226,7 +227,7 @@ static CGRect untransformed(UIView *view) {
     return CGRectMake(view.center.x - size.width / 2, view.center.y - size.height / 2, size.width, size.height);
 }
 
-// The avatar's place, by its center and bounds too: it carries the scroll's transform (followScroll).
+// The avatar's place, by its center and bounds too: it carries the scroll's transform (followScroll), unless kept.
 static CGRect facePlace(UIStackView *stack, UIView *face) {
     CGRect place = untransformed(stack);
     return CGRectOffset(untransformed(face), place.origin.x - stack.bounds.origin.x, place.origin.y - stack.bounds.origin.y);
@@ -324,7 +325,7 @@ static BOOL findHeader(UIView *view) {
 
 // The title row scrolls away with the page, as the Music app's large title and avatar do: the title, the glass pill
 // and Spotify's avatar rise with what is under them and fade over the title's height, so the page never passes
-// under them.
+// under them. Kept in place instead (keepTitle), the page passes under them over a hard edge.
 static __weak UIView *sg_face;
 static void rise(UIView *part, CGAffineTransform transform, CGFloat alpha) {
     if (!CGAffineTransformEqualToTransform(part.transform, transform)) part.transform = transform;
@@ -333,7 +334,10 @@ static void rise(UIView *part, CGAffineTransform transform, CGFloat alpha) {
 
 // The pill's glass takes no alpha (SGRGlass.h): it rises with the row, and its material goes off once the row is
 // half faded and comes back with it.
+static const NSTimeInterval kGlassFade = 0.15;
 static BOOL sg_glassShown = YES;
+// When the material's last change ends: until then the glass keeps rising after the row has faded.
+static CFTimeInterval sg_glassFadeEnds;
 static void riseGlass(UIView *glass, CGAffineTransform transform, CGFloat alpha) {
     if (!glass) return;
     if (!CGAffineTransformEqualToTransform(glass.transform, transform)) glass.transform = transform;
@@ -341,17 +345,21 @@ static void riseGlass(UIView *glass, CGAffineTransform transform, CGFloat alpha)
     UIView *shape = objc_getAssociatedObject(glass, &kPillGlassKey);
     if (!shape || shown == sg_glassShown) return;
     sg_glassShown = shown;
-    [UIView animateWithDuration:0.15 animations:^{ SGRShowGlass(shape, shown); }];
+    sg_glassFadeEnds = CACurrentMediaTime() + kGlassFade;
+    [UIView animateWithDuration:kGlassFade animations:^{ SGRShowGlass(shape, shown); }];
 }
 
 static void followScroll(UIScrollView *scroll) {
     UILabel *title = sg_header ? objc_getAssociatedObject(sg_header, &kTitleKey) : nil;
     if (!title || !scroll) return;
-    CGFloat scrolled = MAX(0, scroll.contentOffset.y + scroll.adjustedContentInset.top);
-    CGAffineTransform up = CGAffineTransformMakeTranslation(0, -scrolled);
-    CGFloat alpha = 1 - MIN(1, scrolled / MAX(1, title.bounds.size.height));
+    CGFloat scrolled = MAX(0, scroll.contentOffset.y + scroll.adjustedContentInset.top), faded = MAX(1, title.bounds.size.height);
+    CGFloat alpha = 1 - MIN(1, scrolled / faded);
+    // Past the title's height the row has faded out, so it stops rising there and nothing is written again until it
+    // comes back; the glass keeps rising while its material is still going off.
+    CGAffineTransform up = CGAffineTransformMakeTranslation(0, -MIN(scrolled, faded));
+    BOOL glassFading = CACurrentMediaTime() < sg_glassFadeEnds || (alpha > 0.5) != sg_glassShown;
     rise(title, up, alpha);
-    riseGlass(objc_getAssociatedObject(sg_header, &kGlassKey), up, alpha);
+    riseGlass(objc_getAssociatedObject(sg_header, &kGlassKey), glassFading ? CGAffineTransformMakeTranslation(0, -scrolled) : up, alpha);
     rise(objc_getAssociatedObject(sg_header, &kButtonsKey), up, alpha);
     if ([sg_face isDescendantOfView:sg_header]) rise(sg_face, up, alpha);
 }
@@ -368,11 +376,41 @@ static void followScroll(UIScrollView *scroll) {
 
 // The feed: the page's outermost scroll view taller than the pills, found once. Not the tallest: a shelf can grow taller
 // than the page, and a shelf's offset never moves the title. Followed by an observer that lives as long as it does.
-static char kFollowerKey;
+static char kFollowerKey, kEdgeKey;
 static __weak UIScrollView *sg_feed;
 static __weak UIView *sg_pageView;
+// Kept in place (SGRKeyHomeKeepTitle), the row stays and no observer is added: the header instead shapes the feed's
+// top edge effect, hard rather than the redesign's soft one (too faint under a large title, as Apple's guidelines
+// say of text outside glass), which then darkens the page under the title and the pill as under a navigation bar.
+static BOOL keepTitle(void) {
+    static int state = -1;
+    // Below iOS 26 there is no edge effect to put under it, and the scrim is gone: the title scrolls away there.
+    if (state < 0) state = SGRedesignAvailable() && SGHidden(SGRKeyHomeKeepTitle) ? 1 : 0;
+    return state == 1;
+}
+
+static void shapeEdge(UIScrollView *feed) {
+    SGRHardTopEdge(feed);
+    if (@available(iOS 26.0, *)) {
+        UIView *header = sg_header;
+        if (!header) return;
+        UIScrollEdgeElementContainerInteraction *edge = objc_getAssociatedObject(header, &kEdgeKey);
+        if (!edge) {
+            edge = [UIScrollEdgeElementContainerInteraction new];
+            edge.edge = UIRectEdgeTop;
+            [header addInteraction:edge];
+            objc_setAssociatedObject(header, &kEdgeKey, edge, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (edge.scrollView != feed) edge.scrollView = feed;
+    }
+}
+
 static void followFeed(UIScrollView *feed) {
     sg_feed = feed;
+    if (keepTitle()) {
+        shapeEdge(feed);
+        return;
+    }
     if (!objc_getAssociatedObject(feed, &kFollowerKey)) {
         SGRHomeTitleFollower *follower = [SGRHomeTitleFollower new];
         follower.scroll = feed;

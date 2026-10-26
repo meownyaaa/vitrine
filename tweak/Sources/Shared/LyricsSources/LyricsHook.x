@@ -578,13 +578,20 @@ static void completed(id delegate, NSURLSession *session, NSURLSessionTask *task
     if (!track) return metadata;
     BOOL has = [@"true" isEqual:metadata[@"has_lyrics"]];
     SGLyricsNoteSpotifyHas(track, has);
-    SGKaraokeRememberTrack(self);
+    SGKaraokeRememberTrack(self, track);
     if (has || !SGLyricsMayHave(track)) return metadata;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ SGLog(@"lyrics: has_lyrics forced on, first for spotify:track:%@", track); });
+    // The track keeps its metadata, so its forced copy is made once and kept beside the dictionary it copies.
+    static char kForcedKey;
+    NSArray *kept = metadata ? objc_getAssociatedObject(self, &kForcedKey) : nil;
+    if (kept && kept.firstObject == metadata) return kept.lastObject;
     NSMutableDictionary *forced = metadata ? [metadata mutableCopy] : [NSMutableDictionary dictionary];
     forced[@"has_lyrics"] = @"true";
-    return forced;
+    if (!metadata) return forced;
+    NSDictionary *shared = [forced copy];   // handed out again, so as unchangeable as the one Spotify hands out
+    objc_setAssociatedObject(self, &kForcedKey, @[metadata, shared], OBJC_ASSOCIATION_RETAIN);
+    return shared;
 }
 %end
 

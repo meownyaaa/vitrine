@@ -51,6 +51,9 @@ void SGLyricsGetText(NSURL *url, void (^done)(NSString *text)) {
     NSData *body = fetched(url);
     done(body ? [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding] : nil);
 }
+void SGLyricsGetTextThen(NSURL *url, id (^parse)(NSString *text), void (^done)(id parsed)) {
+    SGLyricsGetText(url, ^(NSString *text) { done(parse(text)); });
+}
 
 // A search reply holding these hits, in this order: {id, title, primary artists, instrumental, artist_names}.
 static NSDictionary *reply(NSArray<NSArray *> *hits) {

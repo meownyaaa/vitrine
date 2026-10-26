@@ -59,6 +59,15 @@
 static HarnessPlayer *sg_player;
 id SGDiagnosticsPlayer(void) { return sg_player; }
 
+// The driver's speed, lossless, automix, sing and landscape commands, each saying it ran.
+static double sg_speed = 1;
+double SGPlayerSpeed(void) { return sg_speed; }
+void SGSetPlayerSpeed(double speed) { sg_speed = speed; SGLog(@"harness: speed %.2f", speed); }
+NSDictionary *SGLosslessProbe(NSString *verb, NSDictionary *p, NSString **error) { *error = @"no lossless in the harness"; return nil; }
+NSDictionary *SGAutoMixProbeCommand(NSDictionary *p, NSString **error) { *error = @"no Automix in the harness"; return nil; }
+void SGSetSingOn(BOOL on) { SGLog(@"harness: sing %d", on); }
+void SGRPlayerShowLandscape(BOOL show) { SGLog(@"harness: landscape %d", show); }
+
 #pragma mark - Mod Settings
 
 @interface HarnessSettings : UITableViewController

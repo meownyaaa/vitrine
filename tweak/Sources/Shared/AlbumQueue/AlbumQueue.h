@@ -1,6 +1,16 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 @class UIView, UIViewController;
 BOOL SGAlbumQueueIsAlbumURI(NSString *uri);
+BOOL SGIsPlaylistURI(NSString *uri);
+BOOL SGIsValidEntityURI(NSString *uri);
+NSString *SGSanitizeEntityURI(NSString *raw);
+
+// The confirmation notice shown under the Dynamic Island.
+@interface SGAlbumQueueNotice : UIView
++ (void)showIn:(UIWindow *)window title:(NSString *)title detail:(NSString *)detail symbol:(NSString *)symbol;
++ (void)showIn:(UIWindow *)window title:(NSString *)title detail:(NSString *)detail symbol:(NSString *)symbol persistent:(BOOL)persistent;
+@end
 
 // Spotify's ⋯ buttons. An album header's identifier ends in the album's id.
 #define SGAlbumQueueButtonPrefix @"Components.UI.ContextMenuButton-"

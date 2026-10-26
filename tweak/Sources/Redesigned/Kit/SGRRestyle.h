@@ -13,9 +13,11 @@
 
 // Alpha 0, no touches, hidden from accessibility, and kept so: the instance becomes a runtime subclass
 // of its own class (the way KVO does it, `class` still answers the original) whose setAlpha: and
-// setUserInteractionEnabled: hold those values. For plain UIKit views (a UIImageView, a UILabel); a
-// Swift class, or an instance already observed with KVO, gets the values once instead, re-applied on
-// the next call, and a log line says so once.
+// setUserInteractionEnabled: hold those values. For plain UIKit views (a UIImageView, a UILabel). One of
+// Spotify's Swift classes, or an instance KVO observes, keeps its alpha (only its alpha: touches and
+// accessibility are set again on each call) through an override on its class that holds only the instances
+// suppressed; where neither takes, the values are set once instead, re-applied
+// on the next call, and a log line says so once.
 void SGRSuppress(UIView *view);
 
 // Digits of one width in the label, kept through Spotify's own setText:, setAttributedText: and
@@ -45,6 +47,9 @@ BOOL SGRObserveLayout(UIView *view, void (^laidOut)(UIView *view));
 // answer is kept weakly on `root` under `cacheKey` and searched for again only when it is gone, has
 // left `root` or changed its identifier. nil when there is none; a miss is not cached.
 UIView *SGRFindByIdentifier(UIView *root, NSString *identifier, const void *cacheKey);
+// SGRFindByIdentifier for every identifier at once, in one walk (Core's SGFindRememberedAll): `found[i]` is
+// identifiers[i]'s view or nil. For lookups made back to back with nothing between them that changes the tree.
+void SGRFindByIdentifiers(UIView *root, NSArray<NSString *> *identifiers, const void *const cacheKeys[], UIView *__strong found[]);
 
 // Whether `view` is the profile avatar that opens the side drawer, in the Home, Search and Library headers. Known by
 // its identifier, which every version gives it: 9.1.88 draws it in an AdaptiveFaceContainer, 9.1.90 in an Encore
@@ -82,3 +87,8 @@ void SGRActivate(UIView *source);
 // else those for touch up inside. NO when the control has neither (an Encore control that reads its
 // touches through a gesture recognizer); what was found is logged once per class.
 BOOL SGRFire(UIControl *control);
+
+// Gives a scroll view the hard top edge effect, a dark band, and keeps the soft one SGREdgeEffect.x sets on every
+// other scroll view off it: for text that stays over a page scrolling under it (Home's kept title, HomeHeader.x).
+// iOS 26 on; nothing before.
+void SGRHardTopEdge(UIScrollView *scrollView);

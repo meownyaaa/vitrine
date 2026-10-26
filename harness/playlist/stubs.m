@@ -10,3 +10,6 @@ __weak UIView *sgr_playlistRoot = nil;
 // Redesigned/Kit/SGRBridges.x: SGRField.m asks whether the player is opening or closing for its moving field.
 BOOL SGRPlayerIsTransitioning(void) { return NO; }
 void SGRObservePlayerTransition(id owner, void (^began)(id owner), void (^ended)(id owner)) {}
+
+// Shared/AlbumQueue/AlbumQueueMenu.x: a tapped album header ⋯ records its album for the menu; no menu here.
+void SGAlbumQueueMarkSource(UIView *view) {}

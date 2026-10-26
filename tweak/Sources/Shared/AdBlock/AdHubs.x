@@ -44,19 +44,27 @@ static BOOL anyKey(NSDictionary *dictionary) {
     return NO;
 }
 
+static NSString *const flagKeys[] = {@"ad", @"is_ad", @"is_sponsored"};
+static NSString *const childKeys[] = {@"children", @"rows", @"body"};
+
 static BOOL isAd(NSDictionary *component) {
     id kind = component[@"component"];
     if ([kind isKindOfClass:NSDictionary.class]) {
         NSString *ns = kind[@"namespace"], *name = kind[@"name"];
-        if (adWord(ns) || adWord(name) || adWord([NSString stringWithFormat:@"%@:%@", ns, name])) return YES;
+        if (adWord(ns) || adWord(name)) return YES;
+        // No ad word has a ':', so in two strings the joined form only adds an intent word in one next to a
+        // surface word in the other; a part that is not a string is matched on its description, as before.
+        BOOL strings = (!ns || [ns isKindOfClass:NSString.class]) && (!name || [name isKindOfClass:NSString.class]);
+        if ((upsells || !strings) && adWord([NSString stringWithFormat:@"%@:%@", ns, name])) return YES;
     } else if (adWord(kind)) {
         return YES;
     }
     if (adWord(component[@"id"]) || adWord(component[@"type"])) return YES;
     NSDictionary *metadata = component[@"metadata"];
     if ([metadata isKindOfClass:NSDictionary.class]) {
-        for (NSString *key in @[@"ad", @"is_ad", @"is_sponsored"]) {
-            if ([metadata[key] respondsToSelector:@selector(boolValue)] && [metadata[key] boolValue]) return YES;
+        for (size_t i = 0; i < COUNT(flagKeys); i++) {
+            id flag = metadata[flagKeys[i]];
+            if ([flag respondsToSelector:@selector(boolValue)] && [flag boolValue]) return YES;
         }
     }
     if (anyKey(metadata) || anyKey(component[@"custom"])) return YES;
@@ -64,9 +72,11 @@ static BOOL isAd(NSDictionary *component) {
     return [logging isKindOfClass:NSDictionary.class] && (adWord(logging[@"type"]) || anyKey(logging));
 }
 
+// The same array when no ad was found in it, so a page without ads is passed on as it came.
 static NSArray *filtered(NSArray *components) {
     if (![components isKindOfClass:NSArray.class]) return components;
     NSMutableArray *kept = [NSMutableArray array];
+    BOOL changed = NO;
     for (NSDictionary *component in components) {
         if (![component isKindOfClass:NSDictionary.class]) {
             [kept addObject:component];
@@ -76,15 +86,21 @@ static NSArray *filtered(NSArray *components) {
         if (isAd(component)) {
             SGAdBlockCountOne(@"Page components");
             SGLog(@"dropped page component %@", component[@"id"] ?: component[@"component"]);
+            changed = YES;
             continue;
         }
-        NSMutableDictionary *copy = [component mutableCopy];
-        for (NSString *key in @[@"children", @"rows", @"body"]) {
-            if (copy[key]) copy[key] = filtered(copy[key]);
+        NSMutableDictionary *copy = nil;
+        for (size_t i = 0; i < COUNT(childKeys); i++) {
+            id children = component[childKeys[i]];
+            id left = children ? filtered(children) : nil;
+            if (left == children) continue;
+            if (!copy) copy = [component mutableCopy];
+            copy[childKeys[i]] = left;
         }
-        [kept addObject:copy];
+        changed |= copy != nil;
+        [kept addObject:copy ?: component];
     }
-    return kept;
+    return changed ? kept : components;
 }
 
 %hook HUBViewModelBuilderImplementation

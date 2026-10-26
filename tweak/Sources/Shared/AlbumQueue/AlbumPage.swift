@@ -14,3 +14,31 @@ public final class SGAlbumQueuePage: NSObject {
         return url.absoluteString
     }
 }
+
+@objc(SGEntityPage)
+public final class SGEntityPage: NSObject {
+    @objc public static func entityURI(_ controller: AnyObject) -> String? {
+        if let album = SGAlbumQueuePage.albumURI(controller) { return album }
+        return playlistURI(controller)
+    }
+
+    @objc public static func playlistURI(_ controller: AnyObject) -> String? {
+        func search(_ val: Any, depth: Int) -> String? {
+            if depth > 4 { return nil }
+            let mirror = Mirror(reflecting: val)
+            for child in mirror.children {
+                if let str = child.value as? String, str.hasPrefix("spotify:playlist:") {
+                    return str
+                }
+                if let url = child.value as? URL, url.absoluteString.hasPrefix("spotify:playlist:") {
+                    return url.absoluteString
+                }
+                if let res = search(child.value, depth: depth + 1) {
+                    return res
+                }
+            }
+            return nil
+        }
+        return search(controller, depth: 0)
+    }
+}

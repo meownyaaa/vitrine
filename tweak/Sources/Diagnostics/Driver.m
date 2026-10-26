@@ -597,6 +597,139 @@ static CGPoint clampedOffset(UIScrollView *scroll, CGPoint offset) {
 
 #pragma mark - commands
 
+#pragma mark - properties by key path (get, set, layers)
+
+// A view or layer's properties read and written live, so a guess about what draws something can be tried on the
+// phone without a build: `set --id sheet-view --path layer.sublayers.0.enabled --value false`.
+
+static NSString *driverHex(CGColorRef color) {
+    if (!color) return @"nil";
+    static CGColorSpaceRef srgb;
+    if (!srgb) srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGColorRef rgb = CGColorCreateCopyByMatchingToColorSpace(srgb, kCGRenderingIntentDefault, color, NULL);
+    if (!rgb) return @"?";
+    const CGFloat *c = CGColorGetComponents(rgb);
+    NSString *hex = [NSString stringWithFormat:@"#%02X%02X%02X@%.2f", (int)lround(c[0] * 255), (int)lround(c[1] * 255), (int)lround(c[2] * 255), CGColorGetAlpha(rgb)];
+    CGColorRelease(rgb);
+    return hex;
+}
+
+// What a value reads as in the answer: numbers and strings as they are, colours as hex, anything else its description.
+static id plainValue(id value) {
+    if (!value || value == NSNull.null) return [NSNull null];
+    if ([value isKindOfClass:NSNumber.class] || [value isKindOfClass:NSString.class]) return value;
+    if ([value isKindOfClass:UIColor.class]) return driverHex(((UIColor *)value).CGColor);
+    if (CFGetTypeID((__bridge CFTypeRef)value) == CGColorGetTypeID()) return driverHex((__bridge CGColorRef)value);
+    if ([value isKindOfClass:NSArray.class]) {
+        NSMutableArray *items = [NSMutableArray array];
+        for (id item in (NSArray *)value) [items addObject:[item isKindOfClass:NSNumber.class] || [item isKindOfClass:NSString.class] ? item : NSStringFromClass([item class])];
+        return items;
+    }
+    NSString *text = [value description];
+    return text.length > 300 ? [text substringToIndex:300] : text;
+}
+
+// One step of a path: a number indexes an array (subviews, sublayers, filters), anything else is a key.
+static id stepInto(id object, NSString *step) {
+    NSScanner *scanner = [NSScanner scannerWithString:step];
+    NSInteger index;
+    if ([object isKindOfClass:NSArray.class] && [scanner scanInteger:&index] && scanner.isAtEnd) {
+        NSArray *array = object;
+        if (index < 0 || index >= (NSInteger)array.count) fail(@"index %ld is past the %lu items", (long)index, (unsigned long)array.count);
+        return array[(NSUInteger)index];
+    }
+    @try {
+        return [object valueForKey:step];
+    } @catch (NSException *e) {
+        fail(@"%@ has no key %@", NSStringFromClass([object class]), step);
+    }
+}
+
+static id walk(id object, NSArray<NSString *> *steps) {
+    for (NSString *step in steps) {
+        object = stepInto(object, step);
+        if (!object) fail(@"%@ is nil", step);
+    }
+    return object;
+}
+
+// A value typed on the Mac: nil, true/false, a number, a colour (#RRGGBB or #RRGGBBAA, a CGColor for a layer's key and
+// a UIColor for a view's), or else the string.
+static id typedValue(NSString *text, id target) {
+    if (!text || [text isEqualToString:@"nil"] || [text isEqualToString:@"null"]) return nil;
+    if ([text isEqualToString:@"true"] || [text isEqualToString:@"YES"]) return @YES;
+    if ([text isEqualToString:@"false"] || [text isEqualToString:@"NO"]) return @NO;
+    if ([text hasPrefix:@"#"] && (text.length == 7 || text.length == 9)) {
+        unsigned long long rgba = 0;
+        [[NSScanner scannerWithString:[text substringFromIndex:1]] scanHexLongLong:&rgba];
+        if (text.length == 7) rgba = (rgba << 8) | 0xFF;
+        UIColor *color = [UIColor colorWithRed:((rgba >> 24) & 0xFF) / 255.0 green:((rgba >> 16) & 0xFF) / 255.0 blue:((rgba >> 8) & 0xFF) / 255.0 alpha:(rgba & 0xFF) / 255.0];
+        return [target isKindOfClass:CALayer.class] ? (id)color.CGColor : color;
+    }
+    NSScanner *scanner = [NSScanner scannerWithString:text];
+    double number;
+    if ([scanner scanDouble:&number] && scanner.isAtEnd) return @(number);
+    return text;
+}
+
+static NSArray<NSString *> *pathSteps(NSDictionary *p) {
+    NSString *path = p[@"path"];
+    if (!path.length) fail(@"takes --path, keys and indexes joined by dots (layer.sublayers.0.opacity)");
+    return [path componentsSeparatedByString:@"."];
+}
+
+// The object a path starts from: the view the selector names, or the key window.
+static id pathRoot(NSDictionary *p) {
+    return hasSelector(p) ? require(p, nil) : keyWindow();
+}
+
+// A layer's line: its class, frame, and whatever about it changes how it and what is under it draw.
+static NSString *layerLine(CALayer *layer) {
+    NSMutableString *line = [NSMutableString stringWithString:NSStringFromClass(layer.class)];
+    if ([layer.delegate isKindOfClass:UIView.class]) [line appendFormat:@" (%@)", NSStringFromClass([(id)layer.delegate class])];
+    if (layer.name.length) [line appendFormat:@" name=%@", layer.name];
+    [line appendFormat:@" %@", NSStringFromCGRect(layer.frame)];
+    if (layer.hidden) [line appendString:@" hidden"];
+    if (layer.opacity < 1) [line appendFormat:@" op=%.2f", layer.opacity];
+    if (layer.opaque) [line appendString:@" opaque"];
+    if (layer.masksToBounds) [line appendString:@" clips"];
+    if (layer.cornerRadius > 0) [line appendFormat:@" r=%.1f", layer.cornerRadius];
+    if (layer.backgroundColor && CGColorGetAlpha(layer.backgroundColor) > 0) [line appendFormat:@" bg=%@", driverHex(layer.backgroundColor)];
+    if (layer.contents) [line appendString:@" contents"];
+    if (layer.mask) [line appendFormat:@" mask=%@", NSStringFromClass(layer.mask.class)];
+    if (layer.shouldRasterize) [line appendString:@" rasterized"];
+    if (!layer.allowsGroupOpacity) [line appendString:@" noGroupOpacity"];
+    if (layer.compositingFilter) [line appendFormat:@" compositing=%@", layer.compositingFilter];
+    if (!CATransform3DIsIdentity(layer.transform)) [line appendString:@" transformed"];
+    if (layer.filters.count) {
+        NSMutableArray *names = [NSMutableArray array];
+        for (id filter in layer.filters) {
+            id name = nil;
+            @try { name = [filter valueForKey:@"type"]; } @catch (__unused NSException *e) {}
+            [names addObject:name ?: NSStringFromClass([filter class])];
+        }
+        [line appendFormat:@" filters=%@", [names componentsJoinedByString:@","]];
+    }
+    if ([NSStringFromClass(layer.class) containsString:@"Backdrop"]) {
+        for (NSString *key in @[@"enabled", @"scale", @"groupName", @"captureOnly", @"windowServerAware", @"allowsInPlaceFiltering", @"marginWidth", @"zoom", @"ignoresScreenClip", @"disablesOccludedBackdropBlurs", @"reducesCaptureBitDepth"]) {
+            id value = nil;
+            @try { value = [layer valueForKey:key]; } @catch (__unused NSException *e) { continue; }
+            [line appendFormat:@" %@=%@", key, plainValue(value)];
+        }
+        id mesh = nil;
+        @try { mesh = [layer valueForKey:@"meshTransform"]; } @catch (__unused NSException *e) {}
+        if (mesh) [line appendString:@" mesh"];
+    }
+    return line;
+}
+
+static void dumpLayers(CALayer *layer, NSUInteger depth, NSUInteger maxDepth, NSMutableArray<NSString *> *lines) {
+    if (lines.count > 600) return;
+    [lines addObject:[[@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0] stringByAppendingString:layerLine(layer)]];
+    if (depth >= maxDepth) return;
+    for (CALayer *sub in layer.sublayers) dumpLayers(sub, depth + 1, maxDepth, lines);
+}
+
 typedef NSDictionary *(^SGCommand)(NSDictionary *p);
 
 // The log number when the last command that does something began: a log wait looks from there, so
@@ -937,13 +1070,59 @@ static NSDictionary<NSString *, SGCommand> *commands(void) {
                 });
                 return touchAt(where, 0.08);
             },
+            @"get" : ^NSDictionary *(NSDictionary *p) {
+                NSArray<NSString *> *steps = pathSteps(p);
+                return onMain(^id {
+                    id value = walk(pathRoot(p), steps);
+                    return @{@"path" : p[@"path"], @"value" : plainValue(value), @"class" : NSStringFromClass([value class]) ?: @"nil"};
+                });
+            },
+            @"set" : ^NSDictionary *(NSDictionary *p) {
+                NSArray<NSString *> *steps = pathSteps(p);
+                if (!p[@"value"]) fail(@"set takes --value (nil, true, false, a number, #RRGGBB[AA] or text)");
+                return onMain(^id {
+                    id target = walk(pathRoot(p), [steps subarrayWithRange:NSMakeRange(0, steps.count - 1)]);
+                    NSString *key = steps.lastObject;
+                    id before = nil;
+                    @try { before = [target valueForKey:key]; } @catch (__unused NSException *e) {}
+                    id value = typedValue(p[@"value"], target);
+                    @try {
+                        [CATransaction begin];
+                        [CATransaction setDisableActions:YES];
+                        [target setValue:value forKey:key];
+                        [CATransaction commit];
+                    } @catch (NSException *e) {
+                        [CATransaction commit];
+                        fail(@"%@ did not take %@: %@", NSStringFromClass([target class]), key, e.reason);
+                    }
+                    id after = nil;
+                    @try { after = [target valueForKey:key]; } @catch (__unused NSException *e) {}
+                    return @{@"on" : NSStringFromClass([target class]), @"key" : key, @"before" : plainValue(before), @"after" : plainValue(after)};
+                });
+            },
+            // The layer tree under a view (--depth, 6 by default), or with --up 1 the chain of layers from it to the window.
+            @"layers" : ^NSDictionary *(NSDictionary *p) {
+                return onMain(^id {
+                    id root = pathRoot(p);
+                    if (p[@"path"]) root = walk(root, pathSteps(p));
+                    CALayer *layer = [root isKindOfClass:UIView.class] ? ((UIView *)root).layer : root;
+                    if (![layer isKindOfClass:CALayer.class]) fail(@"not a view or layer: %@", NSStringFromClass([root class]));
+                    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+                    if ([p[@"up"] boolValue]) {
+                        for (CALayer *l = layer; l; l = l.superlayer) [lines addObject:layerLine(l)];
+                    } else {
+                        dumpLayers(layer, 0, (NSUInteger)number(p, @"depth", 6), lines);
+                    }
+                    return @{@"layers" : lines};
+                });
+            },
         };
     });
     return all;
 }
 
 static NSSet<NSString *> *readOnly(void) {
-    return [NSSet setWithArray:@[@"find", @"state", @"screenshot", @"log", @"wait"]];
+    return [NSSet setWithArray:@[@"find", @"state", @"screenshot", @"log", @"wait", @"get", @"layers"]];
 }
 
 BOOL SGDriverHandles(NSString *command) {

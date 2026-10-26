@@ -28,6 +28,8 @@ static void trim(void) {
     NSArray<NSURLResourceKey> *keys = @[NSURLContentModificationDateKey];
     NSArray<NSURL *> *files = [NSFileManager.defaultManager contentsOfDirectoryAtURL:folder() includingPropertiesForKeys:keys
                                                                              options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
+    // The catalog keeps its album answers in this folder too (SGMotionCatalog.m), and they are not videos to trim.
+    files = [files filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"pathExtension != 'plist'"]];
     if (files.count <= kFiles) return;
     NSArray<NSURL *> *oldestFirst = [files sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
         NSDate *left = nil, *right = nil;

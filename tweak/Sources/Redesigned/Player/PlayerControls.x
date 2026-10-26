@@ -1,5 +1,6 @@
-// Player redesign: previous, play and next as bare glyphs, the way the Music app draws them, and the
-// timestamps under the slider in digits of one width, so they stop twitching every second.
+// Player redesign: previous, play and next as bare glyphs, the way the Music app draws them, shuffle and
+// repeat left out on request, and the timestamps under the slider in digits of one width, so they stop
+// twitching every second.
 //
 // The glyphs are drawn over Spotify's controls rather than instead of them: each button keeps its
 // action, its enabled state, its accessibility and the Gestures zones around it, and the glyph takes no
@@ -31,7 +32,7 @@ static const NSTimeInterval kSpinnerCheck = 0.6;
 // one sent before the player caught up, for this long; after it the player's word is final.
 static const NSTimeInterval kTapTrust = 1.2;
 
-static char kPreviousKey, kNextKey, kPlayKey, kGlyphKey, kTakeKey, kRemainingKey;
+static char kPreviousKey, kNextKey, kPlayKey, kGlyphKey, kTakeKey, kRemainingKey, kRowKey, kShuffleKey, kRepeatKey;
 static __weak UIView *sg_playView;
 static __weak UIButton *sg_playButton;
 static CFTimeInterval sg_tappedUntil;
@@ -93,6 +94,55 @@ static void skipGlyph(UIView *host, NSString *identifier, const void *findKey, N
         if (view != glyph && [view isKindOfClass:icon]) SGRPlayerVanish(view);
     });
     keepOnTop(glyph, content);
+}
+
+#pragma mark - shuffle and repeat
+
+// Each switched on under Hide on the player (SGRKeyPlayerHideShuffle, SGRKeyPlayerHideRepeat), read at launch. By
+// alpha in their slots: the row is Spotify's stack of five, and setting `hidden` in an Encore stack crashes. Kept by
+// SGRSuppress, since Spotify's state render sets a button's alpha back to 1 when shuffle or repeat changes.
+static BOOL sg_hideShuffle, sg_hideRepeat;
+// The ordinary player's controls, apart from sg_controlsHost, which the DJ's set too.
+static __weak UIView *sg_buttonsHost;
+static NSString *const kShuffleID = @"Components.UI.ShuffleButton", *const kRepeatID = @"Nowplaying-RepeatButton";
+
+static BOOL isHiddenButton(UIView *view) {
+    NSString *identifier = view.accessibilityIdentifier;
+    return (sg_hideShuffle && [identifier isEqualToString:kShuffleID])
+        || (sg_hideRepeat && [identifier isEqualToString:kRepeatID]);
+}
+
+// Spotify also swaps in a new button a moment after the controls lay out (seen for repeat on 9.1.90: the instance
+// found leaves the window 40 ms later and another arrives at alpha 1), with no layout pass after it. The new one is
+// caught as it arrives. The class is an Encore button's, taken from the first one found (`class`, not a KVO class
+// it may be observed through), since its name carries a build hash. It is the class of every Encore button, the
+// playlist, album and artist headers' shuffle among them, so only one inside the player's controls goes; any other
+// pays a window check and an identifier compare as it moves.
+%group SGRPlayerButtonArrival
+%hook SGRPlayerButton
+- (void)didMoveToWindow {
+    %orig;
+    UIView *view = (UIView *)self;
+    if (view.window && isHiddenButton(view) && sg_buttonsHost && [view isDescendantOfView:sg_buttonsHost]) SGRSuppress(view);
+}
+%end
+%end
+
+static void suppressButton(UIView *button) {
+    if (!button) return;
+    SGRSuppress(button);
+    static BOOL hooked;
+    if (hooked) return;
+    hooked = YES;
+    %init(SGRPlayerButtonArrival, SGRPlayerButton = button.class);
+}
+
+// Each is looked for only in its own end of the row, so a row without it (a podcast's) costs a walk of one
+// element, not the unit.
+static void hideShuffleAndRepeat(UIView *host, UIStackView *row) {
+    sg_buttonsHost = host;
+    if (sg_hideShuffle) suppressButton(SGRFindByIdentifier(row.arrangedSubviews.firstObject, kShuffleID, &kShuffleKey));
+    if (sg_hideRepeat) suppressButton(SGRFindByIdentifier(row.arrangedSubviews.lastObject, kRepeatID, &kRepeatKey));
 }
 
 #pragma mark - play
@@ -183,10 +233,12 @@ void SGRPlayerPlayGlyphIn(UIView *host) {
     UIView *host = ((UIViewController *)self).viewIfLoaded;
     if (!host) return;
     // The unit lays out before its row does, and the glyphs are centered on the buttons in it.
-    [SGRowIn(host) layoutIfNeeded];
+    UIStackView *row = (UIStackView *)SGFindRemembered(host, &kRowKey, ^BOOL(UIView *v) { return SGIsRow(v); });
+    [row layoutIfNeeded];
     skipGlyph(host, @"SPTNowPlayingPreviousTrackButton", &kPreviousKey, @"backward.fill");
     skipGlyph(host, @"SPTNowPlayingNextTrackButton", &kNextKey, @"forward.fill");
     SGRPlayerPlayGlyphIn(host);
+    hideShuffleAndRepeat(host, row);
 }
 %end
 
@@ -421,6 +473,8 @@ static void durationLaidOut(UIViewController *unit) {
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
+    sg_hideShuffle = SGHidden(SGRKeyPlayerHideShuffle);
+    sg_hideRepeat = SGHidden(SGRKeyPlayerHideRepeat);
     Class djDuration = SGRDJClass(@"DJMDurationElementsUnit");
     if (djDuration) { %init(SGRDJControlsDurationHooks, SGRDJControlsDurationUnit = djDuration); }
     sg_controlsWatcher = [SGRPlayerControlsWatcher new];

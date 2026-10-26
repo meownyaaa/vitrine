@@ -21,29 +21,25 @@ static const char *const keepMarkers[] = {"filter", "chip", "pillar", "browse:ch
 
 #define COUNT(list) (sizeof(list) / sizeof(list[0]))
 
-// ASCII, case-insensitive; the markers are lower case.
-static BOOL contains(NSData *data, const char *needle) {
-    const uint8_t *bytes = data.bytes;
-    size_t length = data.length, n = strlen(needle);
-    for (size_t i = 0; i + n <= length; i++) {
-        size_t k = 0;
-        while (k < n && tolower(bytes[i + k]) == needle[k]) k++;
-        if (k == n) return YES;
-    }
-    return NO;
-}
-
-static BOOL containsAny(NSData *data, const char *const markers[], size_t count) {
+// The markers are lower case, and each section is lowered once for all of them.
+static BOOL containsAny(const char *text, size_t length, const char *const markers[], size_t count) {
     for (size_t i = 0; i < count; i++) {
-        if (contains(data, markers[i])) return YES;
+        if (memmem(text, length, markers[i], strlen(markers[i]))) return YES;
     }
     return NO;
 }
 
 static BOOL adSection(NSData *section) {
-    if (containsAny(section, hardMarkers, COUNT(hardMarkers))) return YES;
-    if (containsAny(section, keepMarkers, COUNT(keepMarkers))) return NO;
-    return containsAny(section, intentMarkers, COUNT(intentMarkers)) && containsAny(section, surfaceMarkers, COUNT(surfaceMarkers));
+    size_t length = section.length;
+    const uint8_t *bytes = section.bytes;
+    char *text = malloc(length ?: 1);
+    for (size_t i = 0; i < length; i++) text[i] = tolower(bytes[i]);
+    BOOL ad = containsAny(text, length, hardMarkers, COUNT(hardMarkers))
+        || (!containsAny(text, length, keepMarkers, COUNT(keepMarkers))
+            && containsAny(text, length, intentMarkers, COUNT(intentMarkers))
+            && containsAny(text, length, surfaceMarkers, COUNT(surfaceMarkers)));
+    free(text);
+    return ad;
 }
 
 NSData *SGStripFeed(NSData *body) {

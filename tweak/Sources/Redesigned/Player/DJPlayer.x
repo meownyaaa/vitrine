@@ -11,11 +11,10 @@
 //
 // Footer: DJMFooterUnitView holds the share button, the DJ button, Connect and an empty view, not in a stack.
 // Connect and the DJ button stay Spotify's and are only moved, by a transform that survives relayout. Lyrics
-// and Queue are the Kit's glyph buttons; Queue opens spotify:now-playing:queue.
+// and Queue are the Kit's glyph buttons; Queue, the Music app's list.bullet (issue #109), opens spotify:now-playing:queue.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Shared/Navigation/Links.h"
-#import "Shared/Navigation/TabIcons.h"
 #import "Player.h"
 
 static const CGFloat kSkipGlyphSize = 32, kFooterGlyphSize = 20;
@@ -24,7 +23,7 @@ static const CGFloat kSlots[4] = {0.2, 0.4, 0.6, 0.8};
 // The DJ button's blue disc is 48pt, a good deal more than the glyphs beside it; drawn this much of that.
 static const CGFloat kDJButtonScale = 0.88;
 static char kPrevKey, kNextKey, kPlayKey, kGlyphKey;
-static char kShareKey, kConnectKey, kDJKey, kQueueKey, kEncoreQueueKey, kEncoreMissKey;
+static char kShareKey, kConnectKey, kDJKey, kQueueKey;
 
 #pragma mark - previous and next
 
@@ -122,38 +121,6 @@ static SGRGlyphButton *glyphButtonIn(UIView *host, const void *key, NSString *sy
     return button;
 }
 
-// Spotify's own queue glyph (SPTEncoreIcon "queue", what the main player's queue button and the Queue tab
-// draw) over the Kit button's list.bullet, which is only what the button is made with. The button keeps its
-// touch and large content viewer; the glyph is its icon's stand-in, so the symbol hides rather than goes. With
-// no Encore (the class gone, or no such glyph) SGTabIconView answers a star symbol, and the bullet list stays.
-// A touch smaller on the iOS < 26 fallback, where the glyph sits among the Kit's own 20pt glyphs and read heavier.
-static CGFloat queueIconSize(void) {
-    if (@available(iOS 26.0, *)) return 24;
-    return 21;
-}
-
-static void useSpotifyQueueIcon(SGRGlyphButton *button) {
-    if (objc_getAssociatedObject(button, &kEncoreMissKey)) return;
-    UIView *icon = objc_getAssociatedObject(button, &kEncoreQueueKey);
-    if (!icon) {
-        UIView *made = SGTabIconView(@"queue", NO, SGRPrimary());
-        if (!made || [made isKindOfClass:UIImageView.class]) {
-            // No such glyph in this build: not asked again on every layout pass.
-            objc_setAssociatedObject(button, &kEncoreMissKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            return;
-        }
-        icon = made;
-        icon.userInteractionEnabled = NO;
-        icon.isAccessibilityElement = NO;
-        objc_setAssociatedObject(button, &kEncoreQueueKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [button addSubview:icon];
-    }
-    button.glyph.hidden = YES;
-    CGFloat side = queueIconSize();
-    icon.bounds = CGRectMake(0, 0, side, side);
-    icon.center = CGPointMake(CGRectGetMidX(button.bounds), CGRectGetMidY(button.bounds));
-}
-
 #pragma mark the row
 
 static void styleFooter(UIViewController *unit) {
@@ -189,7 +156,6 @@ static void styleFooter(UIViewController *unit) {
     });
     queue.bounds = CGRectMake(0, 0, 44, 44);
     queue.center = CGPointMake(slot(2), middleY);
-    useSpotifyQueueIcon(queue);
 
     // The DJ button at the last place. Connect's view reaches a long way to the right of its glyph, so the
     // DJ's goes above it in the stack, or Connect would take its touches.

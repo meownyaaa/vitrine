@@ -134,7 +134,7 @@ static UIButton *controlButton(NSString *symbol, CGFloat size, NSString *label, 
     _lyrics.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [_stage addSubview:_lyrics];
     __weak SGRLandscapeLyricsController *weakSelf = self;
-    _lyrics.browsingBegan = ^{ [weakSelf rest]; };
+    _lyrics.browsingBegan = ^(BOOL onward) { [weakSelf rest]; };
 
     _hide = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(rest)];
     [self.view addGestureRecognizer:_hide];
@@ -321,7 +321,10 @@ static UIButton *controlButton(NSString *symbol, CGFloat size, NSString *label, 
     // Back at a tap with the Kit's response, from where a fade out is; they go with the slow fade, as the
     // portrait player's do (PlayerLyrics.x).
     SGRAnimate(shown ? SGRMotionRespond : SGRMotionFade, ^{
-        for (UIView *view in @[self->_controls, self->_close, self->_title, self->_artist]) view.alpha = shown ? 1 : 0;
+        // Keeping the title (Player.h), the title and the artist stay over the lines.
+        NSArray<UIView *> *fading = SGRLyricsHideMode() == SGRLyricsHideControls ? @[self->_controls, self->_close]
+                                                                                 : @[self->_controls, self->_close, self->_title, self->_artist];
+        for (UIView *view in fading) view.alpha = shown ? 1 : 0;
         self->_lyrics.extrasHidden = !shown;
     }, nil);
     if (shown) [self restartRest];
@@ -330,7 +333,7 @@ static UIButton *controlButton(NSString *symbol, CGFloat size, NSString *label, 
 - (void)restartRest {
     [_rest invalidate];
     _rest = nil;
-    if (_bare || !SGEnabled(SGRKeyLyricsAutoHide) || SGPlayerState().isPaused || UIAccessibilityIsVoiceOverRunning()) return;
+    if (_bare || SGRLyricsHideMode() == SGRLyricsHideOff || SGPlayerState().isPaused || UIAccessibilityIsVoiceOverRunning()) return;
     __weak SGRLandscapeLyricsController *weakSelf = self;
     _rest = [NSTimer scheduledTimerWithTimeInterval:kLandscapeRest repeats:NO block:^(NSTimer *timer) {
         // A sheet over the lines (a line's meanings) keeps them up, and the clock runs again behind it.

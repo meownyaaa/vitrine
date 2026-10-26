@@ -134,7 +134,7 @@ static NSString *stockID(UIView *item) {
 static void measureItem(UIView *item) {
     __block UIView *icon = nil, *label = nil;
     SGForEachView(item, ^(UIView *v) {
-        if (!icon && [NSStringFromClass(v.class) containsString:@"IconView"] && v.bounds.size.width > 1) icon = v;
+        if (!icon && SGClassNamed(v.class, @"IconView") && v.bounds.size.width > 1) icon = v;
         if (!label && [v isKindOfClass:UILabel.class] && ((UILabel *)v).text.length) label = v;
     });
     if (icon) sg_iconBox = SGFrameIn(icon, item);
@@ -321,8 +321,38 @@ void SGRefreshTabBar(void) {
 // What the row settled on, logged whenever it changes: `make log` then says whether the items fit,
 // what is holding their width, and in what order the bar ended up.
 void SGLogTabBarRow(UIView *tabBar) {
-    UIStackView *stack = SGRowIn(tabBar);
+    // The row SGComposeTabBar found in this bar on the same pass, just before.
+    UIStackView *stack = sg_row;
     if (!stack) return;
+    // Describing the constraints is the costly part, so the row is described again only once its geometry,
+    // its stack settings or its items change. shortcut: items past the 16th are not compared, raise it if a bar
+    // ever holds more.
+    struct {
+        CGRect bar, stack, icon, label;
+        NSInteger axis, distribution, alignment;
+        CGFloat spacing;
+        NSUInteger count;
+        struct { const void *item; CGRect frame; BOOL hidden; } items[16];
+    } key;
+    memset(&key, 0, sizeof key);   // padding too, for memcmp
+    key.bar = tabBar.frame;
+    key.stack = stack.frame;
+    key.icon = sg_iconBox;
+    key.label = sg_labelBox;
+    key.axis = stack.axis;
+    key.distribution = stack.distribution;
+    key.alignment = stack.alignment;
+    key.spacing = stack.spacing;
+    for (UIView *item in stack.arrangedSubviews) {
+        NSUInteger i = key.count++;
+        if (i >= 16) continue;
+        key.items[i].item = (__bridge const void *)item;
+        key.items[i].frame = item.frame;
+        key.items[i].hidden = item.hidden;
+    }
+    static typeof(key) lastKey;
+    if (!memcmp(&key, &lastKey, sizeof key)) return;
+    memcpy(&lastKey, &key, sizeof key);
     NSMutableString *out = [NSMutableString stringWithFormat:@"row in %@ %@, icon %@ label %@, stack %@ axis %ld dist %ld align %ld spacing %.1f autolayout %d",
                             NSStringFromClass(tabBar.class), NSStringFromCGRect(tabBar.frame),
                             NSStringFromCGRect(sg_iconBox), NSStringFromCGRect(sg_labelBox), NSStringFromCGRect(stack.frame),
@@ -353,13 +383,12 @@ void SGLogTabBarRow(UIView *tabBar) {
 %hook _TtC28NavigationUI_TabBarItemsImpl29TabBarItemsNavigationListImpl
 - (NSArray *)items {
     NSArray *items = %orig;
+    static BOOL logged;
+    if (logged) return items;
+    logged = YES;
     NSMutableString *out = [NSMutableString stringWithFormat:@"list read, %lu items", (unsigned long)items.count];
     for (id item in items) [out appendFormat:@"\n  %@ · %@", [item valueForKey:@"title"], [item valueForKey:@"viewURI"]];
-    static NSString *last;
-    if (![out isEqualToString:last]) {
-        last = [out copy];
-        SGLogLong(@"navbar", out);
-    }
+    SGLogLong(@"navbar", out);
     return items;
 }
 %end

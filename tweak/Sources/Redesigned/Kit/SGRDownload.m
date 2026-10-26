@@ -99,24 +99,34 @@ BOOL SGRReadDownload(UIView *source, SGRDownloadState *state, CGFloat *progress)
     // Downloading with nothing to show how far is the ring turning, as while waiting.
     if (result == SGRDownloadDownloading && value < 0) result = SGRDownloadWaiting;
 
-    // Said once for each combination read, so the first device run shows which of the two signals moved.
-    static NSMutableSet<NSString *> *logged;
-    if (!logged) logged = [NSMutableSet set];
-    NSString *mark = [NSString stringWithFormat:@"%@ %d %d", button.accessibilityIdentifier, current ? *current : -1, stored != NULL];
-    if (![logged containsObject:mark]) {
-        [logged addObject:mark];
-        SGLog(@"redesign kit: download %@, model %@ state %d progress %@, label \"%@\" value \"%@\"",
-              button.accessibilityIdentifier, owner ? NSStringFromClass(object_getClass(owner)) : @"missing",
-              current ? *current : -1, stored ? (stored[8] == 0 ? @"set" : @"none") : @"unreadable",
-              button.accessibilityLabel, button.accessibilityValue);
-    }
-    if (modelled && named && modelState != said && !(modelState == SGRDownloadWaiting && said == SGRDownloadDownloading)) {
-        static NSMutableSet<NSString *> *disagreed;
-        if (!disagreed) disagreed = [NSMutableSet set];
-        if (![disagreed containsObject:mark]) {
-            [disagreed addObject:mark];
-            SGLog(@"redesign kit: download model says %d where the identifier says %@, the model wins", *current,
-                  button.accessibilityIdentifier);
+    // Said once for each combination read, so the first device run shows which of the two signals moved. The
+    // combination read last was said already, so the timers' reads of a button at rest build no mark.
+    static NSString *lastIdentifier;
+    static int lastCurrent = -2;
+    static BOOL lastStored;
+    NSString *identifier = button.accessibilityIdentifier;
+    int currentValue = current ? *current : -1;
+    if (currentValue != lastCurrent || (stored != NULL) != lastStored || ![identifier isEqualToString:lastIdentifier]) {
+        lastIdentifier = identifier;
+        lastCurrent = currentValue;
+        lastStored = stored != NULL;
+        static NSMutableSet<NSString *> *logged;
+        if (!logged) logged = [NSMutableSet set];
+        NSString *mark = [NSString stringWithFormat:@"%@ %d %d", identifier, currentValue, stored != NULL];
+        if (![logged containsObject:mark]) {
+            [logged addObject:mark];
+            SGLog(@"redesign kit: download %@, model %@ state %d progress %@, label \"%@\" value \"%@\"",
+                  identifier, owner ? NSStringFromClass(object_getClass(owner)) : @"missing",
+                  currentValue, stored ? (stored[8] == 0 ? @"set" : @"none") : @"unreadable",
+                  button.accessibilityLabel, button.accessibilityValue);
+        }
+        if (modelled && named && modelState != said && !(modelState == SGRDownloadWaiting && said == SGRDownloadDownloading)) {
+            static NSMutableSet<NSString *> *disagreed;
+            if (!disagreed) disagreed = [NSMutableSet set];
+            if (![disagreed containsObject:mark]) {
+                [disagreed addObject:mark];
+                SGLog(@"redesign kit: download model says %d where the identifier says %@, the model wins", *current, identifier);
+            }
         }
     }
     if (state) *state = result;

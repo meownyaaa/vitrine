@@ -72,7 +72,8 @@ static NSMutableURLRequest *requestFor(NSURL *url, NSDictionary<NSString *, NSSt
     return request;
 }
 
-// The body whatever the status, and the reply it came with; nil for both when there was none.
+// The body whatever the status, and the reply it came with, on the session's own queue so the callers
+// below can read it there before they hand the result to the main queue; nil for both when there was none.
 static void sendForReply(NSURLRequest *request, void (^done)(NSData *body, NSHTTPURLResponse *response)) {
     if (!request) {
         dispatch_async(dispatch_get_main_queue(), ^{ done(nil, nil); });
@@ -83,7 +84,7 @@ static void sendForReply(NSURLRequest *request, void (^done)(NSData *body, NSHTT
         NSHTTPURLResponse *reply = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
         SGLyricsNoteReply(response, error);
         if (error || reply.statusCode >= 400) SGLog(@"lyrics: %@ answered %ld, error %@", url.host, (long)reply.statusCode, error);
-        dispatch_async(dispatch_get_main_queue(), ^{ done(data, reply); });
+        done(data, reply);
     }] resume];
 }
 
@@ -97,22 +98,39 @@ static id jsonIn(NSData *body) {
     return body.length ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil;
 }
 
-void SGLyricsGetJSON(NSURL *url, NSDictionary<NSString *, NSString *> *headers, void (^done)(id root)) {
+static NSString *textIn(NSData *body) {
+    return body.length ? [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding] : nil;
+}
+
+static void onMain(void (^done)(id), id parsed) {
+    dispatch_async(dispatch_get_main_queue(), ^{ done(parsed); });
+}
+
+void SGLyricsGetJSONThen(NSURL *url, NSDictionary<NSString *, NSString *> *headers, id (^parse)(id root), void (^done)(id parsed)) {
     send(requestFor(url, headers), ^(NSData *body) {
-        done(jsonIn(body));
+        onMain(done, parse(jsonIn(body)));
     });
+}
+
+void SGLyricsGetJSON(NSURL *url, NSDictionary<NSString *, NSString *> *headers, void (^done)(id root)) {
+    SGLyricsGetJSONThen(url, headers, ^id(id root) { return root; }, done);
 }
 
 void SGLyricsGetJSONReply(NSURL *url, NSDictionary<NSString *, NSString *> *headers, void (^done)(id root, NSHTTPURLResponse *response)) {
     sendForReply(requestFor(url, headers), ^(NSData *body, NSHTTPURLResponse *reply) {
-        done(jsonIn(body), reply);
+        id root = jsonIn(body);
+        dispatch_async(dispatch_get_main_queue(), ^{ done(root, reply); });
+    });
+}
+
+void SGLyricsGetTextThen(NSURL *url, id (^parse)(NSString *text), void (^done)(id parsed)) {
+    send(requestFor(url, nil), ^(NSData *body) {
+        onMain(done, parse(textIn(body)));
     });
 }
 
 void SGLyricsGetText(NSURL *url, void (^done)(NSString *text)) {
-    send(requestFor(url, nil), ^(NSData *body) {
-        done(body.length ? [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding] : nil);
-    });
+    SGLyricsGetTextThen(url, ^id(NSString *text) { return text; }, done);
 }
 
 void SGLyricsPostJSON(NSURL *url, NSDictionary<NSString *, NSString *> *headers, id body, void (^done)(id root)) {
@@ -123,7 +141,7 @@ void SGLyricsPostJSON(NSURL *url, NSDictionary<NSString *, NSString *> *headers,
     request.HTTPBody = written;
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     send(request, ^(NSData *answer) {
-        done(jsonIn(answer));
+        onMain(done, jsonIn(answer));
     });
 }
 
@@ -443,7 +461,8 @@ static void finish(SGLyricsWalk *walk) {
 // Whether the walk has its answer. walk.merged is the best seen so far: betterLines keeps the finest timed
 // lines, the first in the order among equals, so a walk run to the end takes words over a line's start over
 // plain text. It stops at the first timed answer, or with Prefer word-by-word timing at the first with words
-// timed. A source picked for the track is asked first, and its answer ends the walk in step.
+// timed. A source picked for the track is asked first, and its answer ends the walk in step, as a timed
+// imported LRC does.
 static BOOL settled(SGLyricsWalk *walk) {
     SGLyricsResult *merged = walk.merged;
     if (!(merged.synced && merged.texts.count && merged.karaokeLines.count)) return NO;
@@ -502,11 +521,14 @@ static void step(SGLyricsWalk *walk) {
         }
         // The pick stands timed or not, so a timed source lower in the order cannot replace it. A pick made while
         // the walk runs is left to finish, which keeps the order's answer for Automatic.
-        if (fresh.karaokeLines.count && [provider.key isEqualToString:walk.picked]
-            && [walk.picked isEqualToString:SGLyricsChosenSource(query.trackID)]) {
+        BOOL pick = [provider.key isEqualToString:walk.picked] && [walk.picked isEqualToString:SGLyricsChosenSource(query.trackID)];
+        // The user's own timed file is the answer too: Prefer word-by-word timing looks past the sources' line timing,
+        // not past lyrics the user imported for the song (#111). Below a source as finely timed, the order still wins.
+        BOOL imported = fresh.synced && [provider.key isEqualToString:SGImportedLRCKey] && betterLines(merged, fresh);
+        if (fresh.karaokeLines.count && (pick || imported)) {
             if (!fresh.provider) fresh.provider = provider.name;
             walk.merged = fresh;
-            walk.pickedAnswered = YES;
+            walk.pickedAnswered = pick;
             finish(walk);
             return;
         }

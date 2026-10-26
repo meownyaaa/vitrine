@@ -100,6 +100,11 @@ SGTranslationSource *SGLyricsSaveTranslation(NSString *track, NSString *language
     return [SGTranslationSource by:source.by model:source.model made:now];
 }
 
+BOOL SGLyricsHasSavedTranslation(NSString *track, NSString *language) {
+    if (!track.length || !language.length) return NO;
+    return [NSFileManager.defaultManager fileExistsAtPath:fileFor(track, language).path];
+}
+
 // After any write still queued, so it cannot bring a file back.
 static void deleteQueued(NSURL *url, NSString *what) {
     dispatch_async(writes(), ^{

@@ -21,6 +21,10 @@ id SGKaraokeTrackFor(NSString *trackID) { return nil; }
 UIViewController *SGTopController(void) { return nil; }
 SGModRow *SGMenuRow(NSString *t, NSArray<NSString *> *c, NSString *(^v)(void), void (^ch)(NSInteger)) { return nil; }
 void SGPresentDark(UIViewController *controller) {}
+BOOL SGFlag(NSString *key, BOOL fallback) {
+    id v = [NSUserDefaults.standardUserDefaults objectForKey:key];
+    return v ? [v boolValue] : fallback;
+}
 
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAILED line %d: %s\n", __LINE__, #cond); exit(1); } } while (0)
 

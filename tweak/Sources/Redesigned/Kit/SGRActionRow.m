@@ -44,6 +44,18 @@ static NSString *wordIn(UIView *button) {
     return word;
 }
 
+// The capsule's word, made again only when the text size changes: the header feeds the capsule on every step of its collapse.
+static UIFont *capsuleFont(void) {
+    static UIFont *font;
+    static UIContentSizeCategory madeFor;
+    UIContentSizeCategory category = UIApplication.sharedApplication.preferredContentSizeCategory;
+    if (!font || ![category isEqualToString:madeFor]) {
+        font = SGRFont(UIFontTextStyleSubheadline, UIFontWeightSemibold, UIContentSizeCategoryLarge);
+        madeFor = category;
+    }
+    return font;
+}
+
 #pragma mark - the Play capsule
 
 @implementation SGRPlayCapsule {
@@ -110,7 +122,7 @@ static NSString *wordIn(UIView *button) {
     CGSize size = source.bounds.size;
     UIImageView *glyph = glyphIn(source, MIN(size.width, size.height));
 
-    UIFont *font = SGRFont(UIFontTextStyleSubheadline, UIFontWeightSemibold, UIContentSizeCategoryLarge);
+    UIFont *font = capsuleFont();
     if (![_title.font isEqual:font]) _title.font = font;
     UIColor *content = self.contentColor ?: SGRAccent();
     if (![_title.textColor isEqual:content]) _title.textColor = content;
@@ -203,6 +215,11 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
     [self addTarget:self action:@selector(sgr_down) forControlEvents:UIControlEventTouchDown];
     [self addTarget:self action:@selector(sgr_up) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [self addTarget:self action:@selector(sgr_tap) forControlEvents:UIControlEventTouchUpInside];
+    // Spotify in the background plays on with the page in its window, so the state is not read there: the
+    // poll goes with the app and the way back in reads again, as the way into the window does.
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(sgr_stopFollowing) name:UIApplicationWillResignActiveNotification object:nil];
+    [center addObserver:self selector:@selector(sgr_readAgain) name:UIApplicationDidBecomeActiveNotification object:nil];
     return self;
 }
 
@@ -222,14 +239,23 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
 
 - (void)didMoveToWindow {
     [super didMoveToWindow];
+    [self sgr_readAgain];
+}
+
+// Read again on the way in -- the state may have moved on while the page was away -- and not at all
+// while out of the window.
+- (void)sgr_readAgain {
     if (!_download && _stateShown < 0 && !self.readState) return;
-    // Read again on the way in -- the state may have moved on while the page was away -- and not at all
-    // while out of the window.
     if (self.window && self.source) [self feedFrom:self.source];
     else [self sgr_followDownload:0];
 }
 
+- (void)sgr_stopFollowing {
+    [self sgr_followDownload:0];
+}
+
 - (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     [_downloadTimer invalidate];
 }
 
@@ -261,7 +287,7 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
 
     // Spotify lays nothing out that the page hears as a download moves on, so the state is read again:
     // twice a second while one runs, for the ring, and now and then otherwise, for one started or removed
-    // from elsewhere (the ⋯ sheet). Only while the button is on screen.
+    // from elsewhere (the ⋯ sheet). Only while the button is on screen and the app is active.
     BOOL running = state == SGRDownloadWaiting || state == SGRDownloadDownloading;
     [self sgr_followDownload:self.window ? (running ? 0.5 : 2) : 0];
     return YES;
@@ -305,7 +331,8 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
 
 // Reads the state again every `interval` seconds; 0 stops.
 - (void)sgr_followDownload:(NSTimeInterval)interval {
-    if (interval <= 0) {
+    // A layout while Spotify plays in the background feeds the button too; becoming active reads it again.
+    if (interval <= 0 || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
         [_downloadTimer invalidate];
         _downloadTimer = nil;
         return;
@@ -395,7 +422,7 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
 }
 
 - (void)sgr_tap {
-    if ([self.source.accessibilityIdentifier hasPrefix:SGAlbumQueueButtonPrefix]) SGAlbumQueueMarkSource(self.source);
+    if ([self.source.accessibilityIdentifier hasPrefix:@"Components.UI.ContextMenuButton"]) SGAlbumQueueMarkSource(self.source);
     SGRActivate(self.source);
     // The word is watched where Spotify writes it, but a button that rebuilds its content on the state it
     // just took writes the new word into a label the watch has never seen. So a tap, and only a tap, asks
@@ -449,6 +476,7 @@ SGRMirrorButton *SGRPinnedMoreRecentButton(void) {
     sg_morePage = button.superview;
     sg_moreButton = button;
     sg_moreTappedAt = CACurrentMediaTime();
+    SGAlbumQueueMarkSource(button.superview);
 }
 @end
 

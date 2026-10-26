@@ -10,6 +10,7 @@
 
 static SGAppFont sg_font;
 static NSString *sg_family;   // the chosen family: one iOS carries, or the imported one once Core Text has it
+static NSCache<NSString *, UIFont *> *sg_made;   // the font made for each request of Spotify's: its name, size and weight
 
 // A font name ("SpotifyMixUI-Bold") or family name ("Spotify Mix UI", which is how Spotify's text components ask) of
 // Spotify's: the family name has spaces, and matching only the font name left most of the app in Spotify's font.
@@ -18,10 +19,9 @@ static BOOL spotifys(NSString *name) {
     return [joined hasPrefix:@"CircularSp"] || [joined hasPrefix:@"SpotifyMix"] || [joined hasPrefix:@"Circular"];
 }
 
-// The weight a descriptor asks for: its traits', else its variable font's weight axis ('wght', 100 to 900), else
+// The weight a descriptor's attributes ask for: its traits', else its variable font's weight axis ('wght', 100 to 900), else
 // none, for the name to say.
-static NSNumber *weightAsked(UIFontDescriptor *descriptor) {
-    NSDictionary *attributes = descriptor.fontAttributes;
+static NSNumber *weightAsked(NSDictionary *attributes) {
     NSNumber *trait = attributes[UIFontDescriptorTraitsAttribute][UIFontWeightTrait];
     if ([trait isKindOfClass:NSNumber.class]) return trait;
     NSNumber *axis = attributes[(__bridge NSString *)kCTFontVariationAttribute][@(0x77676874)];   // 'wght'
@@ -108,18 +108,30 @@ static CGFloat fitScale(UIFontWeight weight) {
 
 %hook UIFont
 + (UIFont *)fontWithName:(NSString *)name size:(CGFloat)size {
-    UIFont *font = spotifys(name) ? systemFor(name, size * fitScale(weightOf(name))) : nil;
+    if (!spotifys(name)) return %orig;
+    NSString *key = [NSString stringWithFormat:@"%@ %a", name, size];
+    UIFont *font = [sg_made objectForKey:key];
+    if (!font && (font = systemFor(name, size * fitScale(weightOf(name))))) [sg_made setObject:font forKey:key];
     return font ?: %orig;
 }
 
+// Every font made in the app comes through here, so its attributes are built once. objectForKey: would be no
+// cheaper: it resolves the font, and answers a name, traits and weight axis the descriptor never asked for.
 + (UIFont *)fontWithDescriptor:(UIFontDescriptor *)descriptor size:(CGFloat)size {
-    NSString *name = descriptor.fontAttributes[UIFontDescriptorNameAttribute] ?: descriptor.fontAttributes[UIFontDescriptorFamilyAttribute];
+    NSDictionary *attributes = descriptor.fontAttributes;
+    NSString *name = attributes[UIFontDescriptorNameAttribute] ?: attributes[UIFontDescriptorFamilyAttribute];
     if (!spotifys(name)) return %orig;
-    NSNumber *weight = weightAsked(descriptor);
-    CGFloat points = (size > 0 ? size : descriptor.pointSize) * fitScale(weight ? weight.doubleValue : weightOf(name));
-    UIFont *font = !weight ? systemFor(name, points)
-        : sg_font >= SGAppFontCustom ? family(points, weight.doubleValue)
-        : designed([UIFont systemFontOfSize:points weight:weight.doubleValue]);
+    NSNumber *weight = weightAsked(attributes);
+    CGFloat asked = size > 0 ? size : descriptor.pointSize;
+    NSString *key = [NSString stringWithFormat:@"%@ %a %@", name, asked, weight];
+    UIFont *font = [sg_made objectForKey:key];
+    if (!font) {
+        CGFloat points = asked * fitScale(weight ? weight.doubleValue : weightOf(name));
+        font = !weight ? systemFor(name, points)
+            : sg_font >= SGAppFontCustom ? family(points, weight.doubleValue)
+            : designed([UIFont systemFontOfSize:points weight:weight.doubleValue]);
+        if (font) [sg_made setObject:font forKey:key];
+    }
     return font ?: %orig;
 }
 %end
@@ -180,6 +192,7 @@ NSArray<NSString *> *SGAppFontFamilies(void) {
         }
         sg_family = name;
     }
+    sg_made = [NSCache new];
     %init;
     if (sg_font >= SGAppFontRounded) %init(Designs);
     SGLog(@"fonts: %@ in place of Spotify's", sg_family ?: SGAppFontNames()[sg_font]);

@@ -23,30 +23,25 @@ SGLyricsAsk SGUnisonAsk = ^(SGLyricsQuery *query, void (^done)(SGLyricsResult *r
     }];
     if (query.seconds > 0) search[@"duration"] = @(query.seconds).stringValue;
     if (query.album.length) search[@"album"] = query.album;
-    SGLyricsGetJSON(SGLyricsURL(kAPI, search), nil, ^(id root) {
+    // Read on the session's queue: the TTML is the walk's longest parse. The query is read, never written, here.
+    SGLyricsGetJSONThen(SGLyricsURL(kAPI, search), nil, ^id(id root) {
         id data = [root isKindOfClass:NSDictionary.class] ? root[@"data"] : nil;
         if (![data isKindOfClass:NSDictionary.class]) {
             SGLog(@"unison: no lyrics for %@ by %@", query.title, query.artist);
-            done(nil);
-            return;
+            return nil;
         }
         // Unison also keeps LRC and plain text, which carry nothing the other sources do not.
         if (![data[@"format"] isEqual:@"ttml"]) {
             SGLog(@"unison: %@ by %@ is %@, not ttml", query.title, query.artist, data[@"format"]);
-            done(nil);
-            return;
+            return nil;
         }
         NSInteger length = [data[@"duration"] integerValue];
         if (query.seconds > 0 && length > 0 && labs(length - query.seconds) > kLengthSlack) {
             SGLog(@"unison: %@ is %lds against the track's %lds", query.title, (long)length, (long)query.seconds);
-            done(nil);
-            return;
+            return nil;
         }
         NSArray<SGKaraokeLine *> *lines = SGTTMLLines(data[@"lyrics"]);
-        if (!lines) {
-            done(nil);
-            return;
-        }
+        if (!lines) return nil;
         SGLyricsResult *result = [SGLyricsResult new];
         result.synced = YES;
         result.wordTimed = [data[@"syncType"] isEqual:@"richsync"];
@@ -58,6 +53,6 @@ SGLyricsAsk SGUnisonAsk = ^(SGLyricsQuery *query, void (^done)(SGLyricsResult *r
         result.texts = texts;
         SGLog(@"unison: %@ by %@ has %lu %@ lines (%@ confidence)", query.title, query.artist,
               (unsigned long)lines.count, result.wordTimed ? @"word timed" : @"line timed", data[@"confidence"]);
-        done(result);
-    });
+        return result;
+    }, done);
 };

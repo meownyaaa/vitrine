@@ -68,13 +68,15 @@ static void scaleCover(UIView *tilt, CGFloat scale) {
 #pragma mark - where the cover is
 
 // The tilt view of the cover on screen: the queue is a cover per cell and the cells out of view are
-// kept hidden (player/02.txt:521), so the one showing is the one in a window with nothing hidden over it.
+// kept hidden (player/02.txt:521), so the one showing is the one in a window with nothing hidden over it. On the first
+// open the cells off to the side are not hidden yet, so it must also sit across the screen, not a page off it.
 static UIView *showingTilt(void) {
     for (UIView *tilt in sg_tilts) {
-        if (!tilt.window) continue;
-        BOOL hidden = NO;
-        for (UIView *v = tilt; v && !hidden; v = v.superview) hidden = v.hidden;
-        if (!hidden) return tilt;
+        UIWindow *window = tilt.window;
+        if (!window) continue;
+        if (!SGShownUnder(tilt, nil)) continue;
+        CGFloat middle = CGRectGetMidX([tilt convertRect:tilt.bounds toView:nil]);
+        if (middle >= 0 && middle <= CGRectGetWidth(window.bounds)) return tilt;
     }
     return nil;
 }
@@ -111,11 +113,15 @@ CGRect SGRPlayerArtworkAreaIn(UIView *host) {
 
 // The cover hidden for a stand-in, so the same one comes back if the list moved on meanwhile.
 static __weak UIView *sg_hiddenCover, *sg_hiddenPlate;
+// Asked for while no cover was laid out yet (the first open): the cover is hidden in the layout pass that makes it,
+// so its first frame on screen is already hidden.
+static BOOL sg_coverKeptHidden;
 
 void SGRPlayerSetCoverHidden(BOOL hidden) {
     sg_hiddenCover.alpha = SGRReduceMotion() && SGPlayerState().isPaused ? 0.75 : 1;
     sg_hiddenPlate.alpha = 1;
     sg_hiddenCover = sg_hiddenPlate = nil;
+    sg_coverKeptHidden = hidden;
     if (!hidden) return;
     UIView *tilt = showingTilt();
     UIView *cover = coverIn(tilt);
@@ -247,12 +253,17 @@ static void watchHold(UIView *tilt) {
 %hook _TtC35CreativeWorkCommons_CoverArtTiltKit16CoverArtTiltView
 - (void)layoutSubviews {
     UIView *tilt = (UIView *)self;
-    BOOL player = inCoverCell(tilt);
     %orig;
-    if (tilt.bounds.size.width < kCoverMinWidth || !player) return;
+    // The width first: the bar's and the pages' small tilt views skip the walk up to the cell.
+    if (tilt.bounds.size.width < kCoverMinWidth || !inCoverCell(tilt)) return;
     UIView *cover = coverIn(tilt);
     if (!cover) return;
     [sg_tilts addObject:tilt];
+    // Kept hidden, it is whichever cover is showing: the first open can lay out a second cell in its place. Not animated,
+    // though this pass may run inside Spotify's transition.
+    if (sg_coverKeptHidden && cover != sg_hiddenCover && showingTilt() == tilt) {
+        [UIView performWithoutAnimation:^{ SGRPlayerSetCoverHidden(YES); }];
+    }
     watchHold(tilt);
     SGRPlayerMotionCoverLaidOut();
     // The cover fills the tilt view (01.txt:37); bounds and center, unlike a frame, hold under the scale.

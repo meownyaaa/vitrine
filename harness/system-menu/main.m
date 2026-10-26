@@ -15,10 +15,12 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import "Redesigned/ContextMenu/ContextMenu.h"
+#import "Shared/LyricsSources/LyricsSources.h"
 
 // The album footer is exercised by harness/album-queue and the Spotify simulator test. These
 // player-menu fixtures do not provide an album page or the shared album footer.
 void SGAlbumQueueInstall(UIViewController *menu) {}
+void SGBatchTranslationInstall(UIViewController *menu) {}
 
 void SGRPlayerMenuWatch(UIView *button);
 // touch.m: a finger's touches, through UIKit's own recognizers.
@@ -72,6 +74,17 @@ BOOL SGPlayerMenuAnimatedArtwork(void) { return sg_animated; }
 void SGPlayerMenuSetAnimatedArtwork(BOOL on) { sg_animated = on; NSLog(@"[harness] animated artwork %d", on); }
 static NSUInteger sg_marked;
 void SGPlayerMenuMarkPlayers(void) { sg_marked++; }
+// Lyrics Source (LyricsSources.m, LyricsPick.m): every source off, so the menu offers no Lyrics Source, and the
+// rest is never asked.
+NSString *SGKaraokePlayingTrack(void) { return @"harness"; }
+BOOL SGLyricsEnabled(void) { return NO; }
+NSArray<NSString *> *SGLyricsOrder(void) { return @[]; }
+SGLyricsProvider *SGLyricsProviderFor(NSString *key) { return nil; }
+NSString *SGLyricsCreditFor(NSString *trackID) { return nil; }
+NSString *SGLyricsChosenSource(NSString *trackID) { return nil; }
+NSDictionary<NSString *, SGLyricsResult *> *SGLyricsOffersSoFar(NSString *trackID, NSArray<NSString *> **asking) { return @{}; }
+void SGLyricsChooseSource(NSString *trackID, NSString *key) {}
+void SGLyricsChooseAutomatic(NSString *trackID) {}
 // The player's background (Redesigned/Player/Player.h's SGRPlayerBackgroundKind): Fluid, so the menu offers
 // Animated and the Visualizer; Show Animated Artwork switches it on.
 NSInteger SGRPlayerBackground(void) { return sg_background; }

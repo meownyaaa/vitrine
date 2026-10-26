@@ -78,10 +78,12 @@ void SGRLibraryClearScrim(UIView *header) {
 
 // The header's controls, in the order they are to read from the leading edge, leaving out what this build does
 // not have, what Spotify has hidden (a folder shows play or pause, never both) and what has not been laid out.
-static NSMutableArray<UIView *> *controlsIn(UIView *header, NSArray<NSString *> *identifiers, const void **keys) {
+static NSMutableArray<UIView *> *controlsIn(UIView *header, NSArray<NSString *> *identifiers, const void *const keys[]) {
+    UIView *controls[identifiers.count];
+    SGRFindByIdentifiers(header, identifiers, keys, controls);
     NSMutableArray<UIView *> *found = [NSMutableArray array];
     for (NSUInteger i = 0; i < identifiers.count; i++) {
-        UIView *control = SGRFindByIdentifier(header, identifiers[i], keys[i]);
+        UIView *control = controls[i];
         if (control && !control.hidden && control.alpha > 0.01 && control.bounds.size.width > 1) [found addObject:control];
     }
     return found;

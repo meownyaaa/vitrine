@@ -4,4 +4,8 @@
 
 @interface SPTLinkDispatcherImplementation : NSObject
 - (void)navigateToURI:(NSURL *)uri options:(long long)options interactionID:(id)interactionID;
+- (void)navigateToURI:(NSURL *)uri options:(long long)options reason:(id)reason completionHandler:(id)completionHandler resultHandler:(id)resultHandler;
+- (BOOL)navigateToInternalURI:(NSURL *)uri options:(long long)options reason:(id)reason resultHandler:(id)resultHandler;
+- (void)URISchemeDispatcher:(id)dispatcher showInvalidSpotifyLinkMessageForURI:(NSURL *)uri;
+- (void)URISchemeDispatcher:(id)dispatcher showInvalidLinkMessageForURI:(NSURL *)uri;
 @end

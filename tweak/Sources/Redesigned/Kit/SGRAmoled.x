@@ -36,18 +36,22 @@ static CGColorRef copyBlack(CGColorRef color) {
 
 %hook CAGradientLayer
 - (void)setColors:(NSArray *)colors {
-    NSMutableArray *mapped = [[NSMutableArray alloc] initWithCapacity:colors.count];
+    // Most gradients hold no base gray: those go through as they are, and a copy is made only from the first gray on.
+    NSMutableArray *mapped = nil;
+    NSUInteger index = 0;
     for (id entry in colors) {
         CGColorRef color = (__bridge CGColorRef)entry;
-        if (!isBaseGrey(color)) {
+        if (isBaseGrey(color)) {
+            if (!mapped) mapped = [[colors subarrayWithRange:NSMakeRange(0, index)] mutableCopy];
+            CGColorRef black = copyBlack(color);
+            [mapped addObject:(__bridge id)black];
+            CGColorRelease(black);
+        } else if (mapped) {
             [mapped addObject:entry];
-            continue;
         }
-        CGColorRef black = copyBlack(color);
-        [mapped addObject:(__bridge id)black];
-        CGColorRelease(black);
+        index++;
     }
-    %orig(colors ? mapped : nil);
+    %orig(mapped ?: colors);
 }
 %end
 

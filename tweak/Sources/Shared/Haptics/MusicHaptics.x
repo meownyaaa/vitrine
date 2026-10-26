@@ -207,14 +207,20 @@ static void readFormat(AudioUnit unit) {
     // Spotify starts its output again after every pause; the format is logged when it is not the last one.
     // Spotify's thread and a format change's may both be here.
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
-    static NSString *logged;
-    NSString *text = [NSString stringWithFormat:@"music haptics: listening to Spotify's output at %@, from %@ Spotify hands it%@", formatText(format),
-                      formatText(client), takes ? @"" : [NSString stringWithFormat:@"; not a format the analyzer reads (status %d), nothing plays", (int)status]];
+    static AudioStreamBasicDescription lastFormat, lastClient;
+    static OSStatus lastStatus;
+    static BOOL seen;
     os_unfair_lock_lock(&lock);
-    BOOL changed = ![text isEqualToString:logged];
-    logged = text;
+    BOOL changed = !seen || status != lastStatus || memcmp(&format, &lastFormat, sizeof format) || memcmp(&client, &lastClient, sizeof client);
+    lastFormat = format;
+    lastClient = client;
+    lastStatus = status;
+    seen = YES;
     os_unfair_lock_unlock(&lock);
-    if (changed) SGLog(@"%@", text);
+    if (changed) {
+        SGLog(@"music haptics: listening to Spotify's output at %@, from %@ Spotify hands it%@", formatText(format), formatText(client),
+              takes ? @"" : [NSString stringWithFormat:@"; not a format the analyzer reads (status %d), nothing plays", (int)status]);
+    }
     if (!takes) {
         atomic_store(&sg_layout, 0);
         return;

@@ -109,8 +109,13 @@ static const SGRule rules[] = {
     // Premium account's sets both off (compared on 2026-10-09: the other core-ads values are the same for both).
     {"core-ads", "enable_state_fetch_system", SGRuleForce, NO, NULL},
     {"core-ad-detection", "use_ad_placements_beta", SGRuleForce, NO, NULL},
+    // The Settings page and the core each choose between the old audio.crossfade prefs and the account's Playback
+    // Settings. Both are kept on the old prefs, which the Settings page and AutoMix write; with the core's flag on, the
+    // core reads the account's settings and every write misses (issue #62).
     {"ios-feature-settings", "use_playback_settings_crossfade", SGRuleForce, NO, NULL},
     {"ios-feature-settings", "use_playback_settings_gapless", SGRuleForce, NO, NULL},
+    {"playback-settings", "use_playback_settings_crossfade", SGRuleForce, NO, NULL},
+    {"playback-settings", "use_playback_settings_gapless", SGRuleForce, NO, NULL},
     {NULL, "enable_common_capping", SGRuleRemove, NO, NULL},
     {NULL, "enable_pns_common_capping", SGRuleRemove, NO, NULL},
     {NULL, "enable_pick_and_shuffle_common_capping", SGRuleRemove, NO, NULL},
@@ -357,12 +362,32 @@ static const SGRule rules[] = {
     {"ios-jam-queueintegrationimpl", "enable_jam_capped_premium_queue_banner", SGRuleForce, NO, NULL},
     {"ios-jam-jam", "suppress_add_to_queue_snackbar_for_free_hosted_jams", SGRuleForce, NO, NULL},
     {"ios-sociallistening-configuration-impl", "free_user_enabled_to_host_in_person_jam", SGRuleForce, YES, NULL},
+    // Premium's shuffle settings (smart shuffle can be turned off) and Reshuffle in the queue; Free gets none of them.
+    {"core-player", "enable_shuffle_settings", SGRuleForce, YES, NULL},
+    {"core-player", "enable_user_settings_can_disable_smart_shuffle", SGRuleForce, YES, NULL},
+    {"core-player", "enable_reshuffle_signal", SGRuleForce, YES, NULL},
+    {"ios-feature-queue", "is_reshuffle_enabled", SGRuleForce, YES, NULL},
+    // Smart shuffle stays on in a Jam, as on Premium.
+    {"ios-system-smartshuffle", "allow_smart_shuffle_in_jams", SGRuleForce, YES, NULL},
+    {"core-player", "disable_smart_shuffle_when_in_jam", SGRuleForce, NO, NULL},
 };
 static const size_t ruleCount = sizeof(rules) / sizeof(rules[0]);
+// The rules' scope and name as NSStrings, made once: every rule is tried against every entry of a config.
+static NSString *ruleScopes[sizeof(rules) / sizeof(rules[0])], *ruleNames[sizeof(rules) / sizeof(rules[0])];
 
-static BOOL ruleMatches(const SGRule *rule, NSString *scope, NSString *name) {
-    if (rule->scope && ![scope isEqualToString:@(rule->scope)]) return NO;
-    return !rule->name || [name isEqualToString:@(rule->name)];
+static void boxRules(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        for (size_t i = 0; i < ruleCount; i++) {
+            ruleScopes[i] = rules[i].scope ? @(rules[i].scope) : nil;
+            ruleNames[i] = rules[i].name ? @(rules[i].name) : nil;
+        }
+    });
+}
+
+static BOOL ruleMatches(size_t i, NSString *scope, NSString *name) {
+    if (ruleScopes[i] && ![scope isEqualToString:ruleScopes[i]]) return NO;
+    return !ruleNames[i] || [name isEqualToString:ruleNames[i]];
 }
 
 // A false BoolValue is an empty message, as protobuf writes it.
@@ -381,6 +406,8 @@ static void setValue(NSMutableArray<SGPBField *> *value, SGPBField *replacement)
 // Free account in this country is told, to set beside a Premium one when ads still play. Names and values only;
 // replaced by each fetch.
 static void keepLiveConfiguration(NSArray<SGPBField *> *fields) {
+    static BOOL loggedCrossfadeFlag;
+    NSString *crossfadeFlag = nil;
     NSMutableString *text = [NSMutableString string];
     for (SGPBField *field in fields) {
         NSArray<SGPBField *> *value = field.number == 3 && field.wire == 2 ? SGPBParse(field.payload) : nil;
@@ -390,7 +417,14 @@ static void keepLiveConfiguration(NSArray<SGPBField *> *fields) {
         if (SGPBFirst(value, 3)) shown = SGPBFirst(SGPBParse(SGPBFirst(value, 3).payload), 1).varint ? @"true" : @"false";
         else if (SGPBFirst(value, 4)) shown = @(SGPBFirst(SGPBParse(SGPBFirst(value, 4).payload), 1).varint).stringValue;
         else if (SGPBFirst(value, 5)) shown = SGPBText(SGPBFirst(SGPBParse(SGPBFirst(value, 5).payload), 1)) ?: @"";
-        [text appendFormat:@"%@.%@ = %@\n", SGPBText(SGPBFirst(parts, 1)) ?: @"", SGPBText(SGPBFirst(parts, 2)) ?: @"", shown];
+        NSString *scope = SGPBText(SGPBFirst(parts, 1)) ?: @"", *name = SGPBText(SGPBFirst(parts, 2)) ?: @"";
+        if (!loggedCrossfadeFlag && [scope isEqualToString:@"playback-settings"] && [name isEqualToString:@"use_playback_settings_crossfade"]) crossfadeFlag = shown;
+        [text appendFormat:@"%@.%@ = %@\n", scope, name, shown];
+    }
+    // The core flag behind issue #62, as the server sent it, once a launch; live-config.txt shows a fetch without it.
+    if (crossfadeFlag) {
+        loggedCrossfadeFlag = YES;
+        SGLog(@"premium: server sent playback-settings.use_playback_settings_crossfade = %@", crossfadeFlag);
     }
     NSURL *caches = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL *folder = [caches URLByAppendingPathComponent:@"Vitrine" isDirectory:YES];
@@ -402,6 +436,7 @@ static NSData *patchConfiguration(NSData *configuration) {
     NSMutableArray<SGPBField *> *fields = SGPBParse(configuration);
     if (!fields) return nil;
     keepLiveConfiguration(fields);
+    boxRules();
     NSMutableArray<SGPBField *> *out = [NSMutableArray array];
     NSMutableSet<NSString *> *present = [NSMutableSet set];
     for (SGPBField *field in fields) {
@@ -415,7 +450,7 @@ static NSData *patchConfiguration(NSData *configuration) {
         NSString *scope = SGPBText(SGPBFirst(parts, 1)) ?: @"", *name = SGPBText(SGPBFirst(parts, 2)) ?: @"";
         BOOL removed = NO;
         for (size_t i = 0; i < ruleCount && !removed; i++) {
-            if (!ruleMatches(&rules[i], scope, name)) continue;
+            if (!ruleMatches(i, scope, name)) continue;
             switch (rules[i].kind) {
                 case SGRuleRemove: removed = YES; break;
                 case SGRuleSet:

@@ -85,11 +85,16 @@ static UIView *artHolderIn(UIView *row) {
     return found;
 }
 
-static void applyRow(UIView *cell) {
+// A playlist's row is an Encore.ListRow; the songs liked by one artist have a Track.Row of the same kit.
+static UIView *rowIn(UIView *cell) {
+    return identified(cell, @"Encore.ListRow", &kRowKey) ?: identified(cell, @"Track.Row", &kTrackRowKey);
+}
+
+// YES when the cell holds a track row.
+static BOOL applyRow(UIView *cell) {
     clearSurface(cell);
-    // A playlist's row is an Encore.ListRow; the songs liked by one artist have a Track.Row of the same kit.
-    UIView *row = identified(cell, @"Encore.ListRow", &kRowKey) ?: identified(cell, @"Track.Row", &kTrackRowKey);
-    if (!row) return;
+    UIView *row = rowIn(cell);
+    if (!row) return NO;
     clearSurface(row);
 
     CGFloat leading = SGRSideMargin + 48 + kHairlineGap;
@@ -112,6 +117,7 @@ static void applyRow(UIView *cell) {
     });
 
     applyHairline(row, leading);
+    return YES;
 }
 
 %hook _TtC35ListUXPlatform_FreeTierPlaylistImpl25ElementCollectionViewCell
@@ -120,8 +126,8 @@ static void applyRow(UIView *cell) {
     UIView *cell = (UIView *)self;
     if (!SGRPlaylistHeaderOf(cell)) return;
     SGRClearCellPaint(cell);
-    SGRPlaylistTakeCuration(cell);
-    applyRow(cell);
+    // A track row is not the curation row, so only the other cells are searched for its toolbar.
+    if (!applyRow(cell)) SGRPlaylistTakeCuration(cell);
 }
 
 - (UICollectionViewLayoutAttributes *)preferredLayoutAttributesFittingAttributes:(UICollectionViewLayoutAttributes *)attributes {

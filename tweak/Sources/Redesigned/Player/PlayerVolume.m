@@ -1,25 +1,55 @@
-// Player redesign: a volume slider under the controls, as the Music app has. It is MPVolumeView, as the HIG asks
-// (sliders.md, playing-audio.md), so it is the system's volume: the hardware buttons move it, and while Spotify plays
-// on a Connect device it is that device's, which Spotify hands iOS through its remote volume. No route button: the
-// footer's Connect glyph is the route.
+// Player redesign: a volume slider under the controls, as the Music app has. The row draws its own pill: it grows while
+// held, its glyphs move out, a drag anywhere on the row moves the volume by the finger's travel, and VoiceOver steps it.
+// Under it sits a hidden MPVolumeView whose slider the row reads and moves, so it is the system's volume: the hardware
+// buttons move it. A Connect device's own volume reaches Spotify, not iOS, so the row does not show it. No route
+// button: the footer's Connect glyph is the route.
 //
 // It sits in Spotify's bottom stack, outside its arranged views, between the controls and the footer row, so the
 // lyrics fade it with the rest of the stack (PlayerLyrics.x) and its touches stay inside the stack. The footer's
 // lowerRow (PlayerFooter.x) places it after the moves, and keeps the controls where Spotify put them to make the room.
+// The stack's own layout runs that pass again (SGRObserveLayout): the stack moves its arranged views around with no pass
+// of the footer (the lyrics, a track whose title wraps, a row that comes or goes), and the row stayed where the stack
+// once had them, over the controls (continuous/1.txt: the row at 188 of a stack whose controls end at 212).
+#import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Player.h"
 
-// The track's height, the glyphs' point size and the gap between a glyph and the track.
-static const CGFloat kRowHeight = 34, kGlyphSize = 13, kGlyphGap = 10, kTrack = 4;
+// The row's height (the touch area) and the glyphs' point size and gap to the track.
+static const CGFloat kRowHeight = 32, kGlyphSize = 13, kGlyphGap = 10;
 // Half the footer glyphs' height: the row stops this far above their middle.
 static const CGFloat kGlyphsHalf = 14;
+// The track's height at rest and held, how far it grows past each end, how far the glyphs move out and by how much they
+// scale (each clamped to the room the row has on that side). Music's own held numbers are 18, 7, 9 and 1.08.
+static const CGFloat kTrackRest = 7, kTrackHeld = 12, kStretch = 5, kGlyphShift = 6, kGlyphHeldScale = 1.02;
+// White's opacity: the fill at rest and held, the empty part, the glyphs at rest (held they are full white).
+static const CGFloat kFillRest = 0.65, kFillHeld = 1, kEmpty = 0.24, kGlyphRest = 0.68;
 
-// iOS 26's thumbless slider is the one the progress bar above and the Music app's volume use: it grows under the finger
-// and drags from anywhere on the track. MPVolumeView makes its slider when it lays out and may make another later, so
-// the style goes on after each of its layouts.
+static char kSessionContext;
+
+static UIImageView *glyph(NSString *symbol) {
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:kGlyphSize weight:UIImageSymbolWeightSemibold];
+    UIImageView *view = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
+    view.tintColor = UIColor.whiteColor;
+    view.alpha = kGlyphRest;
+    view.contentMode = UIViewContentModeCenter;
+    view.isAccessibilityElement = NO;
+    return view;
+}
+
+@interface SGRVolumeRow : UIControl
+// The footer row it was last placed against, for the stack's layout. Weak: the stack owns it.
+@property (nonatomic, weak) UIView *footer;
+- (UISlider *)systemSlider;
+- (void)systemSliderSet;
+@end
+
+// MPVolumeView makes its slider when it lays out and may make another later, for example after a route change, so the
+// row looks for it again after each of its layouts.
 @interface SGRVolumeView : MPVolumeView
 @end
 
@@ -27,94 +57,264 @@ static const CGFloat kGlyphsHalf = 14;
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    if (@available(iOS 26.0, *)) {
-        for (UISlider *slider in self.subviews) {
-            if (![slider isKindOfClass:UISlider.class] || slider.sliderStyle == UISliderStyleThumbless) continue;
-            slider.sliderStyle = UISliderStyleThumbless;
-            slider.minimumTrackTintColor = UIColor.whiteColor;
-            slider.maximumTrackTintColor = [UIColor colorWithWhite:1 alpha:0.22];
-        }
-    }
-    // The row's glyphs follow the slider, which this layout may have made or moved.
-    [self.superview setNeedsLayout];
+    [(SGRVolumeRow *)self.superview systemSlider];
 }
 
-@end
-
-@interface SGRVolumeRow : UIView
 @end
 
 @implementation SGRVolumeRow {
-    MPVolumeView *_volume;
+    MPVolumeView *_system;
+    UISlider *_systemSlider;
+    UIView *_track, *_fill;
     UIImageView *_quiet, *_loud;
-}
-
-static UIImage *trackImage(UIColor *color) {
-    CGFloat side = kTrack;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(side, side)];
-    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-        [color setFill];
-        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, side, side) cornerRadius:side / 2] fill];
-    }];
-    return [image resizableImageWithCapInsets:UIEdgeInsetsMake(0, side / 2, 0, side / 2)];
-}
-
-static UIImage *thumbImage(void) {
-    CGFloat side = 14;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(side, side)];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-        [UIColor.whiteColor setFill];
-        [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(0, 0, side, side)] fill];
-    }];
-}
-
-static UIImageView *glyph(NSString *symbol) {
-    UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:kGlyphSize weight:UIImageSymbolWeightSemibold];
-    UIImageView *view = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
-    view.tintColor = [UIColor colorWithWhite:1 alpha:0.6];
-    view.contentMode = UIViewContentModeCenter;
-    view.isAccessibilityElement = NO;
-    return view;
+    CGFloat _value, _startValue, _startX, _trackMin, _trackMax;
+    BOOL _held;
+    CFTimeInterval _lastPush;
+    NSHashTable<UIGestureRecognizer *> *_suspended;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
-    _volume = [SGRVolumeView new];
+    // Only plumbing: the slider inside moves the system's volume, nobody sees or touches the view.
+    _system = [SGRVolumeView new];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    _volume.showsRouteButton = NO;
+    _system.showsRouteButton = NO;
 #pragma clang diagnostic pop
-    if (@available(iOS 26.0, *)) {
-    } else {
-        [_volume setMinimumVolumeSliderImage:trackImage(UIColor.whiteColor) forState:UIControlStateNormal];
-        [_volume setMaximumVolumeSliderImage:trackImage([UIColor colorWithWhite:1 alpha:0.22]) forState:UIControlStateNormal];
-        [_volume setVolumeThumbImage:thumbImage() forState:UIControlStateNormal];
-    }
+    _system.alpha = 0.01;
+    _system.userInteractionEnabled = NO;
+    [self addSubview:_system];
+
+    _track = [UIView new];
+    _track.clipsToBounds = YES;
+    _track.userInteractionEnabled = NO;
+    _track.layer.cornerCurve = kCACornerCurveContinuous;
+    _track.backgroundColor = [UIColor colorWithWhite:1 alpha:kEmpty];
+    _fill = [UIView new];
+    _fill.userInteractionEnabled = NO;
+    [_track addSubview:_fill];
+    [self addSubview:_track];
+
     _quiet = glyph(@"speaker.fill");
     _loud = glyph(@"speaker.wave.3.fill");
     [self addSubview:_quiet];
-    [self addSubview:_volume];
     [self addSubview:_loud];
+
+    _value = AVAudioSession.sharedInstance.outputVolume;
+    [AVAudioSession.sharedInstance addObserver:self forKeyPath:@"outputVolume" options:NSKeyValueObservingOptionNew
+                                       context:&kSessionContext];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refreshFromSystem)
+                                               name:UIApplicationDidBecomeActiveNotification object:nil];
+
+    self.isAccessibilityElement = YES;
+    self.accessibilityLabel = @"Volume";
+    self.accessibilityTraits = UIAccessibilityTraitAdjustable;
     return self;
+}
+
+- (void)dealloc {
+    [self restoreAncestorGestures];
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    [AVAudioSession.sharedInstance removeObserver:self forKeyPath:@"outputVolume" context:&kSessionContext];
+}
+
+// The volume view builds its slider itself and may replace it, so the one it has now is looked for each time.
+- (UISlider *)systemSlider {
+    UISlider *current = nil;
+    for (UIView *view in _system.subviews) {
+        if (![view isKindOfClass:UISlider.class]) continue;
+        current = (UISlider *)view;
+        break;
+    }
+    if (current == _systemSlider) return current;
+
+    _systemSlider = current;
+    // Hide the system slider's visible artwork.
+    current.thumbTintColor = UIColor.clearColor;
+    current.minimumTrackTintColor = UIColor.clearColor;
+    current.maximumTrackTintColor = UIColor.clearColor;
+    return current;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != &kSessionContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{ [self refreshFromSystem]; });
+}
+
+// Our own pushVolume sets the slider too, and refreshFromSystem skips that echo.
+- (void)systemSliderSet {
+    [self refreshFromSystem];
+}
+
+- (void)refreshFromSystem {
+    // Not while the finger is on it, nor just after it let go: the system settles on its own steps a moment later.
+    if (_held || CACurrentMediaTime() - _lastPush < 0.6) return;
+    UISlider *slider = [self systemSlider];
+    CGFloat system = slider ? slider.value : AVAudioSession.sharedInstance.outputVolume;
+    if (fabs(system - _value) > 0.002) [self setValue:system fromUser:NO];
+}
+
+// The KVO the system sends as it settles falls inside the guard above, so the row reads it once the guard has passed.
+- (void)refreshAfterPush {
+    __weak SGRVolumeRow *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.65 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf refreshFromSystem];
+    });
+}
+
+- (void)pushVolume {
+    UISlider *slider = [self systemSlider];
+    if (!slider) return;
+    _lastPush = CACurrentMediaTime();
+    [slider setValue:_value animated:NO];
+    [slider sendActionsForControlEvents:UIControlEventValueChanged];
+}
+
+// The room the row has to either side inside its stack: what the held track and glyphs may grow into.
+- (CGFloat)roomLeft { return MAX(0, CGRectGetMinX(self.frame)); }
+
+- (CGFloat)roomRight {
+    UIView *stack = self.superview;
+    return stack ? MAX(0, stack.bounds.size.width - CGRectGetMaxX(self.frame)) : 0;
+}
+
+// The track's frame for the state it is in: it grows past both ends while held.
+- (void)syncTrack {
+    CGFloat height = _held ? kTrackHeld : kTrackRest;
+    CGFloat left = _held ? MIN(kStretch, [self roomLeft]) : 0, right = _held ? MIN(kStretch, [self roomRight]) : 0;
+    CGFloat scale = self.traitCollection.displayScale ?: 3;
+    CGFloat top = round((CGRectGetMidY(self.bounds) - height / 2) * scale) / scale;
+    _track.frame = CGRectMake(_trackMin - left, top, MAX(0, _trackMax - _trackMin) + left + right, height);
+    _track.layer.cornerRadius = height / 2;
+    [self syncFill];
+}
+
+// The fill is a plain rectangle the pill's clipping rounds, so its right edge stays straight, as in Music.
+- (void)syncFill {
+    CGSize size = _track.bounds.size;
+    _fill.frame = CGRectMake(0, 0, size.width * _value, size.height);
+}
+
+- (void)syncStyle {
+    _fill.backgroundColor = [UIColor colorWithWhite:1 alpha:_held ? kFillHeld : kFillRest];
+    CGFloat scale = _held ? kGlyphHeldScale : 1;
+    CGFloat left = _held ? MIN(kGlyphShift, [self roomLeft]) : 0, right = _held ? MIN(kGlyphShift, [self roomRight]) : 0;
+    CGAffineTransform grown = CGAffineTransformMakeScale(scale, scale);
+    _quiet.transform = CGAffineTransformConcat(grown, CGAffineTransformMakeTranslation(-left, 0));
+    _loud.transform = CGAffineTransformConcat(grown, CGAffineTransformMakeTranslation(right, 0));
+    _quiet.alpha = _loud.alpha = _held ? 1 : kGlyphRest;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect bounds = self.bounds;
-    CGFloat side = kRowHeight, middle = CGRectGetMidY(bounds);
-    CGFloat left = side / 2 + kGlyphSize / 2 + kGlyphGap, right = CGRectGetMaxX(bounds) - side / 2 - kGlyphSize - kGlyphGap;
-    // MPVolumeView draws its slider at the top of its bounds, not in the middle: it gets the slider's own height,
-    // centered, so the track lines up with the glyphs (it sat 9pt above them).
-    CGFloat sliderHeight = MIN(side, [_volume sizeThatFits:CGSizeMake(MAX(0, right - left), side)].height ?: side);
-    _volume.frame = CGRectMake(left, round(middle - sliderHeight / 2), MAX(0, right - left), sliderHeight);
-    // MPVolumeView places its slider off its own middle (8pt above it on iOS 26, issue #86) and the track is centered
-    // in the slider, so the glyphs stand on the slider's middle.
-    CGFloat glyphs = middle;
-    for (UISlider *slider in _volume.subviews) {
-        if ([slider isKindOfClass:UISlider.class]) glyphs = CGRectGetMidY([_volume convertRect:slider.frame toView:self]);
+    CGFloat side = kRowHeight, middle = CGRectGetMidY(bounds), glyphWidth = side / 2 + kGlyphSize / 2;
+    _system.frame = CGRectMake(0, 0, MAX(140, bounds.size.width), side);
+    [_system layoutIfNeeded];
+    [self systemSlider];
+    CGFloat loudMin = CGRectGetMaxX(bounds) - side / 2 - kGlyphSize;
+    _quiet.bounds = CGRectMake(0, 0, glyphWidth, side);
+    _loud.bounds = CGRectMake(0, 0, glyphWidth, side);
+    _quiet.center = CGPointMake(glyphWidth / 2, middle);
+    _loud.center = CGPointMake(loudMin + glyphWidth / 2, middle);
+    _trackMin = glyphWidth + kGlyphGap;
+    _trackMax = loudMin - kGlyphGap;
+    [self syncTrack];
+    [self syncStyle];
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (!self.window) {
+        // A lock or a call can take the row off screen mid-drag, and then end or cancel tracking may not come.
+        [self setHeld:NO];
+        return;
     }
-    _quiet.frame = CGRectMake(0, glyphs - side / 2, side / 2 + kGlyphSize / 2, side);
-    _loud.frame = CGRectMake(CGRectGetMaxX(bounds) - side / 2 - kGlyphSize, glyphs - side / 2, side / 2 + kGlyphSize, side);
+    [self systemSlider];
+    [self refreshFromSystem];
+}
+
+// Prevent the player from stealing volume swipe gesture.
+- (void)suspendAncestorGestures {
+    if (_suspended) return;
+    _suspended = [NSHashTable weakObjectsHashTable];
+    for (UIView *view = self.superview; view; view = view.superview) {
+        for (UIGestureRecognizer *recognizer in view.gestureRecognizers) {
+            BOOL pan = [recognizer isKindOfClass:UIPanGestureRecognizer.class];
+            if (!pan || [recognizer isKindOfClass:UIScreenEdgePanGestureRecognizer.class] || !recognizer.enabled) continue;
+            recognizer.enabled = NO;
+            [_suspended addObject:recognizer];
+        }
+    }
+}
+
+- (void)restoreAncestorGestures {
+    for (UIGestureRecognizer *recognizer in _suspended) recognizer.enabled = YES;
+    _suspended = nil;
+}
+
+- (void)setValue:(CGFloat)value fromUser:(BOOL)fromUser {
+    value = MIN(1, MAX(0, value));
+    _value = value;
+    if (!fromUser && !_held && self.window) {
+        UIViewAnimationOptions options = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction |
+                                         UIViewAnimationOptionCurveEaseOut;
+        [UIView animateWithDuration:0.15 delay:0 options:options animations:^{ [self syncFill]; } completion:nil];
+    } else {
+        [self syncFill];
+    }
+    if (fromUser) [self pushVolume];
+}
+
+- (void)setHeld:(BOOL)held {
+    if (_held == held) return;
+    _held = held;
+    if (held) {
+        [self suspendAncestorGestures];
+    } else {
+        [self restoreAncestorGestures];
+        [self refreshAfterPush];
+    }
+    void (^apply)(void) = ^{ [self syncTrack]; [self syncStyle]; };
+    UIViewAnimationOptions options = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
+    if (held) {
+        [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:options
+                         animations:apply completion:nil];
+    } else {
+        [UIView animateWithDuration:0.16 delay:0 options:options | UIViewAnimationOptionCurveEaseOut
+                         animations:apply completion:nil];
+    }
+}
+
+- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    _startX = [touch locationInView:self].x;
+    _startValue = _value;
+    [self setHeld:YES];
+    return YES;
+}
+
+// Relative to where the finger came down: the value moves by the finger's travel over the track's length.
+- (BOOL)continueTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    CGFloat span = MAX(1, _trackMax - _trackMin);
+    [self setValue:_startValue + ([touch locationInView:self].x - _startX) / span fromUser:YES];
+    return YES;
+}
+
+- (void)endTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event { [self setHeld:NO]; }
+- (void)cancelTrackingWithEvent:(UIEvent *)event { [self setHeld:NO]; }
+
+- (NSString *)accessibilityValue { return [NSString stringWithFormat:@"%d%%", (int)round(_value * 100)]; }
+- (void)accessibilityIncrement {
+    [self setValue:_value + 0.0625 fromUser:YES];
+    [self refreshAfterPush];
+}
+
+- (void)accessibilityDecrement {
+    [self setValue:_value - 0.0625 fromUser:YES];
+    [self refreshAfterPush];
 }
 
 @end
@@ -162,8 +362,14 @@ BOOL SGRPlayerPlaceVolume(UIView *stack, UIView *controls, UIView *row, CGFloat 
     if (!volume) {
         volume = [SGRVolumeRow new];
         objc_setAssociatedObject(stack, &kVolumeKey, volume, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        SGRObserveLayout(stack, ^(UIView *laidOut) {
+            SGRVolumeRow *placed = objc_getAssociatedObject(laidOut, &kVolumeKey);
+            UIView *footer = placed.footer;
+            if (footer.superview == laidOut) SGRPlayerLowerRow(footer);
+        });
     }
     if (volume.superview != stack) [stack addSubview:volume];
+    volume.footer = row;
     // Halfway between the play button's bottom and the footer glyphs' top, each where it is drawn (convertRect: takes
     // the moves' transforms in). Without the button there is nothing to stand under: a guess from the controls' unit
     // put the row across the buttons on an iPhone 13 Pro with iOS 17 (issue #32) and took their taps, so no row.
@@ -185,9 +391,18 @@ BOOL SGRPlayerPlaceVolume(UIView *stack, UIView *controls, UIView *row, CGFloat 
     if (moved) volume.frame = frame;
     settle(stack, row, moved, frame);
     // The lyrics fade the stack's views by their alpha and bring back only the ones they faded.
-    // The track and thumb are 14pt of the row's 34: it fits with the glyphs' and buttons' own clearance around it.
+    // The track is 7pt of the row's 32: it fits with the glyphs' and buttons' own clearance around it.
     BOOL fits = room >= height * 0.6;
     if (!fits) volume.alpha = 0;
     else if (volume.alpha < 0.01 && controls.alpha > 0.99) volume.alpha = 1;
     return fits;
+}
+
+// MPVolumeSlider takes an outside change (AirPlay, Connect) through super's setValue:animated:, which sends no KVO, and
+// sends ValueChanged only when the change shows the system's HUD, which Spotify's own Connect HUD turns off.
+void SGRPlayerVolumeSliderSet(UISlider *slider) {
+    UIView *row = slider.superview.superview;
+    if (![slider.superview isKindOfClass:SGRVolumeView.class] || ![row isKindOfClass:SGRVolumeRow.class]) return;
+    if (slider != ((SGRVolumeRow *)row).systemSlider) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ [(SGRVolumeRow *)row systemSliderSet]; });
 }

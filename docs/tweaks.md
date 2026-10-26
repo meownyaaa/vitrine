@@ -19,11 +19,12 @@
                                 backup and signing, the welcome tour
     tweak/Sources/Diagnostics/  screen dumps, the tree server, the phone driver and the main thread hang sampler of FLEX builds
     extension/LiveActivity/     the Live Activity widget, a WidgetKit extension of its own
-    extension/AppGroups/        a dylib loaded by Spotify and its home screen widget that moves Spotify's App Groups
-                                into a group the re-signed IPA has; without it the widget stays a placeholder
+    extension/AppGroups/        a dylib loaded by Spotify and its widget, Siri and notification extensions that moves
+                                Spotify's App Groups and its extension-credentials keychain group into groups the
+                                re-signed IPA has; without it the widget stays a placeholder and Siri asks to verify
     scripts/                    pipeline.sh (build + inject), build-extension.sh (the widget extension, without an
                                 Xcode project), merge-appintents.py (the widget's intents into Spotify's), insert-dylib.py (a load command into
-                                Spotify's widget), install.sh (sign + install), record-trees.py, record-session.py,
+                                Spotify's extensions), install.sh (sign + install), record-trees.py, record-session.py,
                                 dump-log.sh, extract-flags.py, check-layers.sh (the one-way imports between layers)
     trees/                      recorded view trees, one per screen; the input for every new hook. trees/clean/ holds
                                 the numbered snapshots per screen of record-session.py, taken of Spotify as it came
@@ -80,7 +81,9 @@ Shared:
     AdBlock/      EeveeSpotify's ad blocking: the ad and upsell services silenced (AdServices.x), ad components out of the
                   Hub JSON (AdHubs.x) and the feeds (Feeds.m), Premium pop-ups dropped (AdPopups.x), and the responses
                   rewritten on the way in (AdNetwork.x, Premium.m over the protobuf walker in Protobuf.m), with crossfade
-                  and automix switched on in the player core and crossfade's switch kept in step with its slider (Crossfade.x).
+                  and automix switched on in the player core, the core and Settings both kept on the audio.crossfade
+                  prefs rather than the account's Playback Settings, and crossfade's switch kept in step with its
+                  slider (Crossfade.x).
                   With Spoof Premium on, RadioModes.m enables shuffle and repeat for radio/autoplay in either look:
                   only restrictions made entirely of radio, endless_context and autoplay are allowed.
                   Raw reason sets remain intact when Spotify copies its state. Positive radio evidence survives
@@ -152,17 +155,21 @@ Shared:
                   source won, Spotify's own included: matched by the line's folded text, as copies kept in place of the
                   lines (KaraokeSource.x), which the view picks up. The walk stops at the first timed answer; with
                   Prefer word-by-word timing (off by default, read by every walk) it asks on to the first source with
-                  words timed and else keeps the finest it saw, the highest among equals (settled()). The redesigned
+                  words timed and else keeps the finest it saw, the highest among equals (settled()); a timed imported
+                  LRC above every source as finely timed ends it too (#111). The redesigned
                   player's ⋯ has Lyrics Source (LyricsPick.m): every source asked at once for the song playing, a pick
                   shown at once and kept in memory until Spotify quits, and Automatic putting back what the order chose
     LyricsTranslation/ a song's lines translated from the lyrics' corner menu, for the lines no source translated, three
                   ways, each its own item: on the iPhone by Apple's Translate (iOS 26, the song's language told by
-                  NaturalLanguage, both languages downloaded in the Translate app or the item says where to) and by Apple
+                  NaturalLanguage, both languages downloaded: a missing pair brings up Apple's download sheet, and if they are
+                  still missing the alert offers Open Settings) and by Apple
                   Intelligence's model (iOS 26 where it is on and speaks the language; permissive guardrails for changing
                   the user's own text, 12 lines a session, greedy and capped at 60 tokens a line, exactly one string a line by a generation schema; Translate retried once, as its first ask can fail while it loads), both in
-                  OnDeviceTranslation.swift, the frameworks weak linked; and by an AI translator on the user's own key, picked on the Lyrics page (SGKeyAITranslator): Gemini, an OpenAI-compatible server (chat completions; OpenAI's unless a server URL is given, such as OpenRouter's or an Ollama on the network, which Spotify's ATS allows for local addresses) or Anthropic (the Messages API). Each provider is one entry of LyricsTranslation.m's table: its Keychain slot (one key each, never in the settings, so an export never has one), its model presets (the cheapest first; OpenAI-compatible has none and needs a model), its request and its reply's reader. The answer's shape is forced where the API can (Gemini a bare array, the others {"lines": [...]} by a strict schema), the reader takes either, and a 400 that names an optional field (Gemini's thinking level, OpenAI's schema or reasoning effort, Anthropic's output_config) is asked once more without them. The prompt is shared (Vitrine's with {language} and {count}, editable in a sheet, SGKeyAIPrompt) and the provider adds its sentence on the answer's shape; the model (spotifyglass.lyrics.<id>.model) and the server are read at each ask and checked as they are read, and the log names the provider, the model, the host and the prompt's SHA-256 prefix, never the key. Temperature is not offered: Anthropic's API turns it down and OpenAI's reasoning models take only the default. The menu item says where the lyrics go. Translate on iPhone and Apple Intelligence each have a switch that leaves them out of the menu (SGKeyLyricsTranslateOnDevice, SGKeyLyricsAppleIntelligence, both on). A translation that reads the same as its line (SGLyricsBareText) is not drawn under it, and the line still counts as translated. The translate items show for every song with Translate any song on (SGKeyLyricsTranslateEverySong, off), else only for a song NaturalLanguage finds in another language than the Lyrics page's (or the iPhone's): one distinct line in five it is at least 80% sure of, or two in another script (a verse in Hangul among English), not the whole song's guess (short lines sway that: Havana reads as Dutch), so songs half in English count and a repeated chorus weighs as one line; Translate on iPhone translates from the language most of those lines are in and leaves lines already in the target as they are. Apple Intelligence's lines show and are saved a batch at a time, only lines without a translation are sent, and a batch it turns down is skipped (asking again sends only those lines). Every finished translation is kept by SavedTranslations.m in Caches/Vitrine/Translations, one JSON file a song and language with each line's text to its translation under "lines" and who made it and when ("by", "model", "made"; a file from before has the lines alone and reads as Unknown), the newest 200, synced when the song's lines are shown: each line knows whether its translation was made here (SGKaraokeLine.translationMade), and a made one with nothing saved is taken off, so the Lyrics page's Saved translations row deletes them at once, posting SGLyricsTranslationsDidChangeNotification as Translate any song does for the open lyrics to sync and redraw. The translate menu names who made a saved translation and when, and for one an AI made (or no one known) offers Delete This Translation, which removes the song's file and the launch's answer for it, so asking again sends the song. Gemini's reply read and checked on the Mac
+                  OnDeviceTranslation.swift (prepareLanguageDownload, openTranslateSettings), the frameworks weak linked; and by an AI translator on the user's own key, picked on the Lyrics page (SGKeyAITranslator): Gemini, an OpenAI-compatible server (chat completions; OpenAI's unless a server URL is given, such as OpenRouter's or an Ollama on the network, which Spotify's ATS allows for local addresses) or Anthropic (the Messages API). Each provider is one entry of LyricsTranslation.m's table: its Keychain slot (one key each, never in the settings, so an export never has one), its model presets (the cheapest first; OpenAI-compatible has none and needs a model), its request and its reply's reader. The answer's shape is forced where the API can (Gemini a bare array, the others {"lines": [...]} by a strict schema), the reader takes either, and a 400 that names an optional field (Gemini's thinking level, OpenAI's schema or reasoning effort, Anthropic's output_config) is asked once more without them. The prompt is shared (Vitrine's with {language} and {count}, editable in a sheet, SGKeyAIPrompt) and the provider adds its sentence on the answer's shape; the model (spotifyglass.lyrics.<id>.model), the server, Gemini's thinking level (SGKeyAIThinking: Low, Medium or High, unset low, as 3.8 Flash refuses minimal) and the request timeout (SGKeyAITimeout: 30 to 300 s, unset 120, the request's timeoutInterval) are read at each ask and checked as they are read, a new thinking level asks again, and the log names the provider, the model, the host and the prompt's SHA-256 prefix, never the key. Temperature is not offered: Anthropic's API turns it down and OpenAI's reasoning models take only the default. The menu item says where the lyrics go. Translate on iPhone and Apple Intelligence each have a switch that leaves them out of the menu (SGKeyLyricsTranslateOnDevice, SGKeyLyricsAppleIntelligence, both on). A translation that reads the same as its line (SGLyricsBareText) is not drawn under it, and the line still counts as translated. The translate items show for every song with Translate any song on (SGKeyLyricsTranslateEverySong, off), else only for a song NaturalLanguage finds in another language than the Lyrics page's (or the iPhone's): one distinct line in five it is at least 80% sure of, or two in another script (a verse in Hangul among English), not the whole song's guess (short lines sway that: Havana reads as Dutch), so songs half in English count and a repeated chorus weighs as one line; Translate on iPhone translates from the language most of those lines are in and leaves lines already in the target as they are. Apple Intelligence's lines show and are saved a batch at a time, only lines without a translation are sent, and a batch it turns down is skipped (asking again sends only those lines). Every finished translation is kept by SavedTranslations.m in Caches/Vitrine/Translations, one JSON file a song and language with each line's text to its translation under "lines" and who made it and when ("by", "model", "made"; a file from before has the lines alone and reads as Unknown), the newest 200, synced when the song's lines are shown: each line knows whether its translation was made here (SGKaraokeLine.translationMade), and a made one with nothing saved is taken off, so the Lyrics page's Saved translations row deletes them at once, posting SGLyricsTranslationsDidChangeNotification as Translate any song does for the open lyrics to sync and redraw. The translate menu names who made a saved translation and when, and for one an AI made (or no one known) offers Delete This Translation, which removes the song's file and the launch's answer for it, so asking again sends the song. Gemini's reply read and checked on the Mac
                   against harness/lyrics-translation/
-    LockScreenLyrics/ the line being sung in the system's now playing, and on iOS 26 the lyrics as the lock screen's
+    LockScreenLyrics/ the line being sung in the system's now playing (Lock screen translation, SGKeyLockScreenTranslation,
+                  off: a translation the line has in its place, its words timed over the line's and cut in pieces
+                  by its own length), and on iOS 26 the lyrics as the lock screen's
                   full-screen artwork (LyricsArtwork.x): a new artwork ID per line, its 3:4 H.264 clip (the line and the
                   next one dimmed over the blurred cover, SGLyricsClip.m) written only when the lock screen asks for it,
                   Still (one frame) or Animated (15 fps). The backdrop is blurred small and drawn large, on the CPU as the
@@ -268,6 +275,11 @@ Shared:
                   block stays out of it unless the sheet itself is shown (SGPlayerMenuReplaced). Switch to video,
                   the chip over the title of a song with a music video, is hidden under either look on request
                   (VideoSwitch.x, spotifyglass.hide.videoSwitch), by its identifier in FloatingElementsUnit.
+                  Full screen cover hidden (spotifyglass.hide.fullScreenCover) stops a tap on the cover from opening
+                  Spotify's full screen cover, under either look: each look's handleTap hook on CoverArtTiltView
+                  (PlayerGestures.x) returns before Spotify's, as it does while Gestures is on. Spotify's own flag
+                  (cover_art_tilt_enabled) is left alone: with it off the cover is built without CoverArtTiltView,
+                  and every hook on that view (the redesign's rounding and shadow, the hold to 2x) has nothing to reach.
                   The sleep timer (SleepTimer.m, set from the Live Activity) pauses Spotify at a time, at the end of
                   the track or at the end of the album or playlist, the last track of it found by the tracks to come
                   that are neither queued by hand nor autoplay's (SPTPlayerTrack's provider), or by the next one
@@ -497,11 +509,11 @@ Native:
 Redesigned:
 
     Kit/          what the redesign builds on (SGRKit.h lists it), the flags it forces (SGRedesign.h, SGRGlassDesign.x for
-                  Spotify's own glass design), its repaint hook (SGRRepaint.x), soft top edge, AMOLED black (always on,
-                  SGRAmoled.x) and its own accent color (SGRAccent.x, stored apart from the native look's). The
-                  playlist, album and artist pages take their field's color from the cover's main color (checked on
-                  the Mac by harness/palette/), and come in whole: a black veil over the page until the cover has
-                  been read, at most SGRFieldHoldLimit (1 s), then faded away (SGRField.h)
+                  Spotify's own glass design), its repaint hook (SGRRepaint.x), soft top edge (hard where a page asks for
+                  it, SGRHardTopEdge), AMOLED black (always on, SGRAmoled.x) and its own accent color (SGRAccent.x, stored
+                  apart from the native look's). The playlist, album and artist pages take their field's color from the
+                  cover's main color (checked on the Mac by harness/palette/), and come in whole: a black veil over the
+                  page until the cover has been read, at most SGRFieldHoldLimit (1 s), then faded away (SGRField.h)
     Navbar/       the glass tab bar (TabBar.x) over its own composition (Navbar.x, NavbarLayout.m) and editor, the glass search field.
                   Spotify is made to leave the glass bar its height where its own bar is shorter (a phone with a home button,
                   Offline or Private Session under the bar), so the now playing bar and the pages move up with it. Under both
@@ -523,7 +535,10 @@ Redesigned:
                   so it slides and fades with it; Spotify lays a page out as "title • artists" over the device line or as
                   title over artists, and both are read. In the minimized row
                   the card drops its device and add buttons, faded out as it heads there and back in as it leaves. Only the title stays in the row. In a Jam the
-                  glass stays on the track and Spotify's Jam strip gets a pane of its own above it (harness/tabbar/, jam)
+                  glass stays on the track and Spotify's Jam strip gets a pane of the same glass above it, and the fade under
+                  the bars reaches above the strip while the card is above the bar; in the minimized row the card docks as it does outside a Jam and the strip
+                  rides above it at its width (harness/tabbar/, jam). Another hat on the bar keeps the card above the tab bar.
+                  Follow the cover (Player/PlayerCoverAccent.x) paints the card's lit device and like buttons too
     ContextMenu/  the ⋯ of the player and the ⋯ pinned over the playlist, album and artist pages open the system menu,
                   always (ContextMenu.h). The player's ⋯ is a pull-down button of the mod's over Spotify's: the menu
                   opens on touch down with the quick row (Spotify's items 9, 19 and 11), the player's items and More,
@@ -549,7 +564,9 @@ Redesigned:
                   Pitch follows speed in a popover from the ⋯ (SpeedPitchMenu.x), and the backgrounds it can switch
                   to (PlayerMenu.m), and a hold on either side of the
                   cover plays at 2x until the finger lifts (PlayerArtwork.x), an octave higher while Pitch follows
-                  speed is on. A Free account gets it too: Spotify's Reinvented Free player mode, whose units none of
+                  speed is on. Hide on the player's Shuffle and Repeat (spotifyglass.redesign.player.hideShuffle,
+                  .hideRepeat, read at launch) take those buttons off the controls by alpha in their slots, as the
+                  Music app keeps them off its own (PlayerControls.x). A Free account gets it too: Spotify's Reinvented Free player mode, whose units none of
                   the hooks reach, declines while the redesign runs, so the track falls to Spotify's other Free mode,
                   built from the units the redesign styles (PlayerFree.x, read from the binary, not yet seen on a Free
                   account). Animated artwork (PlayerMotion.x)
@@ -561,11 +578,12 @@ Redesigned:
                   a restart. The clip holds its frame while the song is paused, goes while
                   Spotify's music video shows, is given up when it has drawn nothing in 5 s on screen, and on a skip
                   stays a moment for the next track's to cross over it. Under Reduce Motion and in Low Power Mode no
-                  clip plays: the cover stays over Fluid. A black layer dims the clip by its brightness (the 75th
+                  clip plays: the cover stays over Fluid. A black gradient dims the clip by its brightness (the 75th
                   percentile of the linear luminance of three frames), so white text keeps 4.5:1 (7:1 with Increase
-                  Contrast), from 0.10 to 0.80 and 0.15 more behind the lyrics. A track that changes while the player
-                  cannot be seen (no window, or the app not in front) takes the last clip away at once. Checked in the simulator against
-                  harness/player/ (`motion`). The Visualizer
+                  Contrast), from 0.10 to 0.80, only where text is: a band under the header and from above the title
+                  down; behind the lyrics it covers the whole clip, 0.15 darker (issue #101). A track that changes
+                  while the player cannot be seen (no window, or the app not in front) takes the last clip away at
+                  once. Checked in the simulator against harness/player/ (`motion`). The Visualizer
                   (PlayerVisualiser.m) draws two soft hills of the song's spectrum across the foot of the player, the kick
                   a mound in the middle (the two bands under 80 Hz are left out, and the kick's bands stand at least as
                   tall as the bands beside them, so the middle is never a notch), as light in the cover's flow colors
@@ -581,10 +599,13 @@ Redesigned:
                   a paused song's hills have settled. The spectrum is checked on the Mac against harness/visualiser/,
                   the view in the simulator against harness/player/ (`visualiser`)
     Lyrics/       the full screen lyrics page on glass with Apple Music style lyrics over it, always on (SGRKaraokeView,
-                  which the player shows in itself too, Player/PlayerLyrics.x, where with Hide the controls on
-                  everything else -- the header row, the thumbnail, the title row and the controls -- fades a few
-                  seconds after the last touch and the lines take the whole safe area until a tap): lines sung over each other lit together,
-                  the stack moving on once the first is sung out; an instrumental break of 7 s or more held by three dots
+                  which the player shows in itself too, Player/PlayerLyrics.x, where with Hide the controls set to
+                  Everything, everything else -- the header row, the thumbnail, the title row and the controls --
+                  fades a few seconds after the last touch and the lines take the whole safe area until a tap where
+                  the rest was or a scroll back; set
+                  to Keep the title, only the controls under the title row and the lyrics' own button fade and the
+                  lines grow down into their room): lines sung over each other lit together, the stack moving on
+                  once the first is sung out; an instrumental break of 7 s or more held by three dots
                   that breathe and fill over its length on a Core Animation timeline laid against the song's clock; and
                   a line's pronunciation (under the words it spells) and translation, switched on from a glass button in
                   the lyrics' corner that shows only for a song that has them, in the order of sizes the Lyrics page sets
@@ -599,14 +620,17 @@ Redesigned:
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards, each with a switch on the Home page of Mod Settings; the previews and the
                   song suggestions only when switched on), a large title where the filter pills were, the title rising and
-                  fading with the feed as it scrolls, as the Music app's does, the shelves' headings at the Music app's size,
+                  fading with the feed as it scrolls, as the Music app's does (or, with Title stays on scroll, staying put
+                  over the feed's hard top edge, shaped to the row, and no scroll observer), the shelves' headings at the
+                  Music app's size,
                   continuous corners on the covers, and, under the Home look switch (the Home page's first row; off, none of
                   its hooks install and Home is as before it): at the trailing edge a glass pill of the filter (a menu that
                   drives Spotify's own chips, with the device picker and the top shelf's Show all) and the avatar, Top picks
-                  (the first shelf, or the one Cards from names, found in Spotify's feed model before its cells are built, moved above the shortcuts and drawn as large cards in their
-                  covers' colors with no heading, the page tinted by the first card) and each shortcut tile as a glass pill
-                  in its cover's color with its name in bold on up to two lines; in FLEX builds a meter of each scroll's
-                  frames and the hooks' time (Home.h lists its files)
+                  (the first shelf, or the one Cards from names, found in Spotify's feed model before its cells are
+                  built, moved above the shortcuts and drawn as large cards in their covers' colors with no heading
+                  unless Show Top picks heading is on, the page tinted by the first card) and each shortcut tile as
+                  a glass pill in its cover's color with its name in bold on up to two lines; in FLEX builds a meter
+                  of each scroll's frames and the hooks' time (Home.h lists its files)
     Search/       the Browse page decluttered to its category cards (an allow list of the list's cells: the watch feed
                   carousels and promos collapse, and the cards move up by the spacing they leave), the header the way Home
                   has it without the camera, and each card as Liquid Glass tinted by its own color, read off the Box's
@@ -759,6 +783,8 @@ leaves it running:
     scripts/phone.py settings.open | settings.page "Appearance"
     scripts/phone.py wait --id X [--gone 1] | --menu 1 | --log "system menu: the player's menu is up" [--timeout 3]
     scripts/phone.py screenshot out.png
+    scripts/phone.py layers --id sheet-view [--depth 6] [--up 1]
+    scripts/phone.py get | set --id sheet-view --path layer.sublayers.0.enabled [--value false]
 
 Views are addressed as the tree prints them: `id=` is the accessibility identifier, `a11y=` the accessibility
 label, the quoted text a label's, and a class with an index counts that class's views in the tree's order.
@@ -767,7 +793,10 @@ way: a UITouch and the IOHIDEvent gesture recognizers read, through `-[UIApplica
 controls get their control events, recognizers recognize, and a button whose menu is its primary action opens
 it on the touch down. `menu.pick` taps a row of the system's menu, not of Spotify's own sheet (tap that by
 `--text`). `log` reads the app's last 2000 `SGLog` lines from memory, so no device log capture is needed;
-a log wait looks from the start of the last command that did something. Everything runs on the main thread
+a log wait looks from the start of the last command that did something. `get` and `set` read and write a
+property by key path from the view named (or the key window), a number indexing an array, so a guess about what
+draws something is tried live; `layers` prints the layer tree with what changes how it draws (opacity, masks,
+filters, a backdrop's own keys). Everything runs on the main thread
 through `dispatch_async` and a semaphore with a timeout, waited on from the server's thread only. Checked in
 the simulator by harness/driver/.
 
@@ -819,6 +848,7 @@ model with the full one, is on the iPhone), Toggle from lyrics (the redesign's m
 Ignore heat warnings, and under Advanced Runs on (Automatic: the Neural Engine
 beside the CPU; CPU only) and Prepare after updates, all applying straight away. Lock screen, on the main
 page under either look, opens the lock screen widget's page, titled Lock screen: Widget (the line in place of the artist,
+its translation in the line's place,
 and Spotify's like and dislike buttons' flag, locked off while the star is on) then Artwork (Off, Moving artwork, Lyrics,
 Every song or Moving artwork with lyrics, the lyrics' style, Still or Animated, Switch with the star, the sources and Low Data Mode; below iOS 26
 one row saying why not). Spotify's podcast, audiobook and artwork flags stay in All flags. Player: Gestures and Blocked artists (with the count on the row), which work with either look;

@@ -125,7 +125,14 @@ static void (^nested)(void);
     return r;
 }
 @end
-static int failures, checks;
+static int failures, checks, setCounts;
+@interface CountingSet : NSSet
+@end
+@implementation CountingSet
+- (NSUInteger)count { setCounts++; return 0; }
+- (id)member:(id)object { return nil; }
+- (NSEnumerator *)objectEnumerator { return @[].objectEnumerator; }
+@end
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); failures++; } } while (0)
 static void setReasons(SPTPlayerRestrictions *r, NSSet *v) {
     r.disallowTogglingShuffleReasons = v;
@@ -244,6 +251,14 @@ int main(void) { @autoreleasepool {
     CHECK(((ESPSetShufflingContextRequest *)[player setShufflingContext:YES]).options == originalOptions);
     setReasons(r, [NSSet setWithObject:@"radio"]); player.state.playbackId = nil;
     CHECK(((ESPSetShufflingContextRequest *)[player setShufflingContext:YES]).options == originalOptions);
+    // A repeated read of the same state records nothing new.
+    player.state.playbackId = @"playback-123"; player.state.contextURI = @"context-A";
+    r.disallowTogglingShuffleReasons = [CountingSet new];
+    (void)player.state;
+    int counted = setCounts;
+    CHECK(counted == (active ? 1 : 0));
+    (void)player.state; (void)player.state;
+    CHECK(setCounts == counted);
     // Missing state leaves the request alone.
     player.state = nil;
     CHECK(((ESPSetShufflingContextRequest *)[player setShufflingContext:YES]).options == originalOptions);

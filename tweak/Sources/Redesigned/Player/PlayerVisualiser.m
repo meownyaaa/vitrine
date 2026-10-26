@@ -119,6 +119,9 @@ static NSDictionary *noActions(void) {
     uint64_t _generation;
     CFTimeInterval _fresh, _last;
     NSUInteger _palette;
+    // What draw last drew from: the same again sets the same paths and opacity, so a hill at rest hands the render
+    // server nothing. The pulse is kept as the opacity it rounds to, since it decays on long after that stands still.
+    struct { CGRect bounds; CGFloat baseline, screenHeight; float front[kBands], back[kBands], opacity; } _drawn;
 }
 
 // As PlayerMotion.x: what fades is the effect view's effect, never its alpha or an ancestor's.
@@ -433,6 +436,15 @@ static void shape(CAShapeLayer *layer, const float *bands, CGFloat width, CGFloa
 - (void)draw {
     CGRect bounds = self.bounds;
     if (bounds.size.width <= 0 || bounds.size.height <= 0) return;
+    float opacity = kPulseFloor + (1 - kPulseFloor) * _pulse;
+    if (CGRectEqualToRect(bounds, _drawn.bounds) && _baseline == _drawn.baseline && _screenHeight == _drawn.screenHeight
+        && opacity == _drawn.opacity && !memcmp(_front, _drawn.front, sizeof _front) && !memcmp(_back, _drawn.back, sizeof _back)) return;
+    _drawn.bounds = bounds;
+    _drawn.baseline = _baseline;
+    _drawn.screenHeight = _screenHeight;
+    _drawn.opacity = opacity;
+    memcpy(_drawn.front, _front, sizeof _front);
+    memcpy(_drawn.back, _back, sizeof _back);
     CGFloat baseline = _baseline > 0 ? _baseline : bounds.size.height;
     CGFloat screen = _screenHeight > 0 ? _screenHeight : bounds.size.height;
     CGFloat foot = MAX(baseline, bounds.size.height), rest = round(screen * kRestHeight);
@@ -440,7 +452,7 @@ static void shape(CAShapeLayer *layer, const float *bands, CGFloat width, CGFloa
     [CATransaction setDisableActions:YES];
     shape(_backShape, _back, bounds.size.width, baseline, foot, screen * kBackHeight, rest * 1.5);
     shape(_frontShape, _front, bounds.size.width, baseline, foot, screen * kFrontHeight, rest);
-    _frontFill.opacity = kPulseFloor + (1 - kPulseFloor) * _pulse;
+    _frontFill.opacity = opacity;
     _crestFade.startPoint = CGPointMake(0.5, (baseline - screen * kFadeTop) / bounds.size.height);
     _crestFade.endPoint = CGPointMake(0.5, (baseline - screen * kFadeFoot) / bounds.size.height);
     [CATransaction commit];

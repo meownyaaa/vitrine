@@ -21,77 +21,94 @@
 - (NSLayoutConstraint *)layoutGuideHeightConstraint;
 @end
 
-static UIView *viewNamed(UIView *root, NSString *marker) {
-    __block UIView *found = nil;
-    SGForEachView(root, ^(UIView *v) {
-        if (!found && [NSStringFromClass(v.class) containsString:marker]) found = v;
-    });
-    return found;
-}
+static const struct { __unsafe_unretained NSString *ident, *key; } buttons[] = {
+    {@"Components.UI.WatchFeedEntityExplorerButton", SGHidePlaylistVideo},
+    {@"Components.UI.AddToButton", SGHidePlaylistAddTo},
+    {@"DownloadButton.Granular", SGHidePlaylistDownload},
+    {@"Components.UI.ShareButton", SGHidePlaylistShare},
+    {@"Components.UI.ContextMenuButton", SGHidePlaylistMore},
+};
+enum { kButtons = sizeof(buttons) / sizeof(buttons[0]) };
 
-// A prefix, not the whole identifier: the download button carries its state in the tail.
-static UIView *identNamed(UIView *root, NSString *ident) {
-    __block UIView *found = nil;
-    SGForEachView(root, ^(UIView *v) {
-        if (!found && [v.accessibilityIdentifier hasPrefix:ident]) found = v;
-    });
-    return found;
-}
+// Each part's view, remembered on the view it was found under (Core/SGViewTree.h).
+static char kCoverKey, kDescriptionKey, kFindKey, kArtworkKey, kPillsKey, kButtonKeys[kButtons];
 
-// Only ever hides. A switch turned off again shows after Spotify restarts, like every other one.
-static void hide(UIView *view, NSString *key) {
-    if (view && SGHidden(key)) view.hidden = YES;
+static BOOL anyButtonSwitch(void) {
+    for (size_t i = 0; i < kButtons; i++) {
+        if (SGHidden(buttons[i].key)) return YES;
+    }
+    return NO;
 }
 
 // The header layout is Encore's own class, so the hook asks whose page it is before touching it.
 static UIViewController *playlistHeaderOf(UIView *view) {
     for (UIResponder *r = view; r; r = r.nextResponder) {
         if (![r isKindOfClass:UIViewController.class]) continue;
-        return [NSStringFromClass(r.class) containsString:@"FreeTierPlaylist"] ? (UIViewController *)r : nil;
+        return SGClassNamed(r.class, @"FreeTierPlaylist") ? (UIViewController *)r : nil;
     }
     return nil;
 }
 
+// Each switch only ever hides, here and below. A switch turned off again shows after Spotify restarts, like
+// every other one.
+
 // Title, description, the creator row and the length share one column, and only the description
 // names a class of its own, so the column is reached through it and its rows go by what they hold.
 // The length is the last row rather than the second stack: a byline without faces is a stack too.
+// A row already hidden is passed over.
 static void applyColumn(UIView *header) {
+    BOOL hideDescription = SGHidden(SGHidePlaylistDescription), hideCreator = SGHidden(SGHidePlaylistCreator);
+    BOOL hideLength = SGHidden(SGHidePlaylistLength);
+    if (!hideDescription && !hideCreator && !hideLength) return;
     UIView *column = nil;
-    for (UIView *v = viewNamed(header, @"ExpandableTextView"); v && v != header; v = v.superview) {
-        if (![NSStringFromClass(v.superview.class) containsString:@"AutoLayoutStackView"]) continue;
+    UIView *description = SGFindRemembered(header, &kDescriptionKey, ^BOOL(UIView *v) { return SGClassNamed(v.class, @"ExpandableTextView"); });
+    for (UIView *v = description; v && v != header; v = v.superview) {
+        if (!SGClassNamed(v.superview.class, @"AutoLayoutStackView")) continue;
         column = v;
         break;
     }
     for (UIView *row in column.subviews) {
-        BOOL last = row == column.subviews.lastObject && [NSStringFromClass(row.class) containsString:@"StackView"];
-        if (SGHasClass(row, @"ExpandableTextView")) hide(row, SGHidePlaylistDescription);
-        else if (SGHasClass(row, @"FacepileView")) hide(row, SGHidePlaylistCreator);
-        else if (last) hide(row, SGHidePlaylistLength);
+        if (row.hidden) continue;
+        BOOL last = row == column.subviews.lastObject && SGClassNamed(row.class, @"StackView");
+        BOOL hide = NO;
+        if (SGHasClass(row, @"ExpandableTextView")) hide = hideDescription;
+        else if (SGHasClass(row, @"FacepileView")) hide = hideCreator;
+        else if (last) hide = hideLength;
+        if (hide) row.hidden = YES;
     }
 }
 
 // The identifier sits on the button, the stack arranges the action around it, so each switch hides
 // the action rather than the button and the row closes up behind it.
+// An action already hidden is passed over.
 static void applyActions(UIView *row) {
-    static const struct { __unsafe_unretained NSString *ident, *key; } buttons[] = {
-        {@"Components.UI.WatchFeedEntityExplorerButton", SGHidePlaylistVideo},
-        {@"Components.UI.AddToButton", SGHidePlaylistAddTo},
-        {@"DownloadButton.Granular", SGHidePlaylistDownload},
-        {@"Components.UI.ShareButton", SGHidePlaylistShare},
-        {@"Components.UI.ContextMenuButton", SGHidePlaylistMore},
-    };
+    // The buttons with a switch on, looked for under each action in one walk.
+    NSString *idents[kButtons];
+    const void *keys[kButtons];
+    NSUInteger count = 0;
+    for (size_t i = 0; i < kButtons; i++) {
+        if (!SGHidden(buttons[i].key)) continue;
+        idents[count] = buttons[i].ident;
+        keys[count++] = &kButtonKeys[i];
+    }
+    if (!count) return;
     for (UIView *action in row.subviews) {
-        for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
-            if (identNamed(action, buttons[i].ident)) hide(action, buttons[i].key);
+        if (action.hidden) continue;
+        UIView *found[count];
+        SGFindIdentifiers(action, count, idents, keys, found);
+        for (NSUInteger i = 0; i < count && !action.hidden; i++) {
+            if (found[i]) action.hidden = YES;
         }
     }
 }
 
 // Find on page and Sort sit in a header view of their own, one that holds nothing else.
 static void applyFindBar(UIView *header) {
-    for (UIView *v = viewNamed(header, @"EncoreTextField"); v && v != header; v = v.superview) {
-        if (![NSStringFromClass(v.class) containsString:@"HeaderView"]) continue;
-        hide(v, SGHidePlaylistFind);
+    if (!SGHidden(SGHidePlaylistFind)) return;
+    UIView *field = SGFindRemembered(header, &kFindKey, ^BOOL(UIView *v) { return SGClassNamed(v.class, @"EncoreTextField"); });
+    for (UIView *v = field; v && v != header; v = v.superview) {
+        if (!SGClassNamed(v.class, @"HeaderView")) continue;
+        v.hidden = YES;
         return;
     }
 }
@@ -146,7 +163,7 @@ static char kBackdropKey, kSourceKey;
 static void applyBackdrop(UIView *layout) {
     if (!SGFlag(SGKeyPlaylistBackdrop, NO)) return;
     UIImage *image = nil;
-    for (UIView *v in identNamed(layout, @"EditableHeaderArtworkElement.ImageView").subviews) {
+    for (UIView *v in SGFindIdentifier(layout, @"EditableHeaderArtworkElement.ImageView", &kArtworkKey).subviews) {
         if ([v isKindOfClass:UIImageView.class] && ((UIImageView *)v).image) image = ((UIImageView *)v).image;
     }
     if (!image) return;
@@ -178,8 +195,8 @@ static void applyBackdrop(UIView *layout) {
     %orig;
     UIViewController *headerVC = playlistHeaderOf((UIView *)self);
     if (!headerVC) return;
-    UIView *layout = (UIView *)self, *cover = identNamed(layout, @"Components.Header.UI.ArtworkImage");
-    hide(cover, SGHidePlaylistArtwork);
+    UIView *layout = (UIView *)self, *cover = SGFindIdentifier(layout, @"Components.Header.UI.ArtworkImage", &kCoverKey);
+    if (SGHidden(SGHidePlaylistArtwork)) cover.hidden = YES;
     applyColumn(layout);
     applyBackdrop(layout);
     if (cover.hidden) collapseCover(headerVC, layout, cover);
@@ -190,9 +207,10 @@ static void applyBackdrop(UIView *layout) {
 %hook UIImageView
 - (void)setImage:(UIImage *)image {
     %orig;
-    if (!image || ![self.superview.accessibilityIdentifier isEqualToString:@"EditableHeaderArtworkElement.ImageView"]) return;
+    if (!image || ![self.superview.accessibilityIdentifier isEqualToString:@"EditableHeaderArtworkElement.ImageView"]
+        || !SGFlag(SGKeyPlaylistBackdrop, NO)) return;
     for (UIView *v = self.superview; v; v = v.superview) {
-        if (![NSStringFromClass(v.class) containsString:@"HeaderContentLayout"]) continue;
+        if (!SGClassNamed(v.class, @"HeaderContentLayout")) continue;
         if (playlistHeaderOf(v)) applyBackdrop(v);
         return;
     }
@@ -204,7 +222,7 @@ static void applyBackdrop(UIView *layout) {
 %hook UIStackView
 - (void)layoutSubviews {
     %orig;
-    if ([self.accessibilityIdentifier isEqualToString:@"HeaderActionsRow"] && playlistHeaderOf(self)) applyActions(self);
+    if ([self.accessibilityIdentifier isEqualToString:@"HeaderActionsRow"] && anyButtonSwitch() && playlistHeaderOf(self)) applyActions(self);
 }
 %end
 
@@ -224,7 +242,8 @@ static void applyBackdrop(UIView *layout) {
 %hook _TtC35ListUXPlatform_FreeTierPlaylistImpl25ElementCollectionViewCell
 - (UICollectionViewLayoutAttributes *)preferredLayoutAttributesFittingAttributes:(UICollectionViewLayoutAttributes *)attributes {
     UICollectionViewLayoutAttributes *result = %orig;
-    if (!SGHidden(SGHidePlaylistPills) || !identNamed((UIView *)self, @"PlaylistCuration.Row.CurationActionsToolbar")) return result;
+    if (!SGHidden(SGHidePlaylistPills)
+        || !SGFindIdentifier((UIView *)self, @"PlaylistCuration.Row.CurationActionsToolbar", &kPillsKey)) return result;
     result.size = CGSizeMake(result.size.width, 0);
     ((UIView *)self).clipsToBounds = YES;
     static dispatch_once_t once;

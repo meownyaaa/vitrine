@@ -27,6 +27,9 @@
     scripts/phone.py wait --log "system menu: the player's menu is up" --timeout 3
     scripts/phone.py log [--since N]                   # the app's last SGLog lines; each has a seq
     scripts/phone.py screenshot out.png [--scale 1]
+    scripts/phone.py layers --id sheet-view [--depth 6] [--up 1]   # a view's layer tree, or its layers up to the window
+    scripts/phone.py get --id sheet-view --path layer.sublayers.0.opacity      # a property by key path (numbers index arrays)
+    scripts/phone.py set --id sheet-view --path backgroundColor --value '#FF000080'   # nil, true, false, a number, a colour, text
 
 Every command prints the app's JSON answer, {"ok": true, ...} or {"ok": false, "error": ...}, and exits 1
 when it is not ok. --label and --text match whole and ignore case; --contains 1 matches a part. Points are

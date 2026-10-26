@@ -12,7 +12,7 @@
 //     SGRDownload.h  Spotify's download state, read, and the glyph drawn for it
 //     SGRHeaderInfo.h a page header's title, creator, length, row and description, the Music app's
 //     SGRRestyle.h   keeping Spotify's views restyled: suppress, digits, lookups, shadows, firing
-//                    controls, taking a list cell's paint off the field
+//                    controls, taking a list cell's paint off the field, a hard top edge (SGREdgeEffect.x)
 //     SGRBridges.h   player state, now playing artwork, the player's open and close
 //     SGRRepaint.h   the areas the redesign keeps transparent when Spotify repaints them
 //     SGRAccent.h    the redesign's accent color; its AMOLED black is SGRAmoled.x, always on

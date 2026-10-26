@@ -55,7 +55,8 @@ Rules:
 - Settings: each layer builds its own rows and sections. `App/Pages.m` and `App/ModSettings.x`
   decide what to show from `SGRedesignedUIStored()`, so native-only pages disappear in the redesign.
 - Keys start with `spotifyglass.` (redesign-only ones with `spotifyglass.redesign.`). Switches are
-  read at launch, so a change needs a restart.
+  read live through the `Core/SGPrefs.m` memo, but Redesigned UI and any feature whose `%ctor` installs
+  its hooks only when it is on take effect at the next launch.
 
 ## Working on it
 

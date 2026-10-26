@@ -299,10 +299,16 @@ void SGRComposeTabBar(UIView *tabBar) {
 
 // Spotify placed the icon and the label for the width it measured (trees/test5.txt: x 28 in a
 // 134pt slot, the center of the 80pt it had with five tabs) and lays the item out no further
-// once the slot changes. Assigning the centers back sends them through the hooks below.
+// once the slot changes. Assigning the centers back sends them through the hooks below, which look no further
+// up for the slot than the deepest of these views sits in one (3 in Spotify's items: trees, 2026-10).
+static NSUInteger sg_slotDepth;
 static void centreContents(UIView *item) {
     SGForEachView(item, ^(UIView *v) {
-        if ([v isKindOfClass:%c(SPTEncoreIconView)] || [v isKindOfClass:%c(SPTEncoreLabel)]) v.center = v.center;
+        if (![v isKindOfClass:%c(SPTEncoreIconView)] && ![v isKindOfClass:%c(SPTEncoreLabel)]) return;
+        NSUInteger depth = 1;
+        for (UIView *up = v.superview; up && up != item; up = up.superview) depth++;
+        if (depth > sg_slotDepth) sg_slotDepth = depth;
+        v.center = v.center;
     });
 }
 
@@ -341,7 +347,9 @@ static CGFloat slotCentreX(UIView *view) {
     UIStackView *row = sg_row;
     if (!row) return NAN;
     UIView *slot = nil;
-    for (UIView *v = view; v.superview; v = v.superview) if (v.superview == row) { slot = v; break; }
+    // No depth seen yet means no row centred yet: the walk goes all the way up.
+    NSUInteger steps = 0, limit = sg_slotDepth ? sg_slotDepth : NSUIntegerMax;
+    for (UIView *v = view; v.superview && steps++ <= limit; v = v.superview) if (v.superview == row) { slot = v; break; }
     if (!slot) return NAN;
     return [slot convertPoint:CGPointMake(CGRectGetMidX(slot.bounds), 0) toView:view.superview].x;
 }
@@ -413,8 +421,37 @@ void SGRRefreshTabBar(void) {
 // What the row settled on, logged whenever it changes: `make log` then says whether the items fit,
 // what is holding their width, and in what order the bar ended up.
 void SGRLogTabBarRow(UIView *tabBar) {
-    UIStackView *stack = SGRowIn(tabBar);
+    // The row SGRComposeTabBar found in this bar on the same pass, just before.
+    UIStackView *stack = sg_row;
     if (!stack) return;
+    // The line is written out only when a frame, an item, the stack's settings or the boxes read off them changed. shortcut: items
+    // past the 16th are not compared, raise it if a bar ever holds more.
+    struct {
+        CGRect bar, stack, icon, label;
+        NSInteger axis, distribution, alignment;
+        CGFloat spacing;
+        NSUInteger count;
+        struct { const void *item; CGRect frame; BOOL hidden; } items[16];
+    } key;
+    memset(&key, 0, sizeof key);   // padding too, for memcmp
+    key.bar = tabBar.frame;
+    key.stack = stack.frame;
+    key.icon = sg_iconBox;
+    key.label = sg_labelBox;
+    key.axis = stack.axis;
+    key.distribution = stack.distribution;
+    key.alignment = stack.alignment;
+    key.spacing = stack.spacing;
+    for (UIView *item in stack.arrangedSubviews) {
+        NSUInteger i = key.count++;
+        if (i >= 16) continue;
+        key.items[i].item = (__bridge const void *)item;
+        key.items[i].frame = item.frame;
+        key.items[i].hidden = item.hidden;
+    }
+    static typeof(key) lastKey;
+    if (!memcmp(&key, &lastKey, sizeof key)) return;
+    memcpy(&lastKey, &key, sizeof key);
     NSMutableString *out = [NSMutableString stringWithFormat:@"row in %@ %@, icon %@ label %@, stack %@ axis %ld dist %ld align %ld spacing %.1f autolayout %d",
                             NSStringFromClass(tabBar.class), NSStringFromCGRect(tabBar.frame),
                             NSStringFromCGRect(sg_iconBox), NSStringFromCGRect(sg_labelBox), NSStringFromCGRect(stack.frame),

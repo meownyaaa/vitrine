@@ -3,12 +3,12 @@
 // player core keeps that timer and pauses at its end; this only reads it off the player's state
 // (SPTPlayerState's sleepTimer, Headers/SPTPlayer.h) and never pauses or changes anything of Spotify's.
 //
-// A check four times a second runs while Spotify plays, or while one of its timers is followed or has just
-// gone off; a player state observer starts and stops it. Over the last seconds before the time, or before
-// the end of the track, the gain comes down. Once the timer is up (its time came, the track it ended changed,
-// Spotify paused or dropped the timer within a couple of seconds of its end) the gain stays down until
-// Spotify's pause has landed and comes back a second later, or 5 s on without a pause. A timer canceled or
-// moved later brings the gain back at once. The core may keep a timer that went off in its state for a while,
+// A check four times a second runs while Spotify has a timer set, or while one is followed or has just gone
+// off; a player state observer, told of every state Spotify reports, starts and stops it. Over the last
+// seconds before the time, or before the end of the track, the gain comes down. Once the timer is up (its
+// time came, the track it ended changed, Spotify paused or dropped the timer within a couple of seconds of
+// its end) the gain stays down until Spotify's pause has landed and comes back a second later, or 5 s on
+// without a pause. A timer canceled or moved later brings the gain back at once. The core may keep a timer that went off in its state for a while,
 // so one that went off is not followed again.
 //
 // It stands aside while the mod's own timer runs, which has the gain then, and while Spotify's own fade is
@@ -35,8 +35,17 @@ static const NSTimeInterval kRestoreAfter = 1;
 static const NSTimeInterval kPauseWait = 5;
 
 static NSTimer *sg_check;
-// The timer followed, as "type|timestamp", and one that went off; nil for none.
-static NSString *sg_following, *sg_wentOff;
+// A timer of Spotify's: its type, 0 for none, and for a time its end in ms since 1970.
+typedef struct {
+    NSUInteger type;
+    long long atMs;
+} SGSpotifyTimer;
+// The timer followed, and one that went off.
+static SGSpotifyTimer sg_following, sg_wentOff;
+
+static BOOL sameTimer(SGSpotifyTimer a, SGSpotifyTimer b) {
+    return a.type == b.type && a.atMs == b.atMs;
+}
 // For End of track, the track whose end it is.
 static NSString *sg_track;
 // Seconds to its end at the last check, -1 for not known.
@@ -62,16 +71,17 @@ static void restoreGain(BOOL now) {
 static void wentOff(NSString *why) {
     SGLog(@"sleep timer: Spotify's up (%@, %.1f s left), gain held until its pause", why, sg_left);
     sg_wentOff = sg_following;
-    sg_following = nil;
+    sg_following = (SGSpotifyTimer){0};
     sg_left = -1;
     sg_holdUntil = [NSDate dateWithTimeIntervalSinceNow:kPauseWait];
 }
 
-// Fades for the timer `key` (of `type`, ending at `at` for a time), or finds it went off.
-static void follow(SPTPlayerState *state, NSString *key, NSUInteger type, NSDate *at) {
+// Fades for `timer` (ending at `at` for a time), or finds it went off.
+static void follow(SPTPlayerState *state, SGSpotifyTimer timer, NSDate *at) {
+    NSUInteger type = timer.type;
     NSString *track = SGURIString(state.track.URI);
-    if (![key isEqualToString:sg_following]) {
-        sg_following = key;
+    if (!sameTimer(timer, sg_following)) {
+        sg_following = timer;
         sg_track = track;
         sg_stoodAside = NO;
         SGLog(@"sleep timer: Spotify's set (type %lu, %@), fade %.0f s", (unsigned long)type,
@@ -112,9 +122,22 @@ static void follow(SPTPlayerState *state, NSString *key, NSUInteger type, NSDate
 
 static void check(void);
 
-// Runs the check while Spotify plays or a timer of its needs it.
+// Spotify's timer in `state`, its end as a date to `at` unless NULL. With none, the one that went off is
+// forgotten: a timer set after it is a new one.
+static SGSpotifyTimer timerIn(SPTPlayerState *state, NSDate **at) {
+    SPTSleepTimer *timer = [state respondsToSelector:@selector(sleepTimer)] ? state.sleepTimer : nil;
+    NSUInteger type = [timer respondsToSelector:@selector(type)] ? timer.type : 0;
+    NSDate *end = type == kAtTime && [timer respondsToSelector:@selector(timestamp)] ? timer.timestamp : nil;
+    if (type != kEndOfTrack && !(type == kAtTime && [end isKindOfClass:NSDate.class])) type = 0;
+    if (!type) sg_wentOff = (SGSpotifyTimer){0};
+    if (at) *at = end;
+    return (SGSpotifyTimer){type, type == kAtTime ? llround(end.timeIntervalSince1970 * 1000) : 0};
+}
+
+// Runs the check while Spotify has a timer not yet gone off, or one of its needs it.
 static void watch(SPTPlayerState *state) {
-    BOOL needed = (state.isPlaying && !state.isPaused) || sg_following || sg_holdUntil || sg_lowered;
+    SGSpotifyTimer timer = timerIn(state, NULL);
+    BOOL needed = (timer.type && !sameTimer(timer, sg_wentOff)) || sg_following.type || sg_holdUntil || sg_lowered;
     if (needed == (sg_check != nil)) return;
     if (!needed) {
         [sg_check invalidate];
@@ -128,12 +151,8 @@ static void watch(SPTPlayerState *state) {
 static void check(void) {
     SPTPlayerState *state = [(id<SPTPlayer>)SGKaraokePlayer() state];
     if (!state) return;   // the player not reached yet: keep checking until it is
-    SPTSleepTimer *timer = [state respondsToSelector:@selector(sleepTimer)] ? state.sleepTimer : nil;
-    NSUInteger type = [timer respondsToSelector:@selector(type)] ? timer.type : 0;
-    NSDate *at = type == kAtTime && [timer respondsToSelector:@selector(timestamp)] ? timer.timestamp : nil;
-    if (type != kEndOfTrack && !(type == kAtTime && [at isKindOfClass:NSDate.class])) type = 0;
-    NSString *key = type ? [NSString stringWithFormat:@"%lu|%.3f", (unsigned long)type, at.timeIntervalSince1970] : nil;
-    if (!key) sg_wentOff = nil;
+    NSDate *at;
+    SGSpotifyTimer timer = timerIn(state, &at);
 
     if (sg_holdUntil) {
         if (state.isPaused || sg_holdUntil.timeIntervalSinceNow <= 0) {
@@ -143,14 +162,14 @@ static void check(void) {
         }
     } else if (SGSleepTimerCurrentMode() != SGSleepTimerOff) {
         sg_lowered = NO;   // the mod's own timer has the gain
-        sg_following = nil;
-    } else if (key && ![key isEqualToString:sg_wentOff]) {
-        follow(state, key, type, at);
-    } else if (sg_following) {
-        if (!key && sg_left >= 0 && sg_left < kUpWithin) wentOff(@"timer cleared at its end");
+        sg_following = (SGSpotifyTimer){0};
+    } else if (timer.type && !sameTimer(timer, sg_wentOff)) {
+        follow(state, timer, at);
+    } else if (sg_following.type) {
+        if (!timer.type && sg_left >= 0 && sg_left < kUpWithin) wentOff(@"timer cleared at its end");
         else {
             SGLog(@"sleep timer: Spotify's canceled%@", sg_lowered ? @", gain back" : @"");
-            sg_following = nil;
+            sg_following = (SGSpotifyTimer){0};
             sg_left = -1;
             if (sg_lowered) restoreGain(YES);
         }
@@ -163,6 +182,9 @@ static void check(void) {
 
 @implementation SGSpotifySleepTimerWatch
 - (void)playerStateDidChange:(SPTPlayerState *)state {
+}
+// A timer set or canceled changes none of what playerStateDidChange: is told about.
+- (void)playerStateDidReport:(SPTPlayerState *)state {
     watch(state);
 }
 @end

@@ -25,12 +25,18 @@ static void unpack(uint32_t rgb, CGFloat *r, CGFloat *g, CGFloat *b) {
     *b = (rgb & 0xFF) / 255.0;
 }
 
+// Made again only when another color is stored: the pick applies at once, and the key is read per call for it.
 UIColor *SGRAccentColor(void) {
+    static NSInteger madeFor = -1;
+    static UIColor *made;
     NSInteger rgb = chosen();
     if (rgb < 0) return nil;
+    if (made && rgb == madeFor) return made;
     CGFloat r, g, b;
     unpack((uint32_t)rgb, &r, &g, &b);
-    return [UIColor colorWithRed:r green:g blue:b alpha:1];
+    made = [UIColor colorWithRed:r green:g blue:b alpha:1];
+    madeFor = rgb;
+    return made;
 }
 
 NSInteger SGRAccentRGB(void) {
@@ -54,6 +60,10 @@ static BOOL swap(CGFloat *r, CGFloat *g, CGFloat *b) {
         return YES;
     }
     return NO;
+}
+
+BOOL SGRAccentSwap(CGFloat *r, CGFloat *g, CGFloat *b) {
+    return sg_accent >= 0 && swap(r, g, b);
 }
 
 %hook UIColor

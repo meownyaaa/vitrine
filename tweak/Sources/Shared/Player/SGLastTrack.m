@@ -76,7 +76,7 @@ SGShownTrack *SGShownTrackNow(void) {
     NSDictionary *track = describe(state.track);
     if (!track[@"title"] || [track isEqualToDictionary:_last ?: stored()]) return;
     _last = track;
-    [NSUserDefaults.standardUserDefaults setObject:track forKey:SGKeyLastTrack];
+    SGPrefsWriteUnmemoized(^{ [NSUserDefaults.standardUserDefaults setObject:track forKey:SGKeyLastTrack]; });
 }
 
 @end

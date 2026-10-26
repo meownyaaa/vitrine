@@ -27,11 +27,15 @@ SGModRow *SGLyricsMeaningsRow(void) {
 
 #pragma mark - text
 
-static BOOL sameLine(NSString *a, NSString *b) {
+static NSArray<NSString *> *wordsOf(NSString *text) {
+    return [text componentsSeparatedByString:@" "];
+}
+
+// `wordsA` and `wordsB` are wordsOf(a) and wordsOf(b), split once by the caller rather than for every pair.
+static BOOL sameLine(NSString *a, NSArray<NSString *> *wordsA, NSString *b, NSArray<NSString *> *wordsB) {
     if (!a.length || !b.length) return NO;
     if ([a isEqualToString:b]) return YES;
     if (MIN(a.length, b.length) >= kLeastContained && ([a containsString:b] || [b containsString:a])) return YES;
-    NSArray<NSString *> *wordsA = [a componentsSeparatedByString:@" "], *wordsB = [b componentsSeparatedByString:@" "];
     if (MIN(wordsA.count, wordsB.count) < 4) return NO;
     NSCountedSet *left = [[NSCountedSet alloc] initWithArray:wordsA];
     NSUInteger shared = 0;
@@ -190,16 +194,22 @@ static NSDictionary<NSNumber *, NSArray<SGLyricsMeaning *> *> *matched(NSArray<S
                                                                         NSArray<SGKaraokeLine *> *lines,
                                                                         SGLyricsMeaningsLevel level) {
     NSMutableArray<NSString *> *texts = [NSMutableArray arrayWithCapacity:lines.count];
-    for (SGKaraokeLine *line in lines) [texts addObject:SGLyricsFoldedText(SGKaraokeLineText(line))];
+    NSMutableArray<NSArray<NSString *> *> *words = [NSMutableArray arrayWithCapacity:lines.count];
+    for (SGKaraokeLine *line in lines) {
+        NSString *text = SGLyricsFoldedText(SGKaraokeLineText(line));
+        [texts addObject:text];
+        [words addObject:wordsOf(text)];
+    }
     SGLyricsMeaningAuthor furthest = level == SGLyricsMeaningsArtist ? SGLyricsMeaningByArtist
                                    : level == SGLyricsMeaningsEditors ? SGLyricsMeaningByEditors : SGLyricsMeaningByCommunity;
     NSMutableDictionary<NSNumber *, NSMutableArray<SGLyricsMeaning *> *> *byLine = [NSMutableDictionary dictionary];
     for (SGLyricsMeaning *meaning in meanings) {
         if (meaning.author > furthest) continue;
         for (NSString *wanted in fragmentLines(meaning.fragment)) {
+            NSArray<NSString *> *wantedWords = wordsOf(wanted);
             BOOL found = NO;
             for (NSUInteger i = 0; i < texts.count; i++) {
-                if (!sameLine(wanted, texts[i])) continue;
+                if (!sameLine(wanted, wantedWords, texts[i], words[i])) continue;
                 found = YES;
                 NSMutableArray<SGLyricsMeaning *> *list = byLine[@(i)] ?: (byLine[@(i)] = [NSMutableArray array]);
                 // A chorus annotated at each of its places carries the same words at every one.

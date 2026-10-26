@@ -17,3 +17,6 @@ NSString *SGRegisterCustomFont(void) { return nil; }
 
 // MotionSources.m: Apple Music is on, as it is by default.
 BOOL SGMotionAppleMusicOn(void) { return YES; }
+
+// Shared/AlbumQueue/AlbumQueueMenu.x: a tapped album header ⋯ records its album for the menu; no menu here.
+void SGAlbumQueueMarkSource(UIView *view) {}
