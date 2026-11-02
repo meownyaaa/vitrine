@@ -533,7 +533,8 @@ Redesigned:
                   (BarConnect.x, its own key and its own row on the Player page, apart from the native look's). The card's text is the Music
                   app's, the title over the artists with no device line, drawn inside Spotify's own text on each swipe page
                   so it slides and fades with it; Spotify lays a page out as "title • artists" over the device line or as
-                  title over artists, and both are read. In the minimized row
+                  title over artists, and both are read. Above the bar the card is as wide as the glass bar's row under it
+                  (SGRTabBarGlassRow, 21 pt in from each side where Spotify keeps 8), as the Music app's mini player is. In the minimized row
                   the card drops its device and add buttons, faded out as it heads there and back in as it leaves. Only the title stays in the row. In a Jam the
                   glass stays on the track and Spotify's Jam strip gets a pane of the same glass above it, and the fade under
                   the bars reaches above the strip while the card is above the bar; in the minimized row the card docks as it does outside a Jam and the strip
@@ -566,7 +567,8 @@ Redesigned:
                   cover plays at 2x until the finger lifts (PlayerArtwork.x), an octave higher while Pitch follows
                   speed is on. Hide on the player's Shuffle and Repeat (spotifyglass.redesign.player.hideShuffle,
                   .hideRepeat, read at launch) take those buttons off the controls by alpha in their slots, as the
-                  Music app keeps them off its own (PlayerControls.x). A Free account gets it too: Spotify's Reinvented Free player mode, whose units none of
+                  Music app keeps them off its own (PlayerControls.x); with both off, previous and next are translated
+                  out to a quarter of the row either side of play, the Music app's spacing (issue #162). A Free account gets it too: Spotify's Reinvented Free player mode, whose units none of
                   the hooks reach, declines while the redesign runs, so the track falls to Spotify's other Free mode,
                   built from the units the redesign styles (PlayerFree.x, read from the binary, not yet seen on a Free
                   account). Animated artwork (PlayerMotion.x)
