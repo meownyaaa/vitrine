@@ -70,9 +70,7 @@ static void detach(UIView *host) {
     forEachFullSizeView(host, host.bounds.size, 0, ^(UIView *v) { restoreView(v); });
 }
 
-// pinToScreen: the background keeps the window's frame even when the host scrolls or grows (the
-// now playing plane grows with its list); otherwise it fills the host.
-static void attach(UIView *host, MRGScreen screen, BOOL pinToScreen, BOOL onTop) {
+static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!host) return;
     if (!MRGWantsScreen(screen)) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
@@ -84,9 +82,13 @@ static void attach(UIView *host, MRGScreen screen, BOOL pinToScreen, BOOL onTop)
     if (onTop) { if (host.subviews.lastObject != bg) [host bringSubviewToFront:bg]; }
     else if (host.subviews.firstObject != bg) [host sendSubviewToBack:bg];
 
-    CGRect frame = host.bounds;
-    if (pinToScreen && host.window) frame = [host convertRect:host.window.bounds fromView:nil];
-    if (!CGRectEqualToRect(bg.frame, frame)) bg.frame = frame;
+    // The view fills the host's bounds; its canvas covers the window wherever the host is (pinCanvas),
+    // so neither a short host (keyboard), an offset one (nav container, transition) nor the growing
+    // now playing plane crops or shifts the picture. Re-pinned on every layout pass of the host.
+    if (!CGRectEqualToRect(bg.frame, host.bounds)) {
+        [UIView performWithoutAnimation:^{ bg.frame = host.bounds; }];
+    }
+    [bg pinCanvas];
 
     if (!onTop && MRGClearPages()) {
         clearView(host);
@@ -111,19 +113,19 @@ static void attach(UIView *host, MRGScreen screen, BOOL pinToScreen, BOOL onTop)
 
 %group MRGHome
 %hook _TtC19Home_FunkisPageImpl20FunkisViewController
-- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO, NO); }
+- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
 %end
 %end
 
 %group MRGHomeEvo
 %hook _TtC16Home_EvoPageImpl33EvoLoadableResourceViewController
-- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO, NO); }
+- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
 %end
 %end
 
 %group MRGLibrary
 %hook _TtC28YourLibrary_YourLibraryXImpl25YourLibraryViewController
-- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenLibrary, NO, NO); }
+- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenLibrary, NO); }
 %end
 %end
 
@@ -133,13 +135,13 @@ static void attach(UIView *host, MRGScreen screen, BOOL pinToScreen, BOOL onTop)
 // which are not in this view.
 %group MRGNowPlaying
 %hook _TtC21NowPlaying_ScrollImpl27NPVBackgroundViewController
-- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES, YES); }
+- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
 %end
 %end
 
 %group MRGEverywhere
 %hook _TtC33Navigation_PageAPIIntegrationImpl33MusicAppPageHostingViewController
-- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenEverywhere, NO, NO); }
+- (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenEverywhere, NO); }
 %end
 %end
 

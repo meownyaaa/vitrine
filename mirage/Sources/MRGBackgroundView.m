@@ -95,7 +95,26 @@ static AVPlayerItem *videoOnlyItem(NSURL *url, double blur) {
 
 #pragma mark - view
 
+CGRect MRGWindowRectInView(UIView *view) {
+    UIWindow *window = view.window;
+    CGSize size = window ? window.bounds.size : UIScreen.mainScreen.bounds.size;
+    if (!window) return (CGRect){CGPointZero, size};
+    // The window point of view's bounds origin, walked up through center/bounds rather than frame, which
+    // is undefined under a transform.
+    CGPoint p = view.bounds.origin;
+    for (UIView *v = view; v && v != window; v = v.superview) {
+        CGPoint anchor = v.layer.anchorPoint;
+        CGPoint inSuper = CGPointMake(v.center.x + (p.x - v.bounds.origin.x - v.bounds.size.width * anchor.x),
+                                      v.center.y + (p.y - v.bounds.origin.y - v.bounds.size.height * anchor.y));
+        p = inSuper;
+        if (!v.superview) break;
+    }
+    // p is where view's bounds origin sits in the window; the window's origin is that far up and left.
+    return CGRectMake(view.bounds.origin.x - p.x, view.bounds.origin.y - p.y, size.width, size.height);
+}
+
 @implementation MRGBackgroundView {
+    UIView *_canvas;
     UIImageView *_imageView;
     AVPlayerLayer *_playerLayer;
     UIView *_dim;
@@ -128,15 +147,21 @@ static NSString *sg_stillKey;
     if (!(self = [super initWithFrame:frame])) return nil;
     self.userInteractionEnabled = NO;
     self.clipsToBounds = YES;
-    self.backgroundColor = UIColor.blackColor;
+    self.backgroundColor = UIColor.clearColor;
     self.accessibilityElementsHidden = YES;
-    _imageView = [[UIImageView alloc] initWithFrame:self.bounds];
+    self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.insetsLayoutMarginsFromSafeArea = NO;
+    _canvas = [[UIView alloc] initWithFrame:self.bounds];
+    _canvas.userInteractionEnabled = NO;
+    _canvas.backgroundColor = UIColor.blackColor;
+    [self addSubview:_canvas];
+    _imageView = [[UIImageView alloc] initWithFrame:_canvas.bounds];
     _imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self addSubview:_imageView];
-    _dim = [[UIView alloc] initWithFrame:self.bounds];
+    [_canvas addSubview:_imageView];
+    _dim = [[UIView alloc] initWithFrame:_canvas.bounds];
     _dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _dim.backgroundColor = UIColor.blackColor;
-    [self addSubview:_dim];
+    [_canvas addSubview:_dim];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh) name:MRGSettingsChangedNotification object:nil];
     [self refresh];
     return self;
@@ -166,7 +191,7 @@ static NSString *sg_stillKey;
         [MRGVideoEngine.shared reload];
         if (!_playerLayer) {
             _playerLayer = [AVPlayerLayer playerLayerWithPlayer:MRGVideoEngine.shared.player];
-            [self.layer insertSublayer:_playerLayer below:_dim.layer];
+            [_canvas.layer insertSublayer:_playerLayer below:_dim.layer];
         }
         _playerLayer.videoGravity = scale == MRGScaleFit ? AVLayerVideoGravityResizeAspect
                                   : scale == MRGScaleStretch ? AVLayerVideoGravityResize : AVLayerVideoGravityResizeAspectFill;
@@ -176,16 +201,30 @@ static NSString *sg_stillKey;
     [self setNeedsLayout];
 }
 
-- (void)layoutSubviews {
-    [super layoutSubviews];
+- (void)pinCanvas {
+    CGRect target = self.window ? MRGWindowRectInView(self) : self.bounds;
+    if (CGRectEqualToRect(_canvas.frame, target) && CGRectEqualToRect(_playerLayer.frame, _canvas.bounds)) return;
+    // No implicit animation: a frame that animates lags the page it sits in, which reads as a jump.
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    _playerLayer.frame = self.bounds;
+    [UIView performWithoutAnimation:^{ self->_canvas.frame = target; }];
+    _playerLayer.frame = _canvas.bounds;
     [CATransaction commit];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self pinCanvas];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previous {
+    [super traitCollectionDidChange:previous];
+    [self setNeedsLayout];
 }
 
 - (void)didMoveToWindow {
     [super didMoveToWindow];
+    if (self.window) [self pinCanvas];
     if (self.window && !self.hidden) [MRGVideoEngine.shared viewAppeared:self];
     else [MRGVideoEngine.shared viewDisappeared:self];
 }
