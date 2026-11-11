@@ -302,12 +302,90 @@ static void hostDisappeared(UIView *host) {
     if (bg && !bg.hidden) bg.hidden = YES;
 }
 
+// Switching Library between grid and list (setCollectionViewLayout:animated:), a reload or batch updates
+// hand the list new or re-configured cells after its layout pass, and Spotify may paint the list again; with
+// no scroll nothing laid the list out again, so it stayed black until a touch. Each of these, and every
+// layout pass, schedules one more clear on the next turn of the run loop (coalesced per list) and one after
+// the layout animation. A list that replaced the old one (not tagged yet) gets its page walked again.
+static char kPendingKey;
+
+static UIView *backgroundHostOf(UIView *view) {
+    for (UIView *v = view.superview; v; v = v.superview) {
+        MRGBackgroundView *bg = objc_getAssociatedObject(v, &kBackgroundKey);
+        if (bg && bg.superview == v && !bg.hidden) return v;
+    }
+    return nil;
+}
+
+static void clearListNow(UIScrollView *list) {
+    if (isTaggedList(list)) {
+        if (isCleared(list)) clearView(list);
+        clearCells(list);
+    } else if (MRGClearPages() && list.window) {
+        // Only a list the page's size can be the page's main list; shelves and carousels are not walked for.
+        UIView *host = backgroundHostOf(list);
+        if (host && list.bounds.size.width >= host.bounds.size.width * 0.9 &&
+            list.bounds.size.height >= host.bounds.size.height * 0.4) tagPageLists(host);
+    }
+}
+
+static void scheduleListClear(UIScrollView *list, BOOL afterAnimation) {
+    if (!sg_taggedLists) return;
+    if (!objc_getAssociatedObject(list, &kPendingKey)) {
+        objc_setAssociatedObject(list, &kPendingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        __weak UIScrollView *weakList = list;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIScrollView *l = weakList;
+            if (!l) return;
+            objc_setAssociatedObject(l, &kPendingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            clearListNow(l);
+        });
+    }
+    if (afterAnimation) {
+        __weak UIScrollView *weakList = list;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIScrollView *l = weakList;
+            if (l) clearListNow(l);
+        });
+    }
+}
+
 %group MRGLists
 %hook UICollectionView
-- (void)layoutSubviews { %orig; if (isTaggedList(self)) clearCells(self); }
+- (void)layoutSubviews {
+    %orig;
+    if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
+}
+- (void)reloadData { %orig; scheduleListClear(self, NO); }
+- (void)setCollectionViewLayout:(UICollectionViewLayout *)layout animated:(BOOL)animated {
+    %orig;
+    scheduleListClear(self, YES);
+}
+- (void)setCollectionViewLayout:(UICollectionViewLayout *)layout animated:(BOOL)animated completion:(void (^)(BOOL))completion {
+    __weak UICollectionView *weakSelf = self;
+    %orig(layout, animated, ^(BOOL finished) {
+        if (completion) completion(finished);
+        UICollectionView *list = weakSelf;
+        if (list) clearListNow(list);
+    });
+    scheduleListClear(self, YES);
+}
+- (void)performBatchUpdates:(void (^)(void))updates completion:(void (^)(BOOL))completion {
+    if (!sg_taggedLists) { %orig; return; }
+    __weak UICollectionView *weakSelf = self;
+    %orig(updates, ^(BOOL finished) {
+        if (completion) completion(finished);
+        UICollectionView *list = weakSelf;
+        if (list) clearListNow(list);
+    });
+}
 %end
 %hook UITableView
-- (void)layoutSubviews { %orig; if (isTaggedList(self)) clearCells(self); }
+- (void)layoutSubviews {
+    %orig;
+    if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
+}
+- (void)reloadData { %orig; scheduleListClear(self, NO); }
 %end
 %end
 
