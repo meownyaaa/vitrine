@@ -19,7 +19,9 @@
 @interface MRGBackgroundView : UIView
 + (UIImage *)currentStill;   // cached, blurred
 - (void)refresh;             // re-read the settings
-- (void)pinCanvas;           // place the canvas over the window again (cheap when nothing moved)
+- (void)pinCanvas;
+// A preview: the picture is laid out for the view's own bounds rather than the window's.
+@property (nonatomic) BOOL fitsBounds;           // place the canvas over the window again (cheap when nothing moved)
 @end
 
 // The window-sized rect, in the coordinates of `view`, ignoring transforms (a sheet mid-animation is

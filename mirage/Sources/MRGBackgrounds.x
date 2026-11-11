@@ -121,6 +121,7 @@ static void forEachFullSizeView(UIView *root, CGSize page, int depth, void (^blo
     for (UIView *sub in root.subviews) {
         if ([sub isKindOfClass:MRGBackgroundView.class] || [sub isKindOfClass:UIVisualEffectView.class]) continue;
         if ([sub isKindOfClass:UICollectionViewCell.class] || [sub isKindOfClass:UITableViewCell.class]) continue;
+        if ([sub.accessibilityIdentifier isEqualToString:@"mirage.settings"]) continue;
         CGSize s = sub.bounds.size;
         if (s.width < page.width * 0.9 || s.height < page.height * 0.6) continue;
         block(sub);
@@ -138,6 +139,7 @@ static void tagPageLists(UIView *host) {
         UIView *v = stack.lastObject; [stack removeLastObject];
         if ([v isKindOfClass:MRGBackgroundView.class] || [v isKindOfClass:UICollectionViewCell.class] ||
             [v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UIVisualEffectView.class]) continue;
+        if ([v.accessibilityIdentifier isEqualToString:@"mirage.settings"]) continue;   // draws its own
         if (([v isKindOfClass:UICollectionView.class] || [v isKindOfClass:UITableView.class]) &&
             v.bounds.size.width >= page.width * 0.9 && v.bounds.size.height >= page.height * 0.4) {
             clearView(v);

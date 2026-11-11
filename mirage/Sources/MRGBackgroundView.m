@@ -202,7 +202,7 @@ static NSString *sg_stillKey;
 }
 
 - (void)pinCanvas {
-    CGRect target = self.window ? MRGWindowRectInView(self) : self.bounds;
+    CGRect target = (self.window && !_fitsBounds) ? MRGWindowRectInView(self) : self.bounds;
     if (CGRectEqualToRect(_canvas.frame, target) && CGRectEqualToRect(_playerLayer.frame, _canvas.bounds)) return;
     // No implicit animation: a frame that animates lags the page it sits in, which reads as a jump.
     [CATransaction begin];
@@ -210,6 +210,11 @@ static NSString *sg_stillKey;
     [UIView performWithoutAnimation:^{ self->_canvas.frame = target; }];
     _playerLayer.frame = _canvas.bounds;
     [CATransaction commit];
+}
+
+- (void)setFitsBounds:(BOOL)fits {
+    _fitsBounds = fits;
+    [self setNeedsLayout];
 }
 
 - (void)layoutSubviews {

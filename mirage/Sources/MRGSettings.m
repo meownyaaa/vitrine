@@ -30,12 +30,32 @@ typedef NS_ENUM(NSInteger, MRGSection) { MRGSecPreview, MRGSecMedia, MRGSecLook,
     self.title = @"Mirage";
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.tableView.backgroundColor = UIColor.blackColor;
+    // The page draws its own background, laid out for the whole window (not the table's frame, which
+    // stops short of the tab bar), so it lines up with the screens around it; Mirage's page hooks
+    // leave this table alone.
+    self.tableView.accessibilityIdentifier = @"mirage.settings";
+    self.tableView.backgroundView = [[MRGBackgroundView alloc] initWithFrame:self.tableView.bounds];
     self.tableView.separatorColor = [UIColor colorWithWhite:1 alpha:0.1];
     _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     _spinner.hidesWhenStopped = YES;
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:_spinner];
     if (self.navigationController.viewControllers.firstObject == self && self.presentingViewController)
         self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose target:self action:@selector(close)];
+}
+
+// Pushed on Spotify's stack the page runs under the tab bar and the mini player, which Spotify does not
+// report as safe area to a page of ours; the last rows are kept clear of both.
+static const CGFloat kBottomChrome = 150;
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    BOOL modal = self.navigationController.viewControllers.firstObject == self && self.presentingViewController;
+    CGFloat bottom = modal ? 0 : MAX(0, kBottomChrome - self.view.safeAreaInsets.bottom);
+    UITableView *t = self.tableView;
+    if (t.contentInset.bottom != bottom) {
+        UIEdgeInsets inset = t.contentInset; inset.bottom = bottom; t.contentInset = inset;
+        UIEdgeInsets bar = t.verticalScrollIndicatorInsets; bar.bottom = bottom; t.verticalScrollIndicatorInsets = bar;
+    }
 }
 
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
@@ -78,7 +98,7 @@ typedef NS_ENUM(NSInteger, MRGSection) { MRGSecPreview, MRGSecMedia, MRGSecLook,
 
 static UITableViewCell *baseCell(void) {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
-    c.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
+    c.backgroundColor = [UIColor colorWithWhite:0.11 alpha:0.78];
     c.textLabel.textColor = UIColor.whiteColor;
     c.selectionStyle = UITableViewCellSelectionStyleNone;
     return c;
@@ -160,6 +180,7 @@ static UITableViewCell *baseCell(void) {
             } else {
                 UITableViewCell *c = baseCell();
                 MRGBackgroundView *preview = [[MRGBackgroundView alloc] initWithFrame:c.contentView.bounds];
+                preview.fitsBounds = YES;
                 preview.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
                 [c.contentView addSubview:preview];
                 return c;
