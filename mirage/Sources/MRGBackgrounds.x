@@ -9,37 +9,39 @@
 // A page gets a MRGBackgroundView at the very bottom of its view. Spotify paints its pages with an
 // opaque fill (and Vitrine's redesign paints them black), so with "Clear page backgrounds" on, the
 // full-screen containers of that page (views that cover most of it: the page view, its collection
-// view and their full-size wrappers) are made clear, and stay clear even if Spotify or Vitrine sets
-// a color again later. Cells, cards, bars and Vitrine's glass are left alone, so the glass now samples
+// view and their full-size wrappers) are made clear, and cleared again on the next layout pass if Spotify or Vitrine sets
+// a color again. Cells, cards, bars and Vitrine's glass are left alone, so the glass now samples
 // the background instead of a flat fill.
 #import "MRGPrefs.h"
 #import "MRGBackgroundView.h"
 #import <objc/runtime.h>
 
 static char kBackgroundKey, kClearedKey, kOriginalColorKey;
-// Views cleared so far; while none are, the setBackgroundColor: hook does nothing but compare this.
-static NSUInteger sg_clearedCount;
 
-#pragma mark - clearing a page's fills
+static BOOL isCleared(UIView *v) { return objc_getAssociatedObject(v, &kClearedKey) != nil; }
 
-static BOOL isCleared(UIView *v) { return sg_clearedCount && objc_getAssociatedObject(v, &kClearedKey) != nil; }
+static BOOL isVisibleColor(UIColor *c) { return c && CGColorGetAlpha(c.CGColor) > 0.01; }
 
+// Called on every layout pass of the host, so a color Spotify (or Vitrine) sets again later is taken
+// off at the next pass and remembered as the one to put back. No UIView-wide setBackgroundColor: hook.
 static void clearView(UIView *v) {
-    if (isCleared(v)) return;
-    UIColor *original = v.backgroundColor;
-    objc_setAssociatedObject(v, &kOriginalColorKey, original ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(v, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    sg_clearedCount++;
-    v.backgroundColor = UIColor.clearColor;   // goes through the hook below, which lets clear through
-    if ([v isKindOfClass:UICollectionView.class]) ((UICollectionView *)v).backgroundView.alpha = 0;
-    if ([v isKindOfClass:UITableView.class]) ((UITableView *)v).backgroundView.alpha = 0;
+    UIColor *c = v.backgroundColor;
+    if (!isCleared(v)) {
+        objc_setAssociatedObject(v, &kOriginalColorKey, c ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(v, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else if (isVisibleColor(c)) {
+        objc_setAssociatedObject(v, &kOriginalColorKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (isVisibleColor(c)) v.backgroundColor = UIColor.clearColor;
+    UIView *bgView = [v isKindOfClass:UICollectionView.class] ? ((UICollectionView *)v).backgroundView
+                   : [v isKindOfClass:UITableView.class] ? ((UITableView *)v).backgroundView : nil;
+    if (bgView.alpha != 0) bgView.alpha = 0;
 }
 
 static void restoreView(UIView *v) {
     if (!isCleared(v)) return;
     id original = objc_getAssociatedObject(v, &kOriginalColorKey);
     objc_setAssociatedObject(v, &kClearedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (sg_clearedCount) sg_clearedCount--;
     v.backgroundColor = original == NSNull.null ? nil : original;
     if ([v isKindOfClass:UICollectionView.class]) ((UICollectionView *)v).backgroundView.alpha = 1;
     if ([v isKindOfClass:UITableView.class]) ((UITableView *)v).backgroundView.alpha = 1;
@@ -128,19 +130,6 @@ static void hostDisappeared(UIView *host) {
     if (bg && !bg.hidden) bg.hidden = YES;
 }
 
-#pragma mark - keeping cleared views clear
-
-%hook UIView
-- (void)setBackgroundColor:(UIColor *)color {
-    if (isCleared(self) && color && CGColorGetAlpha(color.CGColor) > 0) {
-        // Remember what Spotify (or Vitrine) wanted, for when the background is turned off.
-        objc_setAssociatedObject(self, &kOriginalColorKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        return;
-    }
-    %orig;
-}
-%end
-
 #pragma mark - screens
 
 %group MRGHome
@@ -213,7 +202,6 @@ static void relayoutAll(void) {
 
 %ctor {
     @autoreleasepool {
-        %init;   // UIView
         if (NSClassFromString(@"_TtC19Home_FunkisPageImpl20FunkisViewController")) %init(MRGHome);
         if (NSClassFromString(@"_TtC16Home_EvoPageImpl33EvoLoadableResourceViewController")) %init(MRGHomeEvo);
         if (NSClassFromString(@"_TtC28YourLibrary_YourLibraryXImpl25YourLibraryViewController")) %init(MRGLibrary);
