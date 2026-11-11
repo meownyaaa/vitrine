@@ -8,6 +8,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import "MRGDJLog.h"
+#import "MRGChatView.h"
 
 #pragma mark - shared bits
 
@@ -371,7 +372,14 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     [mark setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     _spinner.hidesWhenStopped = YES;
-    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[mark, title, [UIView new], _spinner]];
+    UIButton *chat = [UIButton systemButtonWithImage:[UIImage systemImageNamed:@"bubble.left.and.text.bubble.right.fill"
+        withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] target:self action:@selector(openChat)];
+    chat.tintColor = UIColor.whiteColor;
+    chat.accessibilityLabel = @"Chat with your DJ";
+    [chat setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [chat.widthAnchor constraintEqualToConstant:40].active = YES;
+    [chat.heightAnchor constraintEqualToConstant:40].active = YES;
+    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[mark, title, [UIView new], _spinner, chat]];
     head.spacing = 8;
     head.alignment = UIStackViewAlignmentCenter;
 
@@ -441,9 +449,15 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     _field.enablesReturnKeyAutomatically = YES;
     _field.delegate = self;
     _field.translatesAutoresizingMaskIntoConstraints = NO;
-    _send = [UIButton systemButtonWithImage:[UIImage systemImageNamed:@"arrow.up.circle.fill"
-        withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightSemibold]] target:self action:@selector(sendRequest)];
-    _send.tintColor = kGreen();
+    // A solid accent circle with the arrow in the color that reads on it: a tinted symbol alone can vanish into the glass.
+    UIButtonConfiguration *sc = [UIButtonConfiguration filledButtonConfiguration];
+    sc.image = [UIImage systemImageNamed:@"arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]];
+    sc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    sc.baseBackgroundColor = kGreen();
+    sc.baseForegroundColor = MRGOnAccent();
+    sc.contentInsets = NSDirectionalEdgeInsetsZero;
+    _send = [UIButton buttonWithConfiguration:sc primaryAction:nil];
+    [_send addTarget:self action:@selector(sendRequest) forControlEvents:UIControlEventTouchUpInside];
     _send.accessibilityLabel = @"Send request";
     _send.translatesAutoresizingMaskIntoConstraints = NO;
     [fieldGlass.contentView addSubview:_field];
@@ -511,7 +525,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     t.text = @"Your set shows up here";
     t.textAlignment = NSTextAlignmentCenter;
     UILabel *s = makeLabel(13, UIFontWeightRegular, kSecondary(), 0);
-    s.text = @"Tap Start or ask for a vibe, and I'll line up 8–10 songs with a word before each.";
+    s.text = @"Tap Start or ask for a vibe, and I'll line up about 15 songs with a word before some of them.";
     s.textAlignment = NSTextAlignmentCenter;
     UIStackView *st = [[UIStackView alloc] initWithArrangedSubviews:@[icon, t, s]];
     st.axis = UILayoutConstraintAxisVertical;
@@ -618,8 +632,13 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     [MRGDJ.shared playFromIndex:row.index];
 }
 
-- (void)go { [self.view endEditing:YES]; [MRGDJ.shared startWithRequest:nil]; }
+- (void)go {
+    [self.view endEditing:YES];
+    if (MRGDJ.shared.set.count || MRGDJ.shared.state == MRGDJPlaying) [MRGDJ.shared switchItUp];
+    else [MRGDJ.shared startWithRequest:nil];
+}
 - (void)stop { [MRGDJ.shared stop]; }
+- (void)openChat { [self.view endEditing:YES]; MRGShowDJChat(self); }
 
 - (void)sendRequest {
     NSString *text = [_field.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -949,26 +968,40 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 
 #pragma mark - Now Playing: the DJ button and caption
 
-@interface MRGDJPlayerButton : UIButton
+@interface MRGDJPlayerButton : UIControl
+@property (nonatomic, strong) NSLayoutConstraint *sideW, *sideH;
 @end
 
+// The ✦ on Now Playing: a glass circle the size of the ⋯'s (the same effect when the ⋯ has one), a crisp white glyph
+// on top of it (in the accent only while the DJ is on). Tap: the DJ sheet; long-press: the DJ chat.
 @implementation MRGDJPlayerButton {
-    UIView *_dot;
     UIVisualEffectView *_circle;
+    UIImageView *_glyph;
 }
 
 + (instancetype)make {
-    MRGDJPlayerButton *b = [self buttonWithType:UIButtonTypeSystem];
-    UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightMedium];
-    [b setImage:[UIImage systemImageNamed:@"sparkles" withConfiguration:c] forState:UIControlStateNormal];
+    MRGDJPlayerButton *b = [self new];
     b.accessibilityLabel = @"Mirage DJ";
+    b.accessibilityHint = @"Long-press to chat with the DJ";
     b.accessibilityIdentifier = @"mirage.dj.player";
-    b->_dot = [UIView new];
-    b->_dot.backgroundColor = kGreen();
-    b->_dot.layer.cornerRadius = 3;
-    b->_dot.userInteractionEnabled = NO;
-    [b addSubview:b->_dot];
+    b.isAccessibilityElement = YES;
+    b.accessibilityTraits = UIAccessibilityTraitButton;
+    b->_circle = [[UIVisualEffectView alloc] initWithEffect:glassEffect(NO)];
+    b->_circle.userInteractionEnabled = NO;
+    b->_circle.clipsToBounds = YES;
+    b->_circle.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    [b addSubview:b->_circle];
+    UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+    b->_glyph = [[UIImageView alloc] initWithImage:[[UIImage systemImageNamed:@"sparkles" withConfiguration:c] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+    b->_glyph.contentMode = UIViewContentModeCenter;
+    b->_glyph.userInteractionEnabled = NO;
+    [b addSubview:b->_glyph];
     [b addTarget:b action:@selector(tapped) forControlEvents:UIControlEventTouchUpInside];
+    [b addTarget:b action:@selector(down) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+    [b addTarget:b action:@selector(up) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:b action:@selector(longPressed:)];
+    lp.minimumPressDuration = 0.45;
+    [b addGestureRecognizer:lp];
     [NSNotificationCenter.defaultCenter addObserver:b selector:@selector(refresh) name:MRGDJChangedNotification object:nil];
     [b refresh];
     return b;
@@ -976,42 +1009,35 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 
-- (CGSize)intrinsicContentSize { return CGSizeMake(48, 48); }
-
 - (void)refresh {
     BOOL active = djActive();
-    self.tintColor = active ? kGreen() : UIColor.whiteColor;
-    _dot.hidden = !active;
+    _glyph.tintColor = active ? kGreen() : UIColor.whiteColor;
     self.accessibilityValue = active ? @"On" : nil;
 }
 
-// A glass circle like the ⋯'s, when the redesign gave the ⋯ one (its side).
-- (void)setCircleSide:(CGFloat)side {
-    if (side < 1) { [_circle removeFromSuperview]; _circle = nil; return; }
-    if (!_circle) {
-        _circle = [[UIVisualEffectView alloc] initWithEffect:glassEffect(NO)];
-        _circle.userInteractionEnabled = NO;
-        _circle.clipsToBounds = YES;
-        _circle.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-        [self insertSubview:_circle atIndex:0];
-    }
-    _circle.bounds = CGRectMake(0, 0, side, side);
-    _circle.layer.cornerRadius = side / 2;
-    [self setNeedsLayout];
+- (void)matchGlass:(UIVisualEffectView *)other {
+    if (other.effect && _circle.effect != other.effect) _circle.effect = other.effect;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect b = self.bounds;
-    if (_circle) {
-        _circle.center = CGPointMake(CGRectGetMidX(b), CGRectGetMidY(b));
-        [self sendSubviewToBack:_circle];
-    }
-    _dot.frame = CGRectMake(CGRectGetMidX(b) + 9, CGRectGetMidY(b) - 14, 6, 6);
-    [self bringSubviewToFront:_dot];
+    CGFloat side = MIN(b.size.width, b.size.height);
+    _circle.frame = CGRectMake(CGRectGetMidX(b) - side / 2, CGRectGetMidY(b) - side / 2, side, side);
+    _circle.layer.cornerRadius = side / 2;
+    _glyph.frame = b;
+    [self bringSubviewToFront:_glyph];
 }
 
+- (void)down { [UIView animateWithDuration:0.12 animations:^{ self.transform = CGAffineTransformMakeScale(0.9, 0.9); }]; }
+- (void)up { [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{ self.transform = CGAffineTransformIdentity; } completion:nil]; }
 - (void)tapped { MRGShowDJ(controllerOf(self)); }
+- (void)longPressed:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    [self up];
+    [[UIImpactFeedbackGenerator new] impactOccurred];
+    MRGShowDJChat(controllerOf(self));
+}
 
 @end
 
@@ -1084,7 +1110,7 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 
 - (void)openSheet { MRGShowDJ(controllerOf(self)); }
-- (void)switchItUp { [[UIImpactFeedbackGenerator new] impactOccurred]; [MRGDJ.shared startWithRequest:nil]; }
+- (void)switchItUp { [[UIImpactFeedbackGenerator new] impactOccurred]; [MRGDJ.shared switchItUp]; }
 
 - (BOOL)shouldShow { return MRGDJShowsPlayerButton() && MRGDJ.shared.state != MRGDJIdle; }
 
@@ -1256,28 +1282,41 @@ void MRGDJPlacePlayerButton(UIViewController *unit) {
     }
     UIStackView *row = headerRow(host);
     if (!row) return;
+    UIView *more = row.arrangedSubviews.lastObject;
+    if (!more) return;
     if (!button) {
         button = [MRGDJPlayerButton make];
-        spacer = [UIView new];
-        spacer.alpha = 0;
-        spacer.userInteractionEnabled = NO;
-        spacer.isAccessibilityElement = NO;
-        [button.widthAnchor constraintEqualToConstant:48].active = YES;
-        [spacer.widthAnchor constraintEqualToConstant:48].active = YES;
+        button.translatesAutoresizingMaskIntoConstraints = NO;
         objc_setAssociatedObject(unit, &kPlayerButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(unit, &kPlayerSpacerKey, spacer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (button.superview != row) {
-        // ⌄ [spacer] title [DJ] ⋯ : the spacer balances the button, so the title stays centered.
-        NSArray<UIView *> *arranged = row.arrangedSubviews;
-        UIView *more = arranged.lastObject;
-        [row insertArrangedSubview:spacer atIndex:1];
-        [row insertArrangedSubview:button atIndex:[row.arrangedSubviews indexOfObject:more]];
-    }
-    // The ⋯ with a glass circle (Vitrine's redesign puts one inside it): the DJ button gets the same.
-    UIView *more = row.arrangedSubviews.lastObject;
+    [spacer removeFromSuperview];   // 0.2.x balanced the title with a spacer in the row; the button no longer joins the row
+    // ⌄  title  [✦]⋯ : the button sits beside the ⋯, 8pt from it, outside the stack's arranged views, so the row's own
+    // spacing and centering stay Spotify's; the title is kept clear of it by a width cap.
     UIVisualEffectView *moreGlass = (UIVisualEffectView *)findView(more, ^BOOL(UIView *v) { return v != more && [v isKindOfClass:UIVisualEffectView.class]; });
-    [button setCircleSide:moreGlass ? MAX(moreGlass.bounds.size.width, moreGlass.bounds.size.height) : 0];
+    CGFloat side = moreGlass ? MAX(moreGlass.bounds.size.width, moreGlass.bounds.size.height) : 0;
+    if (side < 20) side = MIN(MAX(more.bounds.size.width, more.bounds.size.height), 44);
+    if (side < 20) side = 40;
+    if (button.superview != row) {
+        [button removeFromSuperview];
+        [row addSubview:button];
+        UIView *anchorView = moreGlass ?: more;
+        button.sideW = [button.widthAnchor constraintEqualToConstant:side];
+        button.sideH = [button.heightAnchor constraintEqualToConstant:side];
+        [NSLayoutConstraint activateConstraints:@[
+            [button.trailingAnchor constraintEqualToAnchor:anchorView.leadingAnchor constant:-8],
+            [button.centerYAnchor constraintEqualToAnchor:anchorView.centerYAnchor],
+            button.sideW, button.sideH,
+        ]];
+        if (row.arrangedSubviews.count >= 3) {
+            UIView *title = row.arrangedSubviews[row.arrangedSubviews.count / 2];
+            NSLayoutConstraint *cap = [title.widthAnchor constraintLessThanOrEqualToAnchor:row.widthAnchor constant:-2 * (side + 8 + side + 8)];
+            cap.priority = UILayoutPriorityRequired - 1;
+            cap.active = YES;
+        }
+    }
+    if (fabs(button.sideW.constant - side) > 0.5) { button.sideW.constant = side; button.sideH.constant = side; }
+    [button matchGlass:moreGlass];
+    button.hidden = more.hidden || more.alpha < 0.01;
 
     UIView *root = playerRoot(host);
     if (!bar) {

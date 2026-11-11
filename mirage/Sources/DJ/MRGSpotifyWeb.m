@@ -103,6 +103,10 @@ static NSDictionary *resolved(NSDictionary *track) {
     if (names) [d addEntriesFromDictionary:names];   // Spotify's own title and artist, not the model's spelling
     NSString *cover = coverOf(track);
     if (cover) d[@"image"] = cover;
+    if ([track[@"popularity"] isKindOfClass:NSNumber.class]) d[@"popularity"] = track[@"popularity"];
+    NSDictionary *album = track[@"album"];
+    if ([album isKindOfClass:NSDictionary.class] && [album[@"name"] isKindOfClass:NSString.class]) d[@"album"] = album[@"name"];
+    if ([album isKindOfClass:NSDictionary.class] && [album[@"release_date"] isKindOfClass:NSString.class]) d[@"released"] = album[@"release_date"];
     return d;
 }
 
@@ -144,5 +148,46 @@ void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSDictionary 
             else MRGDJLog(@"resolve: Web API search failed (%@)", e2);
             done(m2, e2);
         });
+    });
+}
+
+// The largest-but-reasonable image of an artist object (about 300px), or nil.
+static NSString *artistImage(NSDictionary *artist) {
+    NSArray *images = [artist[@"images"] isKindOfClass:NSArray.class] ? artist[@"images"] : nil;
+    NSString *best = nil;
+    NSInteger bestDiff = NSIntegerMax;
+    for (NSDictionary *im in images) {
+        if (![im isKindOfClass:NSDictionary.class] || ![im[@"url"] isKindOfClass:NSString.class]) continue;
+        NSInteger w = [im[@"width"] respondsToSelector:@selector(integerValue)] ? [im[@"width"] integerValue] : 300;
+        NSInteger diff = labs(w - 320);
+        if (diff < bestDiff) { bestDiff = diff; best = im[@"url"]; }
+    }
+    return best;
+}
+
+void MRGWebSearch(NSString *query, NSString *type, NSInteger limit, void (^done)(NSArray<NSDictionary *> *, NSString *)) {
+    if (!query.length) { done(@[], nil); return; }
+    NSString *t = [type isEqualToString:@"artist"] || [type isEqualToString:@"playlist"] || [type isEqualToString:@"album"] ? type : @"track";
+    NSString *path = [NSString stringWithFormat:@"/search?type=%@&limit=%ld&q=%@", t, (long)MAX(1, MIN(20, limit)), enc(query)];
+    call(@"GET", path, nil, ^(id j, NSInteger s, NSString *e) {
+        if (e) { MRGDJLog(@"search (%@): Web API search failed (%@)", t, e); done(nil, e); return; }
+        NSArray *items = [j isKindOfClass:NSDictionary.class] ? [j[[t stringByAppendingString:@"s"]] valueForKey:@"items"] : nil;
+        NSMutableArray *out = [NSMutableArray array];
+        for (NSDictionary *it in [items isKindOfClass:NSArray.class] ? items : @[]) {
+            if (![it isKindOfClass:NSDictionary.class] || ![it[@"uri"] isKindOfClass:NSString.class]) continue;
+            if ([t isEqualToString:@"track"]) { NSDictionary *r = resolved(it); if (r) [out addObject:r]; continue; }
+            NSMutableDictionary *d = [@{@"uri": it[@"uri"], @"name": [it[@"name"] isKindOfClass:NSString.class] ? it[@"name"] : @""} mutableCopy];
+            NSString *img = artistImage(it);
+            if (img) d[@"image"] = img;
+            if ([it[@"popularity"] isKindOfClass:NSNumber.class]) d[@"popularity"] = it[@"popularity"];
+            if ([it[@"genres"] isKindOfClass:NSArray.class]) d[@"genres"] = [it[@"genres"] subarrayWithRange:NSMakeRange(0, MIN(3, [it[@"genres"] count]))];
+            NSDictionary *owner = it[@"owner"];
+            if ([owner isKindOfClass:NSDictionary.class] && [owner[@"display_name"] isKindOfClass:NSString.class]) d[@"owner"] = owner[@"display_name"];
+            NSArray *artists = it[@"artists"];
+            if ([artists isKindOfClass:NSArray.class] && artists.count && [artists[0] isKindOfClass:NSDictionary.class]) d[@"artist"] = artists[0][@"name"] ?: @"";
+            [out addObject:d];
+        }
+        MRGDJLog(@"search (%@): %lu results via Web API search", t, (unsigned long)out.count);
+        done(out, nil);
     });
 }

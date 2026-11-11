@@ -6,13 +6,15 @@
 //   AIza…  Gemini          sk-ant-…  Anthropic        sk-or-…  OpenRouter     gsk_…  Groq
 //   xai-…  xAI             pplx-…    Perplexity       csk-…    Cerebras       fw_… / fw-…  Fireworks
 //   tgp_v1_… / tgp_v1-…  Together    sk- + 32 hex  DeepSeek    sk-proj-… / sk-svcacct-… / other sk-…  OpenAI
+//   AQ.…   Gemini auth keys (AI Studio makes these since May 2026; the older AIza… standard keys still work when
+//          restricted to the Gemini API). Mistral keys have no prefix (32 letters and digits): chosen by hand.
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
 
 MRGProvider MRGDetectProvider(NSString *raw) {
     NSString *key = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (key.length < 10) return MRGProviderNone;
-    if ([key hasPrefix:@"AIza"]) return MRGProviderGemini;
+    if ([key hasPrefix:@"AIza"] || [key hasPrefix:@"AQ."]) return MRGProviderGemini;
     if ([key hasPrefix:@"sk-ant-"]) return MRGProviderAnthropic;
     if ([key hasPrefix:@"sk-or-"]) return MRGProviderOpenRouter;
     if ([key hasPrefix:@"gsk_"]) return MRGProviderGroq;
@@ -44,11 +46,22 @@ NSString *MRGProviderName(MRGProvider p) {
         case MRGProviderFireworks: return @"Fireworks";
         case MRGProviderTogether: return @"Together";
         case MRGProviderDeepSeek: return @"DeepSeek";
+        case MRGProviderMistral: return @"Mistral";
         default: return @"Unknown";
     }
 }
 
-BOOL MRGProviderHasTTS(MRGProvider p) { return p == MRGProviderOpenAI || p == MRGProviderGemini; }
+NSArray<NSNumber *> *MRGAllProviders(void) {
+    return @[@(MRGProviderOpenAI), @(MRGProviderGemini), @(MRGProviderAnthropic), @(MRGProviderOpenRouter), @(MRGProviderGroq),
+             @(MRGProviderXAI), @(MRGProviderMistral), @(MRGProviderDeepSeek), @(MRGProviderPerplexity), @(MRGProviderCerebras),
+             @(MRGProviderFireworks), @(MRGProviderTogether)];
+}
+
+BOOL MRGProviderHasTTS(MRGProvider p) {
+    return p == MRGProviderOpenAI || p == MRGProviderGemini || p == MRGProviderXAI || p == MRGProviderGroq;
+}
+
+BOOL MRGProviderHasTools(MRGProvider p) { return p != MRGProviderNone && p != MRGProviderPerplexity; }
 
 static NSString *baseURL(MRGProvider p) {
     switch (p) {
@@ -63,6 +76,7 @@ static NSString *baseURL(MRGProvider p) {
         case MRGProviderFireworks: return @"https://api.fireworks.ai/inference/v1";
         case MRGProviderTogether: return @"https://api.together.xyz/v1";
         case MRGProviderDeepSeek: return @"https://api.deepseek.com";
+        case MRGProviderMistral: return @"https://api.mistral.ai/v1";
         default: return nil;
     }
 }
@@ -91,6 +105,7 @@ static NSArray<NSString *> *preferences(MRGProvider p) {
         case MRGProviderTogether: return @[@"openai/gpt-oss-120b", @"meta-llama/Llama-3.3-70B-Instruct-Turbo", @"openai/gpt-oss-20b",
                                            @"Qwen/Qwen3*", @"deepseek-ai/DeepSeek-V3*"];
         case MRGProviderDeepSeek: return @[@"deepseek-chat", @"deepseek-flash*", @"deepseek-v*-flash*", @"deepseek-*"];
+        case MRGProviderMistral: return @[@"mistral-small-latest", @"mistral-medium-latest", @"ministral-8b-latest", @"mistral-large-latest", @"mistral-*"];
         default: return @[];
     }
 }
@@ -103,7 +118,7 @@ static BOOL unsuitable(NSString *model) {
         re = [NSRegularExpression regularExpressionWithPattern:
               @"(embed|tts|whisper|transcri|audio|realtime|image|imagen|vision|moderation|guard|dall-e|sora|veo|live|"
               @"computer-use|search|codex|lyria|aqa|robotics|deep-research|thinking|rerank|orpheus|playai|speech|"
-              @"flux|diffusion|babbage|davinci|instruct-0|reasoner|:)"
+              @"flux|diffusion|babbage|davinci|instruct-0|reasoner|ocr|codestral|devstral|pixtral|voxtral|magistral|:)"
                                                        options:NSRegularExpressionCaseInsensitive error:nil];
     });
     return [re firstMatchInString:model options:0 range:NSMakeRange(0, model.length)] != nil;
@@ -152,6 +167,7 @@ static NSString *const kModelsKey = @"mirage.dj.models";
 static NSString *const kAllModelsKey = @"mirage.dj.allModels";
 static NSString *const kRecommendedKey = @"mirage.dj.recommended";
 static NSString *const kOverrideKey = @"mirage.dj.model";
+static NSString *const kGeminiQueryKey = @"mirage.dj.geminiKeyInQuery";
 
 MRGProvider MRGAIProvider(void) { return MRGKeychainAPIKey() ? [D() integerForKey:kProviderKey] : MRGProviderNone; }
 NSString *MRGAIRecommendedModel(void) { return [D() stringForKey:kRecommendedKey]; }
@@ -165,18 +181,25 @@ void MRGAISetModelOverride(NSString *model) {
 
 void MRGAIForgetKey(void) {
     MRGKeychainSetAPIKey(nil);
-    for (NSString *k in @[kProviderKey, kModelsKey, kAllModelsKey, kRecommendedKey, kOverrideKey]) [D() removeObjectForKey:k];
+    for (NSString *k in @[kProviderKey, kModelsKey, kAllModelsKey, kRecommendedKey, kOverrideKey, kGeminiQueryKey]) [D() removeObjectForKey:k];
 }
 
 #pragma mark - HTTP
 
-static NSMutableURLRequest *request(MRGProvider p, NSString *key, NSString *path, NSDictionary *body) {
-    NSURL *url = [NSURL URLWithString:[baseURL(p) stringByAppendingString:path]];
+// Gemini takes its key in the x-goog-api-key header (both AIza… and AQ.… keys); a key the header way refuses is
+// tried once as ?key=, and the way that worked is kept.
+static NSMutableURLRequest *requestWith(MRGProvider p, NSString *key, NSString *path, NSDictionary *body, BOOL geminiQuery) {
+    NSString *full = [baseURL(p) stringByAppendingString:path];
+    if (p == MRGProviderGemini && geminiQuery) {
+        NSString *escaped = [key stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
+        full = [full stringByAppendingFormat:@"%@key=%@", [full containsString:@"?"] ? @"&" : @"?", escaped];
+    }
+    NSURL *url = [NSURL URLWithString:full];
     NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:url];
     r.timeoutInterval = 45;
     [r setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     switch (p) {
-        case MRGProviderGemini: [r setValue:key forHTTPHeaderField:@"x-goog-api-key"]; break;
+        case MRGProviderGemini: if (!geminiQuery) [r setValue:key forHTTPHeaderField:@"x-goog-api-key"]; break;
         case MRGProviderAnthropic:
             [r setValue:key forHTTPHeaderField:@"x-api-key"];
             [r setValue:@"2023-06-01" forHTTPHeaderField:@"anthropic-version"];
@@ -193,6 +216,10 @@ static NSMutableURLRequest *request(MRGProvider p, NSString *key, NSString *path
         r.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     }
     return r;
+}
+
+static NSMutableURLRequest *request(MRGProvider p, NSString *key, NSString *path, NSDictionary *body) {
+    return requestWith(p, key, path, body, p == MRGProviderGemini && [D() boolForKey:kGeminiQueryKey]);
 }
 
 // The provider's own error text where it gives one, else a plain reason by status.
@@ -213,13 +240,14 @@ static NSString *errorMessage(MRGProvider p, NSInteger status, NSData *data, NSE
         else if ([json[@"message"] isKindOfClass:NSString.class]) detail = json[@"message"];
     }
     if (detail.length > 200) detail = [[detail substringToIndex:200] stringByAppendingString:@"…"];
+    if (!detail.length && data.length && data.length < 400) detail = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSString *base;
-    if (status == 401 || status == 403) base = [NSString stringWithFormat:@"%@ rejected this key. Check it and paste it again.", name];
-    else if (status == 402) base = [NSString stringWithFormat:@"%@ says this key is out of credit.", name];
-    else if (status == 429) base = [NSString stringWithFormat:@"%@ is rate-limiting this key (or it's out of quota). Wait a minute and try again.", name];
+    if (status == 401 || status == 403) base = [NSString stringWithFormat:@"%@ refused this key (HTTP %ld).", name, (long)status];
+    else if (status == 402) base = [NSString stringWithFormat:@"%@ says this key is out of credit (HTTP 402).", name];
+    else if (status == 429) base = [NSString stringWithFormat:@"%@ is rate-limiting this key or it's out of quota (HTTP 429). Wait a minute and try again.", name];
     else if (status >= 500) base = [NSString stringWithFormat:@"%@ is having trouble right now (HTTP %ld). Try again soon.", name, (long)status];
     else base = [NSString stringWithFormat:@"%@ answered HTTP %ld.", name, (long)status];
-    return detail.length ? [NSString stringWithFormat:@"%@\n\n%@", base, detail] : base;
+    return detail.length ? [NSString stringWithFormat:@"%@\n\n%@ said: %@", base, name, detail] : base;
 }
 
 static void send(MRGProvider p, NSURLRequest *r, void (^done)(id json, NSData *data, NSInteger status, NSString *error)) {
@@ -279,33 +307,55 @@ static void finishSetup(MRGProvider p, NSString *key, NSArray<NSString *> *all, 
     done(YES, [NSString stringWithFormat:@"%@ key saved. Using %@.", MRGProviderName(p), MRGAIModel()]);
 }
 
-void MRGAISetupKey(NSString *raw, void (^done)(BOOL, NSString *)) {
-    NSString *key = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    MRGProvider p = MRGDetectProvider(key);
+void MRGAISetupKey(NSString *raw, void (^done)(BOOL, NSString *)) { MRGAISetupKeyAs(raw, MRGProviderNone, done); }
+
+void MRGAISetupKeyAs(NSString *raw, MRGProvider chosen, void (^done)(BOOL, NSString *)) {
+    // Pasted keys can carry spaces, line breaks or invisible characters from the page they were copied from.
+    NSMutableString *key = [NSMutableString string];
+    NSCharacterSet *junk = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+    for (NSUInteger i = 0; i < raw.length; i++) {
+        unichar c = [raw characterAtIndex:i];
+        if ([junk characterIsMember:c] || c == 0x200B || c == 0x200C || c == 0x200D || c == 0xFEFF || c == 0x2060 || c < 0x20) continue;
+        [key appendFormat:@"%C", c];
+    }
+    MRGProvider p = chosen != MRGProviderNone ? chosen : MRGDetectProvider(key);
     if (p == MRGProviderNone) {
-        done(NO, @"That doesn't look like an API key Mirage knows. Supported: OpenAI, Gemini, Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together, DeepSeek.");
+        done(NO, @"Mirage can't tell the provider from this key's format (Mistral keys, for one, have no prefix). Choose the provider by hand and save again.");
         return;
     }
-    send(p, request(p, key, modelsPath(p), nil), ^(id json, NSData *data, NSInteger status, NSString *error) {
-        if (error) { done(NO, error); return; }
-        NSArray *ids = modelIDs(p, json);
-        // OpenRouter's and Perplexity's model lists are public, so they say nothing about the key: check it too.
-        if (p == MRGProviderOpenRouter) {
-            send(p, request(p, key, @"/key", nil), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
-                if (e2) done(NO, e2); else finishSetup(p, key, ids, done);
-            });
-            return;
-        }
-        if (p == MRGProviderPerplexity) {
-            NSString *model = MRGAIPickModel(p, ids) ?: @"perplexity/sonar";
-            NSDictionary *body = @{@"model": model, @"input": @"Say ok.", @"max_output_tokens": @16};
-            send(p, request(p, key, @"/agent", body), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
-                if (e2) done(NO, e2); else finishSetup(p, key, ids.count ? ids : @[@"perplexity/sonar"], done);
-            });
-            return;
-        }
-        finishSetup(p, key, ids, done);
-    });
+    void (^validate)(BOOL) = ^(BOOL geminiQuery) {
+        send(p, requestWith(p, key, modelsPath(p), nil, geminiQuery), ^(id json, NSData *data, NSInteger status, NSString *error) {
+            if (error && p == MRGProviderGemini && !geminiQuery && (status == 400 || status == 401 || status == 403)) {
+                // Some Gemini keys are only taken as ?key=: one more try that way before giving up.
+                send(p, requestWith(p, key, modelsPath(p), nil, YES), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
+                    if (e2) { done(NO, error); return; }
+                    [D() setBool:YES forKey:kGeminiQueryKey];
+                    finishSetup(p, key, modelIDs(p, j2), done);
+                });
+                return;
+            }
+            if (error) { done(NO, error); return; }
+            if (p == MRGProviderGemini) [D() setBool:geminiQuery forKey:kGeminiQueryKey];
+            NSArray *ids = modelIDs(p, json);
+            // OpenRouter's and Perplexity's model lists are public, so they say nothing about the key: check it too.
+            if (p == MRGProviderOpenRouter) {
+                send(p, request(p, key, @"/key", nil), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
+                    if (e2) done(NO, e2); else finishSetup(p, key, ids, done);
+                });
+                return;
+            }
+            if (p == MRGProviderPerplexity) {
+                NSString *model = MRGAIPickModel(p, ids) ?: @"perplexity/sonar";
+                NSDictionary *body = @{@"model": model, @"input": @"Say ok.", @"max_output_tokens": @16};
+                send(p, request(p, key, @"/agent", body), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
+                    if (e2) done(NO, e2); else finishSetup(p, key, ids.count ? ids : @[@"perplexity/sonar"], done);
+                });
+                return;
+            }
+            finishSetup(p, key, ids, done);
+        });
+    };
+    validate(NO);
 }
 
 #pragma mark - chat
@@ -421,8 +471,12 @@ static NSString *ttsModel(MRGProvider p) {
     NSMutableArray *tts = [NSMutableArray array];
     for (NSString *m in all) if ([m isKindOfClass:NSString.class] && [m.lowercaseString containsString:@"tts"]) [tts addObject:m];
     if (p == MRGProviderOpenAI) {
-        for (NSString *want in @[@"gpt-4o-mini-tts", @"tts-1"]) if ([tts containsObject:want]) return want;
+        for (NSString *want in @[@"gpt-4o-mini-tts", @"tts-1-hd", @"tts-1"]) if ([tts containsObject:want]) return want;
         return ranked(tts).firstObject ?: @"gpt-4o-mini-tts";
+    }
+    if (p == MRGProviderGroq) {
+        for (NSString *m in all) if ([m isKindOfClass:NSString.class] && [m containsString:@"orpheus-v1-english"]) return m;
+        return @"canopylabs/orpheus-v1-english";
     }
     NSMutableArray *flash = [NSMutableArray array];
     for (NSString *m in tts) if ([m containsString:@"flash"]) [flash addObject:m];
@@ -444,21 +498,93 @@ static NSData *wavFromPCM(NSData *pcm) {
     return wav;
 }
 
-void MRGAISpeech(NSString *text, void (^done)(NSData *, NSString *)) {
+// Voices from each provider's docs (November 2026): OpenAI's speech voices for gpt-4o-mini-tts, Gemini's prebuilt
+// TTS voices, Groq's Orpheus English voices. xAI's come from its own list (GET /v1/tts/voices).
+static NSArray<NSString *> *docVoices(MRGProvider p) {
+    switch (p) {
+        case MRGProviderOpenAI: return @[@"alloy", @"ash", @"ballad", @"coral", @"echo", @"fable", @"nova", @"onyx", @"sage", @"shimmer", @"verse", @"marin", @"cedar"];
+        case MRGProviderGemini: return @[@"Puck", @"Zephyr", @"Charon", @"Kore", @"Fenrir", @"Leda", @"Orus", @"Aoede", @"Callirrhoe", @"Autonoe",
+                                         @"Enceladus", @"Iapetus", @"Umbriel", @"Algieba", @"Despina", @"Erinome", @"Algenib", @"Rasalgethi",
+                                         @"Laomedeia", @"Achernar", @"Alnilam", @"Schedar", @"Gacrux", @"Pulcherrima", @"Achird",
+                                         @"Zubenelgenubi", @"Vindemiatrix", @"Sadachbia", @"Sadaltager", @"Sulafat"];
+        case MRGProviderGroq: return @[@"troy", @"austin", @"daniel", @"autumn", @"diana", @"hannah"];
+        case MRGProviderXAI: return @[@"eve"];
+        default: return @[];
+    }
+}
+
+static NSString *defaultVoice(MRGProvider p) {
+    switch (p) {
+        case MRGProviderOpenAI: return @"ash";
+        case MRGProviderGemini: return @"Puck";
+        case MRGProviderGroq: return @"troy";
+        case MRGProviderXAI: return @"eve";
+        default: return nil;
+    }
+}
+
+void MRGAIProviderVoices(void (^done)(NSArray<NSDictionary *> *)) {
+    MRGProvider p = MRGAIProvider();
+    NSString *key = MRGKeychainAPIKey();
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *v in docVoices(p)) [out addObject:@{@"id": v, @"name": v.capitalizedString}];
+    if (p != MRGProviderXAI || !key) { done(out); return; }
+    send(p, request(p, key, @"/tts/voices", nil), ^(id j, NSData *d, NSInteger s, NSString *e) {
+        NSArray *list = [j isKindOfClass:NSDictionary.class] ? j[@"voices"] : nil;
+        if (![list isKindOfClass:NSArray.class] || !list.count) { done(out); return; }
+        NSMutableArray *voices = [NSMutableArray array];
+        for (NSDictionary *v in list) {
+            if (![v isKindOfClass:NSDictionary.class] || ![v[@"voice_id"] isKindOfClass:NSString.class]) continue;
+            NSString *name = [v[@"name"] isKindOfClass:NSString.class] ? v[@"name"] : [v[@"voice_id"] capitalizedString];
+            [voices addObject:@{@"id": v[@"voice_id"], @"name": name}];
+        }
+        done(voices.count ? voices : out);
+    });
+}
+
+void MRGAISpeech(NSString *text, NSString *voice, double speed, void (^done)(NSData *, NSString *)) {
     MRGProvider p = MRGAIProvider();
     NSString *key = MRGKeychainAPIKey();
     if (!key || !MRGProviderHasTTS(p)) { done(nil, @"This provider has no voice; using the phone's."); return; }
+    NSString *v = voice.length ? voice : defaultVoice(p);
+    if (speed <= 0) speed = 1;
     if (p == MRGProviderOpenAI) {
-        NSDictionary *body = @{@"model": ttsModel(p), @"voice": @"ash", @"input": text, @"response_format": @"mp3",
-                               @"instructions": @"A relaxed, upbeat late-night radio DJ. Casual, warm, quick."};
+        NSMutableDictionary *body = [@{@"model": ttsModel(p), @"voice": v, @"input": text, @"response_format": @"mp3",
+                                       @"speed": @(MIN(4.0, MAX(0.25, speed)))} mutableCopy];
+        if ([body[@"model"] containsString:@"gpt-4o"]) body[@"instructions"] = @"A relaxed, upbeat radio DJ. Casual, warm, natural.";
         NSMutableURLRequest *r = request(p, key, @"/audio/speech", body);
         [r setValue:@"audio/mpeg" forHTTPHeaderField:@"Accept"];
         send(p, r, ^(id j, NSData *d, NSInteger s, NSString *e) { done(e ? nil : d, e); });
         return;
     }
+    if (p == MRGProviderGroq) {
+        // Orpheus takes at most 200 characters a request.
+        NSString *input = text.length > 200 ? [text substringToIndex:200] : text;
+        NSDictionary *body = @{@"model": ttsModel(p), @"voice": v, @"input": input, @"response_format": @"wav"};
+        NSMutableURLRequest *r = request(p, key, @"/audio/speech", body);
+        [r setValue:@"audio/wav" forHTTPHeaderField:@"Accept"];
+        send(p, r, ^(id j, NSData *d, NSInteger s, NSString *e) { done(e ? nil : d, e); });
+        return;
+    }
+    if (p == MRGProviderXAI) {
+        NSDictionary *body = @{@"text": text, @"voice_id": v, @"language": @"auto", @"speed": @(MIN(1.5, MAX(0.7, speed)))};
+        NSMutableURLRequest *r = request(p, key, @"/tts", body);
+        [r setValue:@"*/*" forHTTPHeaderField:@"Accept"];
+        send(p, r, ^(id j, NSData *d, NSInteger s, NSString *e) {
+            if (e) { done(nil, e); return; }
+            // The audio itself, or a JSON envelope with it in base64.
+            if ([j isKindOfClass:NSDictionary.class] && [j[@"audio"] isKindOfClass:NSString.class]) {
+                NSData *audio = [[NSData alloc] initWithBase64EncodedString:j[@"audio"] options:0];
+                done(audio, audio ? nil : @"xAI sent no audio.");
+                return;
+            }
+            done(d.length ? d : nil, d.length ? nil : @"xAI sent no audio.");
+        });
+        return;
+    }
     NSDictionary *body = @{@"contents": @[@{@"parts": @[@{@"text": [@"Say casually, like a laid-back radio DJ: " stringByAppendingString:text]}]}],
                            @"generationConfig": @{@"responseModalities": @[@"AUDIO"],
-                                                  @"speechConfig": @{@"voiceConfig": @{@"prebuiltVoiceConfig": @{@"voiceName": @"Puck"}}}}};
+                                                  @"speechConfig": @{@"voiceConfig": @{@"prebuiltVoiceConfig": @{@"voiceName": v}}}}};
     NSString *path = [NSString stringWithFormat:@"/models/%@:generateContent", ttsModel(p)];
     send(p, request(p, key, path, body), ^(id j, NSData *d, NSInteger s, NSString *e) {
         if (e) { done(nil, e); return; }
@@ -472,4 +598,210 @@ void MRGAISpeech(NSString *text, void (^done)(NSData *, NSString *)) {
         NSData *pcm = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
         done(pcm.length ? wavFromPCM(pcm) : nil, pcm.length ? nil : @"Gemini sent no audio.");
     });
+}
+
+#pragma mark - tools (function calling)
+
+static NSString *jsonString(id obj) {
+    if (!obj) return @"{}";
+    if ([obj isKindOfClass:NSString.class]) return obj;
+    NSData *d = [NSJSONSerialization isValidJSONObject:obj] ? [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil] : nil;
+    return d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : @"{}";
+}
+
+static NSDictionary *jsonDict(id s) {
+    if ([s isKindOfClass:NSDictionary.class]) return s;
+    if (![s isKindOfClass:NSString.class]) return @{};
+    id j = [NSJSONSerialization JSONObjectWithData:[s dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    return [j isKindOfClass:NSDictionary.class] ? j : @{};
+}
+
+static NSString *str(id v) { return [v isKindOfClass:NSString.class] ? v : nil; }
+
+// OpenAI-compatible chat/completions (OpenAI, OpenRouter, Groq, xAI, Cerebras, Fireworks, Together, DeepSeek, Mistral).
+static NSDictionary *openAIToolBody(MRGProvider p, NSString *model, NSString *system, NSArray *messages, NSArray *tools, BOOL extras) {
+    NSMutableArray *msgs = [NSMutableArray arrayWithObject:@{@"role": @"system", @"content": system}];
+    for (NSDictionary *m in messages) {
+        NSString *role = m[@"role"];
+        if ([role isEqualToString:@"tool"]) {
+            [msgs addObject:@{@"role": @"tool", @"tool_call_id": m[@"tool_call_id"] ?: @"", @"content": m[@"content"] ?: @"{}"}];
+        } else if ([role isEqualToString:@"assistant"]) {
+            NSMutableDictionary *a = [@{@"role": @"assistant", @"content": str(m[@"content"]) ?: @""} mutableCopy];
+            NSMutableArray *calls = [NSMutableArray array];
+            for (NSDictionary *c in m[@"tool_calls"]) {
+                [calls addObject:@{@"id": c[@"id"] ?: @"", @"type": @"function",
+                                   @"function": @{@"name": c[@"name"] ?: @"", @"arguments": jsonString(c[@"arguments"])}}];
+            }
+            if (calls.count) a[@"tool_calls"] = calls;
+            [msgs addObject:a];
+        } else {
+            [msgs addObject:@{@"role": @"user", @"content": m[@"content"] ?: @""}];
+        }
+    }
+    NSMutableArray *fns = [NSMutableArray array];
+    for (NSDictionary *t in tools) [fns addObject:@{@"type": @"function", @"function": @{@"name": t[@"name"], @"description": t[@"description"], @"parameters": t[@"parameters"]}}];
+    NSMutableDictionary *b = [@{@"model": model, @"messages": msgs} mutableCopy];
+    if (fns.count) b[@"tools"] = fns;
+    if (extras) {
+        BOOL reasoning = (p == MRGProviderOpenAI && isReasoningOpenAI(model)) || [model containsString:@"gpt-oss"];
+        if (reasoning) b[@"reasoning_effort"] = @"low"; else b[@"temperature"] = @0.7;
+        if (p == MRGProviderXAI && [model hasPrefix:@"grok-4.3"]) b[@"reasoning_effort"] = @"none";
+    }
+    return b;
+}
+
+static NSDictionary *openAIToolAnswer(id json) {
+    id choices = [json isKindOfClass:NSDictionary.class] ? json[@"choices"] : nil;
+    NSDictionary *msg = [choices isKindOfClass:NSArray.class] && [choices count] ? [choices[0] valueForKey:@"message"] : nil;
+    if (![msg isKindOfClass:NSDictionary.class]) return nil;
+    NSMutableArray *calls = [NSMutableArray array];
+    for (NSDictionary *c in [msg[@"tool_calls"] isKindOfClass:NSArray.class] ? msg[@"tool_calls"] : @[]) {
+        if (![c isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *f = c[@"function"];
+        if (![f isKindOfClass:NSDictionary.class] || !str(f[@"name"])) continue;
+        [calls addObject:@{@"id": str(c[@"id"]) ?: NSUUID.UUID.UUIDString, @"name": f[@"name"], @"arguments": jsonDict(f[@"arguments"])}];
+    }
+    return @{@"role": @"assistant", @"content": str(msg[@"content"]) ?: @"", @"tool_calls": calls};
+}
+
+static NSDictionary *anthropicToolBody(NSString *model, NSString *system, NSArray *messages, NSArray *tools) {
+    NSMutableArray *msgs = [NSMutableArray array];
+    for (NSDictionary *m in messages) {
+        NSString *role = m[@"role"];
+        if ([role isEqualToString:@"tool"]) {
+            NSDictionary *block = @{@"type": @"tool_result", @"tool_use_id": m[@"tool_call_id"] ?: @"", @"content": m[@"content"] ?: @"{}"};
+            NSMutableDictionary *last = [msgs.lastObject mutableCopy];
+            if ([last[@"role"] isEqualToString:@"user"] && [last[@"content"] isKindOfClass:NSArray.class] &&
+                [[last[@"content"] firstObject][@"type"] isEqualToString:@"tool_result"]) {
+                last[@"content"] = [last[@"content"] arrayByAddingObject:block];
+                msgs[msgs.count - 1] = last;
+            } else {
+                [msgs addObject:@{@"role": @"user", @"content": @[block]}];
+            }
+        } else if ([role isEqualToString:@"assistant"]) {
+            NSMutableArray *blocks = [NSMutableArray array];
+            if ([str(m[@"content"]) length]) [blocks addObject:@{@"type": @"text", @"text": m[@"content"]}];
+            for (NSDictionary *c in m[@"tool_calls"]) [blocks addObject:@{@"type": @"tool_use", @"id": c[@"id"] ?: @"", @"name": c[@"name"] ?: @"", @"input": c[@"arguments"] ?: @{}}];
+            if (!blocks.count) [blocks addObject:@{@"type": @"text", @"text": @"…"}];
+            [msgs addObject:@{@"role": @"assistant", @"content": blocks}];
+        } else {
+            [msgs addObject:@{@"role": @"user", @"content": m[@"content"] ?: @""}];
+        }
+    }
+    NSMutableArray *fns = [NSMutableArray array];
+    for (NSDictionary *t in tools) [fns addObject:@{@"name": t[@"name"], @"description": t[@"description"], @"input_schema": t[@"parameters"]}];
+    NSMutableDictionary *b = [@{@"model": model, @"max_tokens": @1500, @"system": system, @"messages": msgs} mutableCopy];
+    if (fns.count) b[@"tools"] = fns;
+    return b;
+}
+
+static NSDictionary *anthropicToolAnswer(id json) {
+    NSArray *content = [json isKindOfClass:NSDictionary.class] ? json[@"content"] : nil;
+    if (![content isKindOfClass:NSArray.class]) return nil;
+    NSMutableString *text = [NSMutableString string];
+    NSMutableArray *calls = [NSMutableArray array];
+    for (NSDictionary *b in content) {
+        if (![b isKindOfClass:NSDictionary.class]) continue;
+        if ([b[@"type"] isEqual:@"text"] && str(b[@"text"])) [text appendString:b[@"text"]];
+        if ([b[@"type"] isEqual:@"tool_use"] && str(b[@"name"]))
+            [calls addObject:@{@"id": str(b[@"id"]) ?: NSUUID.UUID.UUIDString, @"name": b[@"name"], @"arguments": [b[@"input"] isKindOfClass:NSDictionary.class] ? b[@"input"] : @{}}];
+    }
+    return @{@"role": @"assistant", @"content": text, @"tool_calls": calls};
+}
+
+// Gemini: the model's own parts are sent back as they came (Gemini 3 needs each functionCall's thoughtSignature).
+static NSDictionary *geminiToolBody(NSString *system, NSArray *messages, NSArray *tools) {
+    NSMutableArray *contents = [NSMutableArray array];
+    for (NSDictionary *m in messages) {
+        NSString *role = m[@"role"];
+        if ([role isEqualToString:@"tool"]) {
+            NSDictionary *part = @{@"functionResponse": @{@"name": m[@"name"] ?: @"tool", @"response": @{@"result": jsonDict(m[@"content"])}}};
+            NSMutableDictionary *last = [contents.lastObject mutableCopy];
+            if ([last[@"role"] isEqualToString:@"user"] && [[last[@"parts"] firstObject] objectForKey:@"functionResponse"]) {
+                last[@"parts"] = [last[@"parts"] arrayByAddingObject:part];
+                contents[contents.count - 1] = last;
+            } else {
+                [contents addObject:@{@"role": @"user", @"parts": @[part]}];
+            }
+        } else if ([role isEqualToString:@"assistant"]) {
+            NSArray *raw = [m[@"raw"] isKindOfClass:NSArray.class] ? m[@"raw"] : nil;
+            if (!raw.count) {
+                NSMutableArray *parts = [NSMutableArray array];
+                if ([str(m[@"content"]) length]) [parts addObject:@{@"text": m[@"content"]}];
+                for (NSDictionary *c in m[@"tool_calls"]) [parts addObject:@{@"functionCall": @{@"name": c[@"name"] ?: @"", @"args": c[@"arguments"] ?: @{}}}];
+                raw = parts.count ? parts : @[@{@"text": @"…"}];
+            }
+            [contents addObject:@{@"role": @"model", @"parts": raw}];
+        } else {
+            [contents addObject:@{@"role": @"user", @"parts": @[@{@"text": m[@"content"] ?: @""}]}];
+        }
+    }
+    NSMutableArray *decls = [NSMutableArray array];
+    for (NSDictionary *t in tools) [decls addObject:@{@"name": t[@"name"], @"description": t[@"description"], @"parameters": t[@"parameters"]}];
+    NSMutableDictionary *b = [@{@"systemInstruction": @{@"parts": @[@{@"text": system}]}, @"contents": contents,
+                                @"generationConfig": @{@"temperature": @0.7}} mutableCopy];
+    if (decls.count) b[@"tools"] = @[@{@"functionDeclarations": decls}];
+    return b;
+}
+
+static NSDictionary *geminiToolAnswer(id json) {
+    id cands = [json isKindOfClass:NSDictionary.class] ? json[@"candidates"] : nil;
+    NSArray *parts = [cands isKindOfClass:NSArray.class] && [cands count] ? [[cands[0] valueForKey:@"content"] valueForKey:@"parts"] : nil;
+    if (![parts isKindOfClass:NSArray.class]) return nil;
+    NSMutableString *text = [NSMutableString string];
+    NSMutableArray *calls = [NSMutableArray array];
+    NSUInteger n = 0;
+    for (NSDictionary *part in parts) {
+        if (![part isKindOfClass:NSDictionary.class]) continue;
+        if (str(part[@"text"]) && ![part[@"thought"] boolValue]) [text appendString:part[@"text"]];
+        NSDictionary *fc = part[@"functionCall"];
+        if ([fc isKindOfClass:NSDictionary.class] && str(fc[@"name"]))
+            [calls addObject:@{@"id": str(fc[@"id"]) ?: [NSString stringWithFormat:@"call_%lu", (unsigned long)n++], @"name": fc[@"name"],
+                               @"arguments": [fc[@"args"] isKindOfClass:NSDictionary.class] ? fc[@"args"] : @{}}];
+    }
+    return @{@"role": @"assistant", @"content": text, @"tool_calls": calls, @"raw": parts};
+}
+
+void MRGAIChatTools(NSString *system, NSArray<NSDictionary *> *messages, NSArray<NSDictionary *> *tools,
+                    void (^done)(NSDictionary *, NSString *)) {
+    MRGProvider p = MRGAIProvider();
+    NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();
+    if (p == MRGProviderNone || !key || !model) { done(nil, @"Add an API key in Mirage settings first."); return; }
+    void (^finish)(NSDictionary *, NSString *) = ^(NSDictionary *a, NSString *e) {
+        if (!e && !a) e = [NSString stringWithFormat:@"%@ sent an answer Mirage couldn't read. Try again.", MRGProviderName(p)];
+        done(e ? nil : a, e);
+    };
+    switch (p) {
+        case MRGProviderGemini: {
+            NSString *path = [NSString stringWithFormat:@"/models/%@:generateContent", model];
+            send(p, request(p, key, path, geminiToolBody(system, messages, tools)), ^(id j, NSData *d, NSInteger s, NSString *e) { finish(e ? nil : geminiToolAnswer(j), e); });
+            return;
+        }
+        case MRGProviderAnthropic: {
+            send(p, request(p, key, @"/messages", anthropicToolBody(model, system, messages, tools)), ^(id j, NSData *d, NSInteger s, NSString *e) { finish(e ? nil : anthropicToolAnswer(j), e); });
+            return;
+        }
+        case MRGProviderPerplexity: {
+            // No function calling there: the conversation as text, answered without actions.
+            NSMutableString *t = [NSMutableString string];
+            for (NSDictionary *m in messages) {
+                if ([m[@"role"] isEqualToString:@"tool"]) continue;
+                [t appendFormat:@"%@: %@\n", [m[@"role"] isEqualToString:@"user"] ? @"Listener" : @"DJ", m[@"content"] ?: @""];
+            }
+            MRGAIChat(system, t, NO, ^(NSString *text, NSString *error) { finish(text ? @{@"role": @"assistant", @"content": text, @"tool_calls": @[]} : nil, error); });
+            return;
+        }
+        default: {
+            send(p, request(p, key, @"/chat/completions", openAIToolBody(p, model, system, messages, tools, YES)), ^(id j, NSData *d, NSInteger s, NSString *e) {
+                if (s == 400) {
+                    send(p, request(p, key, @"/chat/completions", openAIToolBody(p, model, system, messages, tools, NO)), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
+                        finish(e2 ? nil : openAIToolAnswer(j2), e2);
+                    });
+                    return;
+                }
+                finish(e ? nil : openAIToolAnswer(j), e);
+            });
+            return;
+        }
+    }
 }

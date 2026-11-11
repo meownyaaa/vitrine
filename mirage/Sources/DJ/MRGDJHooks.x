@@ -8,6 +8,7 @@
 // The settings switches re-run the placement on the views last seen.
 #import "MRGDJView.h"
 #import "MRGPrefs.h"
+#import "MRGHistory.h"
 
 static NSHashTable *sPages, *sPills, *sUnits;
 
@@ -63,6 +64,7 @@ static void remember(NSHashTable *__strong *table, id obj) {
 %end
 
 %ctor {
+    MRGHistoryStart();
     if (NSClassFromString(@"_TtC19Home_FunkisPageImpl20FunkisViewController")) %init(MRGDJHome);
     if (NSClassFromString(@"_TtC14Home_PillUIKit14PillScrollView")) %init(MRGDJPills);
     if (NSClassFromString(@"SGRHomePillButtons")) %init(MRGDJRedesignPill);

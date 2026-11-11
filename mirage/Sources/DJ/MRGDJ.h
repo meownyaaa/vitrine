@@ -1,7 +1,8 @@
-// Mirage DJ: asks the user's AI provider for a set of 12 tracks with a short line before each, from the
-// listener's taste (what is playing, what was played, top and liked tracks: names only), finds each on
-// Spotify, plays the set in Spotify's own player and says each line as its track starts, with the music
-// lowered under the voice.
+// Mirage DJ: asks the user's AI provider for a plan and about 15 tracks with a short line before each, from the
+// listener's taste (what is playing, what was played, the queue around it: names only) and the request, finds each on
+// Spotify (dropping too-popular picks when the request is for underground music, and asking again to refill), plays
+// the set in Spotify's own player and says lines as their tracks start (as often as the persona's talk setting says),
+// with the music lowered under the voice.
 #import <Foundation/Foundation.h>
 
 extern NSString *const MRGDJChangedNotification;   // main queue: status, line, set or error changed
@@ -19,6 +20,7 @@ typedef NS_ENUM(NSInteger, MRGDJState) {
 @property (nonatomic, copy) NSString *title, *artist, *line, *uri;
 @property (nonatomic, copy) NSString *image;   // cover URL (https), when Spotify's search gave one
 @property (nonatomic, copy) NSString *why;     // the model's 1-4 word reason ("deep cut", "fresh find"), optional
+@property (nonatomic) NSInteger popularity;    // Spotify's 0-100 from search, -1 when unknown
 @end
 
 @interface MRGDJ : NSObject
@@ -32,14 +34,27 @@ typedef NS_ENUM(NSInteger, MRGDJState) {
 @property (nonatomic, readonly, copy) NSString *playbackMode; // "queue" (the rest of the set is in Spotify's queue) or "step" (each next track played by Mirage)
 @property (nonatomic, readonly, getter=isSpeaking) BOOL speaking;
 - (void)playFromIndex:(NSInteger)index;          // jumps to a track of the set (a new context from it)
-- (void)startWithRequest:(NSString *)request;   // nil: just play something for me; also "Switch it up"
+- (void)startWithRequest:(NSString *)request;   // nil: just play something for me
+- (void)switchItUp;                              // a new set in a clearly different direction from the last plan
+// Plays these tracks (dictionaries with uri, title, artist, optional image/line) as a DJ set, for the chat.
+- (void)playTracks:(NSArray<NSDictionary *> *)tracks intro:(NSString *)intro;
+@property (nonatomic, readonly, copy) NSString *plan;         // the model's plan for the current set
+@property (nonatomic, readonly, copy) NSString *lastRequest;
 - (void)stop;
 @end
 
-// Voice (Mirage settings).
-typedef NS_ENUM(NSInteger, MRGDJVoiceMode) { MRGDJVoiceDevice = 0, MRGDJVoiceProvider = 1, MRGDJVoiceOff = 2 };
-MRGDJVoiceMode MRGDJVoice(void);
-void MRGDJSetVoice(MRGDJVoiceMode m);
+// Personas: how the DJ talks and how much. Settings → Mirage → AI DJ → Vibe.
+NSArray<NSString *> *MRGDJPersonaNames(void);       // "Classic", "Chill radio host", "Hype", …
+NSArray<NSString *> *MRGDJPersonaBlurbs(void);
+NSInteger MRGDJPersona(void);
+void MRGDJSetPersona(NSInteger i);
+typedef NS_ENUM(NSInteger, MRGDJTalk) { MRGDJTalkAuto = 0, MRGDJTalkEvery = 1, MRGDJTalkFew = 2, MRGDJTalkSwitches = 3 };
+MRGDJTalk MRGDJTalkSetting(void);                  // Auto follows the persona
+void MRGDJSetTalkSetting(MRGDJTalk t);
+MRGDJTalk MRGDJTalkEffective(void);
+NSString *MRGDJCustomPrompt(void);                 // appended to the base prompt, for picks and the chat
+void MRGDJSetCustomPrompt(NSString *s);
+NSString *MRGDJPersonaStyle(void);                 // the persona's voice instructions, for the chat too
 BOOL MRGDJShowsPill(void);
 void MRGDJSetShowsPill(BOOL on);
 BOOL MRGDJShowsPlayerButton(void);   // the DJ button and caption on Now Playing

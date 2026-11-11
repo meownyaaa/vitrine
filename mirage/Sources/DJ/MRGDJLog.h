@@ -12,3 +12,7 @@ UIViewController *MRGDJLogPage(void);
 // #37F200 by default, or the native look's), Spotify's green otherwise. And the text color that reads on it.
 UIColor *MRGAccent(void);
 UIColor *MRGOnAccent(void);
+
+// Pushes a page of Mirage's on Spotify's navigation stack (made to conform to SPTPageController first, which Spotify's
+// navigation controller asserts), or presents it in its own navigation controller when that isn't possible.
+void MRGPushPage(UIViewController *owner, UIViewController *page);

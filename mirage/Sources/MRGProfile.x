@@ -690,19 +690,84 @@ static UIView *styledPageAbove(UIView *view) {
     return nil;
 }
 
-// A section (a cell of the page's list, or the Playlists card's own list) on its layout passes, which come before
-// its first frame: its dark fills are cleared there and kept clear, so Spotify's stock card background never shows
-// (0.2.2 cleared it on the page's throttled passes, up to a second after the card appeared).
+// Profile views alive in a window (Profile_CommonImpl.ProfileView, the page's content view: the header and
+// componentsCollectionView), so sections can be styled from their creation, before the page controller's
+// viewWillAppear has registered the page (0.2.3 waited for that, and the Playlists section's stock card could still
+// paint for a moment).
+static NSHashTable<UIView *> *sg_profileViews;
+
+// Background styling that will apply to a profile page once it is shown (Everywhere over a Mirage background).
+static BOOL earlyWanted(void) {
+    return MRGBackgroundEnabled() && MRGCurrentKind() != MRGMediaNone && MRGWantsScreen(MRGScreenEverywhere);
+}
+
+// The page a ProfileView belongs to: its view controller's view (what stylePage styles), else the ProfileView.
+static UIView *pageOfProfileView(UIView *pv) {
+    for (UIResponder *r = pv; r; r = r.nextResponder)
+        if ([r isKindOfClass:UIViewController.class]) {
+            UIViewController *vc = (UIViewController *)r;
+            if ([NSStringFromClass(vc.class) containsString:@"ProfileViewController"] && vc.isViewLoaded) return vc.view;
+            break;
+        }
+    return pv;
+}
+
+static char kRejectedKey;   // the settings epoch at which stylePage found the page not wanted
+
+static void registerEarly(UIView *page) {
+    if (!page || !earlyWanted()) return;
+    NSNumber *rejected = objc_getAssociatedObject(page, &kRejectedKey);
+    if (rejected && rejected.unsignedIntegerValue == sg_settingsEpoch) return;
+    if (!objc_getAssociatedObject(page, &kProfileKey)) objc_setAssociatedObject(page, &kProfileKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!sg_pages) sg_pages = [NSHashTable weakObjectsHashTable];
+    [sg_pages addObject:page];
+}
+
+static void noteProfileView(UIView *pv) {
+    if (!sg_profileViews) sg_profileViews = [NSHashTable weakObjectsHashTable];
+    [sg_profileViews addObject:pv];
+    registerEarly(pageOfProfileView(pv));
+}
+
+static UIView *profileViewAbove(UIView *view) {
+    if (!sg_profileViews.count) return nil;
+    for (UIView *v = view; v; v = v.superview) if ([sg_profileViews containsObject:v]) return v;
+    return nil;
+}
+
+// A section (a cell of the page's list, a section background or other supplementary/decoration view the list's
+// layout adds, or the Playlists card's own list) on its layout passes, which come before its first frame: its dark
+// fills are cleared there and kept clear, so Spotify's stock card background never shows.
 static void sectionPass(UIView *section) {
     UIView *page = styledPageAbove(section.superview);
+    if (!page) {
+        UIView *pv = profileViewAbove(section.superview);
+        if (!pv) return;
+        page = pageOfProfileView(pv);
+        registerEarly(page);
+        if (![sg_pages containsObject:page]) return;
+    }
     if (!page || !objc_getAssociatedObject(page, &kProfileKey)) return;
     if ([section isKindOfClass:UITableView.class] || [section isKindOfClass:UICollectionView.class]) MRGAdoptList((UIScrollView *)section);
     else if (isDarkish(section.backgroundColor)) MRGClearDarkPersistently(section);
+    for (CALayer *sub in section.layer.sublayers) {
+        if (sub.delegate) continue;
+        CGColorRef bg = sub.backgroundColor;
+        if (bg && isDarkish([UIColor colorWithCGColor:bg])) suppressBG(sub, NO);
+    }
     clearWalk(page, section.subviews, NO);
 }
 
+static BOOL sectionsWatched(void) { return sg_pages.count || sg_profileViews.count; }
+
 static void stylePage(UIView *page, BOOL full, CFTimeInterval interval) {
-    if (!profileWanted(page)) { [sg_pages removeObject:page]; releasePage(page, NO); return; }
+    if (!profileWanted(page)) {
+        objc_setAssociatedObject(page, &kRejectedKey, @(sg_settingsEpoch), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [sg_pages removeObject:page];
+        releasePage(page, NO);
+        return;
+    }
+    objc_setAssociatedObject(page, &kRejectedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(page, &kProfileKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!sg_pages) sg_pages = [NSHashTable weakObjectsHashTable];
     [sg_pages addObject:page];
@@ -808,26 +873,42 @@ static UIView *headerPageOf(CALayer *layer) {
 // Sections as they are laid out and put on screen, inside a styled profile page only (a cheap ancestor check
 // against the few pages being styled; nothing else in the app is touched).
 %group MRGProfileSections
+%hook UICollectionReusableView
+- (void)layoutSubviews { %orig; if (sectionsWatched()) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
+- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)a { %orig; if (sectionsWatched() && ((UIView *)self).superview) sectionPass((UIView *)self); }
+%end
 %hook UICollectionViewCell
-- (void)layoutSubviews { %orig; if (sg_pages.count) sectionPass((UIView *)self); }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sg_pages.count) sectionPass((UIView *)self); }
+- (void)layoutSubviews { %orig; if (sectionsWatched()) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
 %end
 %hook UITableViewCell
-- (void)layoutSubviews { %orig; if (sg_pages.count) sectionPass((UIView *)self); }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sg_pages.count) sectionPass((UIView *)self); }
+- (void)layoutSubviews { %orig; if (sectionsWatched()) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
 %end
 %hook _TtC18Profile_CommonImpl15ProfileListView
 - (void)layoutSubviews {
     %orig;
-    if (!sg_pages.count) return;
+    if (!sectionsWatched()) return;
     sectionPass((UIView *)self);
     for (UIView *v in ((UIView *)self).subviews) if ([v isKindOfClass:UITableView.class]) sectionPass(v);
 }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sg_pages.count) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
 %end
 %end
 
-// The picture's image arriving: its color is read right then, not on a later pass.
+%group MRGProfileViewEarly
+%hook _TtC18Profile_CommonImpl11ProfileView
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w) noteProfileView((UIView *)self); }
+- (void)layoutSubviews {
+    %orig;
+    if (![sg_profileViews containsObject:(UIView *)self]) noteProfileView((UIView *)self);
+    // Its list's visible cells and section backgrounds, on the page's own layout pass too.
+    for (UIView *v in ((UIView *)self).subviews) if ([v isKindOfClass:UICollectionView.class]) for (UIView *c in v.subviews) sectionPass(c);
+}
+%end
+%end
+
 %group MRGProfileImage
 %hook UIImageView
 - (void)setImage:(UIImage *)image {
@@ -847,6 +928,7 @@ static UIView *headerPageOf(CALayer *layer) {
         %init(MRGProfile);
         %init(MRGProfileImage);
         if (NSClassFromString(@"_TtC18Profile_CommonImpl15ProfileListView")) %init(MRGProfileSections);
+        if (NSClassFromString(@"_TtC18Profile_CommonImpl11ProfileView")) %init(MRGProfileViewEarly);
         // A settings change lays every page out again (MRGBackgrounds.x relayoutAll); the next pass on a
         // profile page is then a full one, so the toggle takes effect at once.
         [NSNotificationCenter.defaultCenter addObserverForName:MRGSettingsChangedNotification object:nil queue:nil usingBlock:^(NSNotification *n) {

@@ -1,43 +1,87 @@
 # Mirage DJ (AI DJ, bring your own key)
 
-Mirage DJ, added in 0.2.0, picks 12 tracks (mostly well-known ones) that suit what you've been listening to and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would. The words come from an AI provider you choose, using your own API key.
+Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
 ## Using it
 
-1. Go to **Mirage settings → AI DJ → API key** and paste a key. Mirage works out the provider from the key, reads that provider's model list, picks a fast, cheap chat model (marked ✦) and checks that the key works.
-2. If you want a different model, choose it under **Model**.
+1. Go to **Mirage settings → AI DJ → API key** and paste a key. Mirage works out the provider from the key, reads that provider's model list, picks a fast, cheap chat model (marked ✦) and checks that the key works. If it can't tell (Mistral keys have no prefix) or guesses wrong, pick it under **Provider**; with a key already saved, that re-checks the saved key as the provider you picked. Errors show the provider's HTTP status and its own message.
+2. If you want a different model, choose it under **Model** (the provider's live model list).
 3. Open the DJ from any of these places:
    - **Home:** the **✦ DJ** chip at the end of Home's filter chips (All, Music, Podcasts…). With Vitrine's redesign, which swaps the chips for a title, the chip sits in the title row immediately left of the glass menu/avatar pill, as tall as it and centered on it. It is re-placed on every layout pass and every move of that pill, and stays hidden until the pill is laid out below the status bar (0.2.2 could show it at the top-left over the status bar on first launch). If the chips are hidden by Vitrine's setting, it sits where they would start.
-   - **Now Playing:** the **✦** button in the top bar, just before the ⋯.
-   - **Settings:** **Open Mirage DJ**.
+   - **Now Playing:** the **✦** button in the top bar, 8 pt left of the ⋯, in a glass circle the same size as the ⋯'s (the same glass effect when Vitrine gives the ⋯ one). Its glyph is white, in the accent only while a set is on. It sits outside the header stack, so Spotify's title stays centered; the title gets a width cap so it never runs under the button. **Long-press** it to open the chat.
+   - **Settings:** **Open Mirage DJ**, or **Chat with your DJ**.
 
-   The chip and the button turn green while a set is on. On Now Playing, the line also shows in a small glass "DJ" caption under the top bar while the DJ talks.
+   The chip and the button's glyph take the accent color while a set is on. On Now Playing, the line also shows in a small glass "DJ" caption under the top bar while the DJ talks.
 
    In the sheet:
-   - Use **Switch it up** for a new set, or type a request ("90s r&b for a rainy night") and send it.
+   - Use **Switch it up** for a new set in a clearly different direction (the last plan is sent along with "don't repeat that direction"; the hard constraints of your last request, like "underground", are kept), or type a request ("90s r&b for a rainy night") and send it with the accent send button.
+   - The chat button in the sheet's title row opens the chat.
    - The set is listed with covers. Tap a song to jump to it; Spotify Free may refuse.
    - **DJ chip on Home** and **DJ button on Now Playing** in settings turn each one off.
-4. Under **Voice** you can pick:
-   - **Phone**: the best voice installed on the device, which is offline and free. Premium and Enhanced voices sound much better; add them in iOS Settings → Accessibility → Spoken Content → Voices.
-   - **Provider**: OpenAI or Gemini speech, with Phone as the fallback.
-   - **Off**: text only.
-5. **Lower music while talking** turns Spotify's own audio down to about 30 % while the DJ speaks, then brings it back up. The music keeps playing underneath.
+4. **Voice** (its own page):
+   - **iPhone voice**: every installed English voice (and your phone's language), best first: Personal Voice (after you allow it on the page), Premium, Enhanced, Default, each with its quality. Tap one to hear it. Better voices download in iOS Settings → Accessibility → Spoken Content → Voices.
+   - **AI provider voice**: OpenAI (`gpt-4o-mini-tts`; alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar), Gemini (`gemini-*-flash-*-tts`, 30 prebuilt voices such as Puck, Kore, Zephyr), xAI (`POST /v1/tts`, voices listed live from `GET /v1/tts/voices`), Groq (`canopylabs/orpheus-v1-english`: troy, austin, daniel, autumn, diana, hannah; lines cut to 200 characters). Tap to preview.
+   - **ElevenLabs**: paste an ElevenLabs key on the page; Mirage checks it with `GET /v1/voices` (header `xi-api-key`), lists your voices, and speaks with `POST /v1/text-to-speech/{voice}` (`eleven_flash_v2_5`, falling back to `eleven_multilingual_v2`). The key goes in the keychain under its own entry.
+   - **Off**: captions only.
+   - **Speed** (0.7–1.5×, every engine; ElevenLabs is capped at 1.2) and **Pitch** (iPhone voices only), with a **Preview** row. If a network voice fails, the iPhone voice speaks instead and the debug log says why.
+5. **Vibe** (its own page):
+   - Persona: Classic, Chill radio host, Hype, Underground curator, Storyteller, Minimal. Each changes how the DJ talks and how long its lines are (from 8 words for Minimal to 40 for Storyteller). Underground curator also caps picks at Spotify popularity 65.
+   - How often it talks: Auto (follows the persona), Every track, Every few tracks (the first and then every third), Only on switches (the first track of a set).
+   - Your instructions: free text appended to the base prompt for picks and the chat.
+6. **Lower music while talking** turns Spotify's own audio down to about 30 % while the DJ speaks, then brings it back up. The music keeps playing underneath.
 
 ## What leaves the phone
 
-The key is kept in the iOS keychain. If the sideloaded app has no keychain access, it goes in a file only the app can read.
+The keys (AI provider, ElevenLabs) are kept in the iOS keychain. If the sideloaded app has no keychain access, they go in files only the app can read.
 
-Mirage sends your provider only:
+Mirage sends your AI provider only:
 - track and artist names: what's playing, what Mirage saw you play recently, and what's around it in Spotify's queue
-- the request you type
+- what you type (requests, chat messages, your Vibe instructions)
+- in the chat, the answers a question needs from your listening history (for "when did I first play X": that artist's first date, track, play count and minutes; for "top artists of 2023": that list), and the date range the history covers
 
-Your account, your device and your listening times are never sent.
+ElevenLabs (if you add a key) gets only the lines the DJ says. Your account, your device and your full listening history are never sent.
+
+## Listening history (for the chat)
+
+Spotify's app keeps no full listening history that Mirage can read, so the chat answers from what is on the phone, and says so when it doesn't know:
+- **Mirage's own recording**, from the moment 0.3.0 runs: every track that starts (timestamp, title, artist, URI), with the time until the next track as time played, capped at the track's length (a long pause inside a track overcounts it). A play counts at 30 s, like Spotify's exports. Stored in `Library/Mirage/history.plist`.
+- **Imported Spotify data**: Settings → Mirage → AI DJ → **Listening history** → Import. Pick the *Extended streaming history* ZIP or its `Streaming_History_Audio_*.json` files (fields `ts`, `master_metadata_track_name`, `master_metadata_album_artist_name`, `spotify_track_uri`, `ms_played`; `ts` is when a stream ended, so the start is `ts − ms_played`), or the shorter *Account data* `StreamingHistory_music_*.json` files (`endTime`, `artistName`, `trackName`, `msPlayed`). ZIPs are read from their central directory (stored or deflated entries; ZIP64 isn't supported). Podcast and audiobook rows are skipped. A file already imported (same name and size) is skipped, and imported plays from after Mirage started recording are skipped, so nothing counts twice.
+- The page shows what the history covers and can remove imports or everything.
+
+## The chat
+
+Settings → **Chat with your DJ**, the sheet's chat button, or a long-press on Now Playing's ✦. The provider gets tools in its own function-calling format (OpenAI-compatible `tools`/`tool_calls` for OpenAI, OpenRouter, Groq, xAI, Mistral, DeepSeek, Cerebras, Fireworks and Together; Anthropic `tool_use`/`tool_result`; Gemini `functionDeclarations`/`functionCall`/`functionResponse`, with the model's parts, thought signatures included, echoed back). Perplexity has no function calling there, so it chats without actions. At most 6 tool rounds per message.
+
+| Tool | What it does |
+|---|---|
+| `search` | Web API search (tracks, artists, albums, playlists), with popularity |
+| `play_tracks` / `queue_tracks` | play as a DJ set / add to Spotify's queue (internal player) |
+| `start_dj_set` | a full DJ set from a request |
+| `now_playing` | the current track, context and DJ set |
+| `first_played`, `track_stats`, `top_listening`, `history_overview` | answers from the history above |
+| `create_playlist`, `add_to_playlist`, `remove_from_playlist` | Spotify's playlist engine (below) |
+| `delete_playlist` | only shows a **Delete** / **Cancel** card; nothing is deleted until you tap Delete |
+| `list_playlists` | playlists Mirage made, and the one playing |
+
+Cards: **First played** (the artist's picture in a circle, the date, the first track with a play button, plays and minutes since), track lists with covers and play buttons, playlist results, the delete confirmation, and top lists.
+
+## Playlists
+
+Changes go through Spotify's own playlist engine, the way the app makes them, never the Web API:
+- the transport is `SPTEsperantoTransportBridgeImpl` (`-callSingle:method:payload:onResponse:`, the ObjC bridge every `ESP*ClientImpl` uses). Mirage keeps the instance Spotify itself calls, and records the playlist service methods Spotify uses (logged once each).
+- **Create**: `spotify.playlist_esperanto.proto.RootlistModificationService` / `Modify` with a `RootlistModificationRequest { request: ModificationRequest { operation: "create", before: "start", name, playlist: true, create_item_kind: PLAYLIST } }`, retried without a position; the answer's `ModificationResponse.uri` is the new playlist.
+- **Add tracks**: `spotify.playlist_esperanto.proto.PlaylistService` / `Modify` with `PlaylistModificationRequest { uri, request: { operation: "add", after: "end", uris } }`.
+- **Remove tracks**: their rows first (`PlaylistService` / `Find`, `PlaylistFindRequest { playlist_uri, item_uris }` → `ItemUriToRowIds`), then `Modify` with `operation: "remove"`, `uris` and `rows`.
+- **Delete**: `RootlistModificationService` / `Modify` with `operation: "remove"`, `uris: [playlist]`: removes it from your library (for your own playlist that's Spotify's delete, recoverable at spotify.com/account/recover-playlists; for someone else's, an unfollow).
+- Payloads are hand-encoded protobuf from the schemas embedded in the app (`rootlist_modification_request.proto`, `playlist_modification_request.proto`, `modification_request.proto`, `playlist_find_request.proto`). The method names `Modify` and `Find` follow the app's ESP naming (PascalCase rpc names such as `GetImage`); Swift keeps names this short inline, so they couldn't be read from the binary, and the names Spotify is seen using are preferred at runtime.
+- Mirage can't list your whole library (that needs the rootlist's own format); it knows the playlists it made, the one playing, and any you give by link. Every attempt and answer is in the debug log.
+
 
 ## Provider detection
 
 | Key prefix | Provider | Base URL | Model list |
 |---|---|---|---|
-| `AIza` | Google Gemini | generativelanguage.googleapis.com/v1beta | `GET /models` (`generateContent` capable) |
+| `AQ.` / `AIza` | Google Gemini (AI Studio) | generativelanguage.googleapis.com/v1beta | `GET /models` (`generateContent` capable); key in `x-goog-api-key`, retried once as `?key=` |
 | `sk-ant-` | Anthropic | api.anthropic.com/v1 | `GET /models` |
 | `sk-or-` | OpenRouter | openrouter.ai/api/v1 | `GET /models`; key checked with `GET /key` |
 | `gsk_` | Groq | api.groq.com/openai/v1 | `GET /models` |
@@ -47,7 +91,10 @@ Your account, your device and your listening times are never sent.
 | `fw_` / `fw-` | Fireworks | api.fireworks.ai/inference/v1 | `GET /models` |
 | `tgp_v1_` / `tgp_v1-` | Together | api.together.xyz/v1 | `GET /models` (bare array, `type: chat`) |
 | `sk-` + 32 hex | DeepSeek | api.deepseek.com | `GET /models` |
-| `sk-proj-` / `sk-` | OpenAI | api.openai.com/v1 | `GET /models` |
+| `sk-proj-` / `sk-svcacct-` / `sk-` | OpenAI | api.openai.com/v1 | `GET /models` |
+| none (32 chars), chosen by hand | Mistral | api.mistral.ai/v1 | `GET /models` |
+
+Google AI Studio has issued `AQ.…` keys by default since May 2026 and is phasing out the older `AIza…` keys; 0.2.x didn't recognise `AQ.` and called the key invalid. Pasted keys are cleaned of spaces, line breaks and invisible characters first.
 
 The recommended model is the first match, in order, against each provider's preference list below.
 - Embeddings, speech, image, search, realtime and "thinking" models are left out.
@@ -66,6 +113,7 @@ The recommended model is the first match, in order, against each provider's pref
 | Fireworks | accounts/fireworks/models/gpt-oss-120b / 20b … |
 | Together | openai/gpt-oss-120b, Llama-3.3-70B-Instruct-Turbo … |
 | DeepSeek | deepseek-chat, deepseek-flash* |
+| Mistral | mistral-small-latest, mistral-medium-latest, ministral-8b-latest … |
 
 Chat requests use these APIs:
 - OpenAI-compatible `chat/completions` with `response_format: json_object`. If the provider returns HTTP 400, Mirage retries once with a plain request.
@@ -75,8 +123,8 @@ Chat requests use these APIs:
 
 Reasoning models (gpt-5/6, o-series, gpt-oss) get `reasoning_effort: low`.
 
-Errors are shown in plain words:
-- invalid key (401/403)
+Errors are shown in plain words, always with the HTTP status and the provider's own message when it sends one:
+- key refused (401/403)
 - out of credit (402)
 - rate limited (429, try again in a minute)
 - provider down (5xx)
@@ -94,6 +142,8 @@ Sources (checked November 2026):
 - Fireworks: [API](https://docs.fireworks.ai/api-reference)
 - Together: [models](https://docs.together.ai/reference/models-1)
 - DeepSeek: [API](https://api-docs.deepseek.com/)
+- Mistral: [API](https://docs.mistral.ai/api/)
+- xAI speech: [TTS](https://docs.x.ai/docs/guides/text-to-speech); Groq speech: [TTS](https://console.groq.com/docs/text-to-speech); ElevenLabs: [voices](https://elevenlabs.io/docs/api-reference/voices/search), [TTS](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)
 
 ## How a set plays
 
@@ -103,8 +153,9 @@ Sources (checked November 2026):
    - what's before and after it in the queue (`SPTPlayerState.reverse` / `future`)
 
    The Web API's user endpoints (`/me`, `/me/top`, `/me/tracks`, recently-played, `/me/playlists`) answer 404 to the app's token, so Mirage no longer calls them.
-2. **Model.** The model returns JSON: `intro`, then `tracks[{title, artist, line, why}]`, exactly 12 tracks, mostly well-known songs so they resolve.
+2. **Model.** The prompt treats every constraint in the request (genre, scene, era, mood, energy, "underground", "no hits", "like X") as a hard rule, anchors on what you play, avoids the obvious (no artist's biggest hits, at most 2 songs per artist), and appends your Vibe instructions. The model returns JSON: a `plan` first (the set's direction), `intro`, then 15 `tracks[{title, artist, line, why}]`.
 3. **Resolve.** Each pick is looked up with the Web API's track search (the one Web API call that works with the app's token): first a strict `track:"…" artist:"…"` query, then a loose one, matched on normalized names. The debug log says which query found it. Picks that don't resolve are dropped.
+   - **Underground filter.** When the request asks for underground, obscure, deep cuts, hidden gems, no hits and the like, picks with a search popularity above 50 are dropped (65 for the Underground curator persona). If fewer than 8 are left, the model is asked once more for replacements in the same plan, told what was kept and what was thrown out. If the search doesn't give a popularity, the pick is kept and the log says so.
 4. **Play.** As of 0.2.3, entirely through Spotify's internal player (`SPTEsperantoPlayer`):
    1. The first track plays as its own context: `SPTPlayerContext contextForURI:` on its `spotify:track:` URI, sent with `playContext:options:origin:` and the origin the player builds for itself (`playOriginWithViewURIOverride:externalReferrer:`). The 0.2.2 log showed this path reaching the track.
    2. Mirage watches the player's state for up to 8 s until that track is actually playing (`isPlaying`, not `isPaused`).
@@ -114,7 +165,7 @@ Sources (checked November 2026):
 
    0.2.2 crashed on every Start: it read `-[SPTPlayerState paused]`, a selector that doesn't exist (the getter is `isPaused`). Every message Mirage sends to a Spotify object now checks `respondsToSelector:` first and logs a missing selector once instead of crashing; the playback check runs inside `@try`.
 5. **Tracks are real.** A pick only counts when Spotify's search returns a track whose title and artist both match. Made-up songs are dropped, and the set shows Spotify's own spelling.
-6. **Talk.** Each line is spoken about 0.8 s after its track starts, only while that track is actually playing (not paused, not an ad). The voice uses the system's speech session, never Spotify's audio session.
+6. **Talk.** A line is spoken about 0.8 s after its track starts, as often as the talk setting says, only while that track is actually playing (not paused, not an ad). The voice uses the system's speech session, never Spotify's audio session.
 7. **Keep going.** When the last track starts, the next set is prepared. Once Spotify's autoplay takes over, the next set starts.
 
 ## Spotify Free
@@ -134,12 +185,14 @@ Settings → Mirage → AI DJ → **DJ debug log** shows the last 200 lines. **C
 - what the player was doing when verification gave up
 - skipped voice lines
 
-It never contains keys, tokens or search terms.
+Since 0.3.0 it also has the set's plan, popularity drops and refills, voice fallbacks, chat tool calls, playlist calls (service, method, answer) and history imports (counts only).
+
+It never contains keys, tokens or your listening history.
 
 ## Verified vs not yet verified
 
 Verified:
-- Every source file compiles into the 0.2.0 IPA.
+- Every source file compiles into the 0.3.0 IPA.
 - Model-picking logic was tested against sample model lists.
 - Endpoint shapes and model names were taken from the provider docs above.
 
@@ -148,4 +201,8 @@ Not yet verified on a device:
 - 0.2.3's track-context + queue-after-verify flow and the step fallback
 - ducking on every output route (Bluetooth/AirPlay)
 - keychain access under Ksign signing
-- provider TTS playback
+- provider TTS playback (OpenAI, Gemini, xAI, Groq) and ElevenLabs
+- the Esperanto playlist calls (method names `Modify`/`Find` and the request shapes are inferred from the embedded schemas and the app's naming)
+- the chat's tool calling with each provider (request shapes follow each provider's docs)
+- history import of a real export ZIP
+- the Now Playing ✦ placement next to Vitrine's ⋯ glass, and the profile Playlists section cleared from creation

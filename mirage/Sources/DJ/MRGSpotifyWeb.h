@@ -5,7 +5,11 @@
 #import <Foundation/Foundation.h>
 
 // The match, only when title and artist both match a real track: uri (spotify:track:…), title and artist as
-// Spotify has them, image (an https cover URL, about 300px, when Spotify has one), or nil.
+// Spotify has them, image (an https cover URL, about 300px, when Spotify has one), popularity (0-100, when the
+// search gives it), album, released, or nil.
 void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSDictionary *track, NSString *error));
 // https://i.scdn.co/image/… for a spotify:image:… id or an https URL; nil otherwise.
 NSString *MRGImageURL(NSString *spotifyImage);
+// Web API search (type track, artist, album or playlist): tracks as MRGWebResolve's dictionaries; the others as uri,
+// name, image, popularity, genres (artists), owner (playlists), artist (albums).
+void MRGWebSearch(NSString *query, NSString *type, NSInteger limit, void (^done)(NSArray<NSDictionary *> *results, NSString *error));

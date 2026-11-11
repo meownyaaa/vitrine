@@ -1,4 +1,5 @@
 #import "MRGDJLog.h"
+#import <objc/runtime.h>
 
 static NSMutableArray<NSString *> *sLines;
 static const NSUInteger kMax = 200;
@@ -129,3 +130,28 @@ UIColor *MRGOnAccent(void) {
 @end
 
 UIViewController *MRGDJLogPage(void) { return [MRGDJLogController new]; }
+
+static id mrgPageID(id self, SEL _cmd) { return [@"mirage." stringByAppendingString:NSStringFromClass([self class])]; }
+static id mrgPageURI(id self, SEL _cmd) { return [NSURL URLWithString:[@"spotify:internal:mirage:" stringByAppendingString:NSStringFromClass([self class]).lowercaseString]]; }
+
+void MRGPushPage(UIViewController *owner, UIViewController *page) {
+    if (!owner || !page) return;
+    Protocol *proto = objc_getProtocol("_TtP19Tome_PageAttributes17SPTPageController_") ?: objc_getProtocol("SPTPageController");
+    BOOL ok = NO;
+    if (proto) {
+        Class c = page.class;
+        if (![c instancesRespondToSelector:@selector(spt_pageIdentifier)]) class_addMethod(c, @selector(spt_pageIdentifier), (IMP)mrgPageID, "@@:");
+        if (![c instancesRespondToSelector:@selector(spt_pageURI)]) class_addMethod(c, @selector(spt_pageURI), (IMP)mrgPageURI, "@@:");
+        ok = class_conformsToProtocol(c, proto) || class_addProtocol(c, proto);
+    }
+    UINavigationController *nav = owner.navigationController;
+    if (nav && (ok || ![NSStringFromClass(nav.class) hasPrefix:@"SPT"])) { [nav pushViewController:page animated:YES]; return; }
+    UINavigationController *wrap = [[UINavigationController alloc] initWithRootViewController:page];
+    wrap.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    page.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose target:wrap action:@selector(mrg_close)];
+    [owner presentViewController:wrap animated:YES completion:nil];
+}
+
+@implementation UINavigationController (MRGClose)
+- (void)mrg_close { [self dismissViewControllerAnimated:YES completion:nil]; }
+@end

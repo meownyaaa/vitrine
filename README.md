@@ -9,7 +9,9 @@ Vitrine's own:
   Home / Now Playing / Library / Everywhere. It sits behind Vitrine's liquid glass.
 - A **Mirage** row in the side drawer, right below Vitrine's *Mod Settings*, that opens Mirage's settings.
 - **Mirage DJ** (0.2.0): an AI DJ that uses your own API key (OpenAI, Gemini, Anthropic, OpenRouter, Groq, xAI, Perplexity,
-  Cerebras, Fireworks, Together, DeepSeek) to pick sets from your taste and talk between tracks. See [docs/mirage/AI-DJ.md](docs/mirage/AI-DJ.md).
+  Cerebras, Fireworks, Together, DeepSeek, Mistral) to pick sets from your taste and talk between tracks. Since 0.3.0: voices
+  (iPhone, provider, ElevenLabs), personas, a chat that answers from your listening history and makes playlists.
+  See [docs/mirage/AI-DJ.md](docs/mirage/AI-DJ.md).
 - Coming next: an **Addon Shop**.
 
 Vitrine's sources (`tweak/`) are kept as upstream ships them, so `git merge upstream/main` stays clean.
