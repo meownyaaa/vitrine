@@ -54,6 +54,14 @@ NSString *const MRGPlayerTrackChangedNotification = @"MiragePlayerTrackChanged";
 - (id)addCallback:(void (^)(id))callback on:(dispatch_queue_t)queue;
 - (id)addErrorCallback:(void (^)(NSError *))callback on:(dispatch_queue_t)queue;
 @end
+@interface NSObject (MRGPlayerControl)
+- (id)resume:(id)options;
+- (id)pause:(id)options;
+- (id)skipToNextTrackWithOptions:(id)options;
+- (id)skipToPreviousTrackWithOptions:(id)options;
+- (void)addURL:(id)url showUIConfirmation:(BOOL)confirm completion:(id)completion;
+- (void)removeURL:(id)url showUIConfirmation:(BOOL)confirm completion:(id)completion;
+@end
 @interface SPTPlayerQueueWrapperImpl : NSObject
 - (instancetype)initWithPlayer:(id)player;
 - (id)queueMultipleTracks:(NSArray *)tracks loggingParams:(id)params;
@@ -224,15 +232,13 @@ static NSString *featureOf(id player) {
     return [f isKindOfClass:NSString.class] ? f : @"";
 }
 
+// One short line per launch (0.3.x logged every feature, over and over, and pushed useful lines out of the log).
 static void logPlayersSoon(void) {
-    static BOOL scheduled;
-    if (scheduled) return;
-    scheduled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        scheduled = NO;
-        NSMutableOrderedSet *features = [NSMutableOrderedSet orderedSet];
-        for (id p in sg_players.allObjects) [features addObject:featureOf(p).length ? featureOf(p) : @"(none)"];
-        MRGDJLog(@"players: %lu SPTEsperantoPlayer, features: %@", (unsigned long)sg_players.count, [features.array componentsJoinedByString:@", "]);
+    static BOOL done;
+    if (done) return;
+    done = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        MRGDJLog(@"players: %lu seen", (unsigned long)sg_players.count);
     });
 }
 
@@ -291,6 +297,42 @@ static __weak id sg_linkDispatcher;
 %end
 %end
 
+#pragma mark - account and library
+
+static void noteUsername(NSString *u, NSString *from);
+static __weak id sg_collection;   // SPTCollectionPlatformImplementation: Spotify's own like / save to library
+
+%group MRGAccountHooks
+%hook SPTAuthSessionImplementation
+- (id)canonicalUsername { id u = %orig; if ([u isKindOfClass:NSString.class]) { NSString *s = u; dispatch_async(dispatch_get_main_queue(), ^{ noteUsername(s, @"the auth session"); }); } return u; }
+- (id)accountInfo {
+    id info = %orig;
+    @try {
+        id u = [info respondsToSelector:@selector(username)] ? [info performSelector:@selector(username)] : nil;
+        if ([u isKindOfClass:NSString.class]) { NSString *s = u; dispatch_async(dispatch_get_main_queue(), ^{ noteUsername(s, @"the auth session's account info"); }); }
+    } @catch (NSException *e) {}
+    return info;
+}
+%end
+%hook SPTAuthWebgateSessionImpl
+- (id)username { id u = %orig; if ([u isKindOfClass:NSString.class]) { NSString *s = u; dispatch_async(dispatch_get_main_queue(), ^{ noteUsername(s, @"the webgate session"); }); } return u; }
+%end
+%hook SPTAccountInfo
+- (id)initWithUsername:(id)username accountId:(id)accountId {
+    id me = %orig;
+    if ([username isKindOfClass:NSString.class]) { NSString *s = username; dispatch_async(dispatch_get_main_queue(), ^{ noteUsername(s, @"account info"); }); }
+    return me;
+}
+%end
+%end
+
+%group MRGCollectionHooks
+%hook SPTCollectionPlatformImplementation
+- (id)initWithCosmosDataLoader:(id)loader isGatedEntityRelationsEnabled:(BOOL)enabled { id me = %orig; sg_collection = me; return me; }
+- (BOOL)canAddTrackWithURL:(id)url { sg_collection = self; return %orig; }
+%end
+%end
+
 #pragma mark - spclient headers
 
 static NSString *const kHeaders[] = {@"authorization", @"client-token", @"app-platform", @"spotify-app-version", @"user-agent", @"accept-language"};
@@ -309,8 +351,39 @@ static void rememberHeaders(NSURLSession *session, NSURLRequest *request) {
 }
 
 // The token expires (about an hour): the next request Spotify makes refreshes the copy.
+static NSString *sg_username, *sg_spclientHost;
+
+// The signed-in account's username, from the spclient paths Spotify itself requests (/user/<name>/…, the rootlist and
+// collection calls), Spotify's auth session (canonicalUsername) or its account info; kept for the next launch.
+static void noteUsername(NSString *u, NSString *from) {
+    if (![u isKindOfClass:NSString.class] || !u.length || u.length > 64 || [u isEqualToString:sg_username]) return;
+    if ([u rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"/?&=# "]].location != NSNotFound) return;
+    sg_username = [u copy];
+    [NSUserDefaults.standardUserDefaults setObject:u forKey:@"mirage.spotify.username"];
+    MRGDJLog(@"account: username from %@", from);
+}
+
+static void noteSpclient(NSURL *url) {
+    NSString *host = url.host;
+    if (host.length && ![host isEqualToString:sg_spclientHost]) sg_spclientHost = [host copy];
+    NSString *path = url.path;
+    NSRange r = [path rangeOfString:@"/user/"];
+    if (r.location == NSNotFound) return;
+    NSString *rest = [path substringFromIndex:NSMaxRange(r)];
+    NSString *name = [rest componentsSeparatedByString:@"/"].firstObject;
+    if (name.length && ([rest containsString:@"/rootlist"] || [rest containsString:@"/collection"]))
+        noteUsername(name.stringByRemovingPercentEncoding ?: name, @"a spclient path");
+}
+
+NSString *MRGSpotifyUsername(void) {
+    if (!sg_username) { NSString *u = [NSUserDefaults.standardUserDefaults stringForKey:@"mirage.spotify.username"]; if (u.length) sg_username = u; }
+    return sg_username;
+}
+NSString *MRGSpclientHost(void) { return sg_spclientHost ?: @"spclient.wg.spotify.com"; }
+
 static void refreshHeaders(NSURLSession *session, NSURLRequest *request) {
     if (![request.URL.host containsString:@"spclient"]) return;
+    @try { noteSpclient(request.URL); } @catch (NSException *e) {}
     NSString *auth = request.allHTTPHeaderFields[@"authorization"] ?: request.allHTTPHeaderFields[@"Authorization"];
     if (auth && sg_headers && ![auth isEqualToString:sg_headers[@"authorization"]]) {
         dispatch_async(dispatch_get_main_queue(), ^{ sg_headers = nil; rememberHeaders(session, request); });
@@ -499,8 +572,10 @@ BOOL MRGOpenSpotifyURI(NSString *uri) {
 // Watches the player until it plays one of the tracks (or the context), or the time runs out. Every read goes through
 // the guarded accessors (isPaused, not `paused`, which SPTPlayerState doesn't answer: the 0.2.2 crash).
 void MRGWaitForPlayback(NSArray<NSString *> *tracks, NSString *contextURI, NSTimeInterval timeout, void (^done)(BOOL, NSString *)) {
-    CFTimeInterval end = CACurrentMediaTime() + timeout;
+    __block CFTimeInterval end = CACurrentMediaTime() + timeout;
     __block BOOL finished = NO;
+    __block int resumes = 0;
+    __block CFTimeInterval lastResume = CACurrentMediaTime();
     BOOL (^check)(void) = ^BOOL {
         if (finished) return YES;
         @try {
@@ -508,6 +583,14 @@ void MRGWaitForPlayback(NSArray<NSString *> *tracks, NSString *contextURI, NSTim
             NSString *track = uriString(sget(stateTrack(st), @"URI")), *context = stateContext(st);
             BOOL onTrack = track && [tracks containsObject:track];
             BOOL onContext = contextURI && [context isEqualToString:contextURI];
+            if ((onTrack || onContext) && statePaused(st) && resumes < 2 && CACurrentMediaTime() - lastResume > 1.5) {
+                // The track is loaded but paused (0.3.1: "the player stayed on … (paused)"): press play, as a person would.
+                resumes++;
+                lastResume = CACurrentMediaTime();
+                end = MAX(end, lastResume + 4);
+                MRGDJLog(@"verify: on the track but paused, resuming (try %d)", resumes);
+                MRGPlayerControl(@"resume", nil);
+            }
             if ((onTrack || onContext) && !statePaused(st)) {
                 finished = YES;
                 MRGDJLog(@"verify: playing %@ in %@", onTrack ? @"a set track" : @"the context", context ?: @"?");
@@ -644,7 +727,60 @@ BOOL MRGDuckMusic(BOOL duck) {
         if (objc_getClass("SPTLinkDispatcherImplementation")) %init(MRGLinkHooks);
         if (objc_getClass("SPTDataLoaderService")) %init(MRGHeadersDataLoader);
         if (objc_getClass("_TtC26Connectivity_HttpClientKit20HttpClientURLSession")) %init(MRGHeadersHttpClient);
+        if (objc_getClass("SPTAuthSessionImplementation") && objc_getClass("SPTAccountInfo") &&
+            [objc_getClass("SPTAuthSessionImplementation") instancesRespondToSelector:@selector(canonicalUsername)] &&
+            [objc_getClass("SPTAccountInfo") instancesRespondToSelector:@selector(initWithUsername:accountId:)] &&
+            [objc_getClass("SPTAuthSessionImplementation") instancesRespondToSelector:@selector(accountInfo)] &&
+            objc_getClass("SPTAuthWebgateSessionImpl") && [objc_getClass("SPTAuthWebgateSessionImpl") instancesRespondToSelector:@selector(username)]) %init(MRGAccountHooks);
+        Class coll = objc_getClass("SPTCollectionPlatformImplementation");
+        if (coll && [coll instancesRespondToSelector:@selector(initWithCosmosDataLoader:isGatedEntityRelationsEnabled:)] &&
+            [coll instancesRespondToSelector:@selector(canAddTrackWithURL:)]) %init(MRGCollectionHooks);
         sg_duckReady = MRGRebindImport("AudioOutputUnitStart", (void *)startOutput, (void **)&sg_realStart) && sg_realStart;
         if (sg_duckReady) MRGRebindImport("AudioComponentInstanceDispose", (void *)disposeUnit, (void **)&sg_realDispose);
+    }
+}
+
+#pragma mark - controls
+
+// resume / pause / next / previous on the player that plays music, each through respondsToSelector and @try.
+void MRGPlayerControl(NSString *what, void (^done)(BOOL ok, NSString *error)) {
+    void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *e) {
+        MRGDJLog(@"control %@: %@", what, ok ? @"taken" : [@"failed: " stringByAppendingString:e ?: @"?"]);
+        if (done) done(ok, e);
+    };
+    @try {
+        id player = playingPlayer();
+        if (!player) { finish(NO, @"Spotify's player isn't ready yet."); return; }
+        SEL sel = [what isEqualToString:@"pause"] ? @selector(pause:) : [what isEqualToString:@"next"] ? @selector(skipToNextTrackWithOptions:)
+                : [what isEqualToString:@"previous"] ? @selector(skipToPreviousTrackWithOptions:) : @selector(resume:);
+        if (![player respondsToSelector:sel]) { missing(player, NSStringFromSelector(sel)); finish(NO, @"Spotify's player doesn't take that here."); return; }
+        id task = ((id (*)(id, SEL, id))objc_msgSend)(player, sel, nil);
+        if (!task) { finish(YES, nil); return; }
+        watchTask(task, finish);
+    } @catch (NSException *e) {
+        finish(NO, [NSString stringWithFormat:@"Spotify's player threw %@.", e.name]);
+    }
+}
+
+// Like (save to Liked Songs) / unlike, through Spotify's own collection platform, as the heart button does.
+void MRGLikeTrack(NSString *uri, BOOL like, void (^done)(BOOL ok, NSString *error)) {
+    void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *e) {
+        MRGDJLog(@"library: %@ %@: %@", like ? @"like" : @"unlike", uri, ok ? @"sent" : [@"failed: " stringByAppendingString:e ?: @"?"]);
+        if (done) dispatch_async(dispatch_get_main_queue(), ^{ done(ok, e); });
+    };
+    id c = sg_collection;
+    NSURL *url = [uri isKindOfClass:NSString.class] ? [NSURL URLWithString:uri] : nil;
+    if (!url) { finish(NO, @"No track."); return; }
+    SEL sel = like ? @selector(addURL:showUIConfirmation:completion:) : @selector(removeURL:showUIConfirmation:completion:);
+    if (!c) { finish(NO, @"Spotify's library isn't reachable yet. Open your Library or tap a heart once, then try again."); return; }
+    if (![c respondsToSelector:sel]) { missing(c, NSStringFromSelector(sel)); finish(NO, @"Spotify's library doesn't take that here."); return; }
+    @try {
+        // The completion's arguments aren't known; a block that takes none is safe whatever it is called with.
+        void (^completion)(void) = ^{};
+        if (like) [c addURL:url showUIConfirmation:NO completion:completion];
+        else [c removeURL:url showUIConfirmation:NO completion:completion];
+        finish(YES, nil);
+    } @catch (NSException *e) {
+        finish(NO, [NSString stringWithFormat:@"Spotify's library threw %@: %@", e.name, e.reason]);
     }
 }

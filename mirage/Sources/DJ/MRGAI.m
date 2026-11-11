@@ -1,4 +1,5 @@
 #import "MRGAI.h"
+#import "MRGDJLog.h"
 #import "MRGKeychain.h"
 
 // Endpoints and model choices checked against each provider's docs in November 2026 (sources in
@@ -620,11 +621,141 @@ static NSString *jsonString(id obj) {
     return d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : @"{}";
 }
 
+static id parseLenient(NSString *s) {
+    if (![s isKindOfClass:NSString.class] || !s.length) return nil;
+    NSData *d = [s dataUsingEncoding:NSUTF8StringEncoding];
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:NSJSONReadingFragmentsAllowed error:nil] : nil;
+    if (j) return j;
+    // Common slips: trailing commas, single quotes, Python literals.
+    NSMutableString *t = [s mutableCopy];
+    [[NSRegularExpression regularExpressionWithPattern:@",\\s*([}\\]])" options:0 error:nil] replaceMatchesInString:t options:0 range:NSMakeRange(0, t.length) withTemplate:@"$1"];
+    if ([t rangeOfString:@"\""].location == NSNotFound) [t replaceOccurrencesOfString:@"'" withString:@"\"" options:0 range:NSMakeRange(0, t.length)];
+    for (NSArray *pair in @[@[@": None", @": null"], @[@": True", @": true"], @[@": False", @": false"]]) [t replaceOccurrencesOfString:pair[0] withString:pair[1] options:0 range:NSMakeRange(0, t.length)];
+    d = [t dataUsingEncoding:NSUTF8StringEncoding];
+    return d ? [NSJSONSerialization JSONObjectWithData:d options:NSJSONReadingFragmentsAllowed error:nil] : nil;
+}
+
 static NSDictionary *jsonDict(id s) {
     if ([s isKindOfClass:NSDictionary.class]) return s;
-    if (![s isKindOfClass:NSString.class]) return @{};
-    id j = [NSJSONSerialization JSONObjectWithData:[s dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    id j = parseLenient(s);
     return [j isKindOfClass:NSDictionary.class] ? j : @{};
+}
+
+#pragma mark - tool calls written as text
+
+// From `open` (a '{' or '['), the end of its balanced JSON value (strings respected), or NSNotFound.
+static NSUInteger jsonEnd(NSString *t, NSUInteger open) {
+    unichar o = [t characterAtIndex:open], c = o == '{' ? '}' : ']';
+    NSInteger depth = 0;
+    BOOL inString = NO, escaped = NO;
+    for (NSUInteger i = open; i < t.length; i++) {
+        unichar ch = [t characterAtIndex:i];
+        if (inString) { if (escaped) escaped = NO; else if (ch == '\\') escaped = YES; else if (ch == '"') inString = NO; continue; }
+        if (ch == '"') inString = YES;
+        else if (ch == o || ch == (o == '{' ? '[' : '{')) depth++;
+        else if (ch == c || ch == (c == '}' ? ']' : '}')) { depth--; if (depth == 0) return i; }
+    }
+    return NSNotFound;
+}
+
+static NSDictionary *callFrom(NSString *name, id args, NSSet *names) {
+    if (![name isKindOfClass:NSString.class]) return nil;
+    NSString *n = [name hasPrefix:@"functions."] ? [name substringFromIndex:10] : name;
+    if (![names containsObject:n]) return nil;
+    if ([args isKindOfClass:NSString.class]) args = jsonDict(args);
+    return @{@"id": [@"text_" stringByAppendingString:NSUUID.UUID.UUIDString], @"name": n, @"arguments": [args isKindOfClass:NSDictionary.class] ? args : @{}, @"from_text": @YES};
+}
+
+// Values of `key: value, key2: [..]` written loosely after a tool name, as JSON when they parse.
+static NSDictionary *looseArgs(NSString *t) {
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"([A-Za-z_]+)\\s*[:=]\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|\\[[^\\]]*\\]|[^,\\n}]+)" options:0 error:nil];
+    for (NSTextCheckingResult *m in [re matchesInString:t options:0 range:NSMakeRange(0, t.length)]) {
+        NSString *k = [t substringWithRange:[m rangeAtIndex:1]];
+        NSString *v = [[t substringWithRange:[m rangeAtIndex:2]] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        id parsed = parseLenient(v);
+        out[k] = parsed ?: v;
+    }
+    return out;
+}
+
+// Tool calls a model wrote into its text instead of the API's tool_calls (0.3.1 with Groq gpt-oss-120b showed
+// 'play_tracks: intro: "", uris: [...]' in the chat): Harmony (to=functions.x … <|message|>{…}), <tool_call>{…}</tool_call>,
+// <function=x>{…}</function>, JSON objects {"name"/"tool"/"function": x, "arguments"/"parameters"/"args": {…}} (bare,
+// in a list or a ```json fence), x({…}), and `x: key: value, …` at the start of a line. Returns the calls (only names in
+// `names`), and in *cleaned the text without them and without stray <|…|> tokens.
+NSArray<NSDictionary *> *MRGParseTextToolCalls(NSString *text, NSSet<NSString *> *names, NSString **cleaned) {
+    NSMutableArray *calls = [NSMutableArray array];
+    if (![text isKindOfClass:NSString.class] || !text.length || !names.count) { if (cleaned) *cleaned = text; return calls; }
+    NSMutableString *t = [text mutableCopy];
+    NSMutableArray<NSValue *> *cut = [NSMutableArray array];
+    // Harmony / <function=…> / to=functions.x: a name, then the next JSON object.
+    NSRegularExpression *named = [NSRegularExpression regularExpressionWithPattern:@"(?:to=functions\\.|<function=|\"?recipient\"?\\s*:\\s*\"functions\\.)([A-Za-z_]+)" options:0 error:nil];
+    for (NSTextCheckingResult *m in [named matchesInString:t options:0 range:NSMakeRange(0, t.length)]) {
+        NSString *n = [t substringWithRange:[m rangeAtIndex:1]];
+        NSUInteger from = NSMaxRange(m.range);
+        NSRange brace = [t rangeOfString:@"{" options:0 range:NSMakeRange(from, t.length - from)];
+        NSUInteger end = brace.location != NSNotFound && brace.location - from < 120 ? jsonEnd(t, brace.location) : NSNotFound;
+        NSDictionary *c = callFrom(n, end != NSNotFound ? [t substringWithRange:NSMakeRange(brace.location, end - brace.location + 1)] : @{}, names);
+        if (!c) continue;
+        [calls addObject:c];
+        [cut addObject:[NSValue valueWithRange:NSMakeRange(m.range.location, (end != NSNotFound ? end + 1 : from) - m.range.location)]];
+    }
+    // JSON objects naming a tool.
+    if (!calls.count) {
+        for (NSUInteger i = 0; i < t.length; i++) {
+            unichar ch = [t characterAtIndex:i];
+            if (ch != '{' && ch != '[') continue;
+            NSUInteger end = jsonEnd(t, i);
+            if (end == NSNotFound) continue;
+            id j = parseLenient([t substringWithRange:NSMakeRange(i, end - i + 1)]);
+            NSArray *list = [j isKindOfClass:NSArray.class] ? j : (j ? @[j] : @[]);
+            NSUInteger before = calls.count;
+            for (NSDictionary *o in list) {
+                if (![o isKindOfClass:NSDictionary.class]) continue;
+                id fn = o[@"function"];
+                NSString *n = [o[@"name"] isKindOfClass:NSString.class] ? o[@"name"] : [o[@"tool"] isKindOfClass:NSString.class] ? o[@"tool"]
+                            : [o[@"tool_name"] isKindOfClass:NSString.class] ? o[@"tool_name"] : [fn isKindOfClass:NSString.class] ? fn
+                            : [fn isKindOfClass:NSDictionary.class] ? fn[@"name"] : nil;
+                id args = o[@"arguments"] ?: o[@"parameters"] ?: o[@"args"] ?: o[@"input"] ?: ([fn isKindOfClass:NSDictionary.class] ? fn[@"arguments"] : nil);
+                NSDictionary *c = callFrom(n, args, names);
+                if (c) [calls addObject:c];
+            }
+            if (calls.count > before) { [cut addObject:[NSValue valueWithRange:NSMakeRange(i, end - i + 1)]]; i = end; }
+        }
+    }
+    // name({…}) or name: key: value … at a line start.
+    if (!calls.count) {
+        NSString *alt = [names.allObjects componentsJoinedByString:@"|"];
+        NSRegularExpression *line = [NSRegularExpression regularExpressionWithPattern:[NSString stringWithFormat:@"(?m)^[\\s`*>-]*(%@)\\s*(\\(|:)\\s*(.*)$", alt] options:0 error:nil];
+        for (NSTextCheckingResult *m in [line matchesInString:t options:0 range:NSMakeRange(0, t.length)]) {
+            NSString *n = [t substringWithRange:[m rangeAtIndex:1]];
+            NSString *rest = [t substringWithRange:[m rangeAtIndex:3]];
+            NSRange brace = [rest rangeOfString:@"{"];
+            id args = nil;
+            if (brace.location != NSNotFound && brace.location < 4) {
+                NSUInteger e = jsonEnd(rest, brace.location);
+                if (e != NSNotFound) args = jsonDict([rest substringWithRange:NSMakeRange(brace.location, e - brace.location + 1)]);
+            }
+            if (![args count]) args = looseArgs(rest);
+            NSDictionary *c = callFrom(n, args, names);
+            if (c) { [calls addObject:c]; [cut addObject:[NSValue valueWithRange:m.range]]; }
+        }
+    }
+    [cut sortUsingComparator:^NSComparisonResult(NSValue *a, NSValue *b) { return a.rangeValue.location > b.rangeValue.location ? NSOrderedAscending : NSOrderedDescending; }];
+    NSUInteger floor = NSNotFound;
+    for (NSValue *v in cut) {
+        NSRange r = v.rangeValue;
+        if (floor != NSNotFound && NSMaxRange(r) > floor) continue;   // overlapping
+        if (NSMaxRange(r) <= t.length) { [t deleteCharactersInRange:r]; floor = r.location; }
+    }
+    if (cleaned) {
+        NSMutableString *c = [t mutableCopy];
+        [[NSRegularExpression regularExpressionWithPattern:@"<\\|[^|]*\\|>|</?tool_call>|</?function[^>]*>|```(?:json)?" options:0 error:nil] replaceMatchesInString:c options:0 range:NSMakeRange(0, c.length) withTemplate:@""];
+        [[NSRegularExpression regularExpressionWithPattern:@"(?m)^\\s*(?:commentary|analysis|final|assistant)\\s*$" options:0 error:nil] replaceMatchesInString:c options:0 range:NSMakeRange(0, c.length) withTemplate:@""];
+        *cleaned = [c stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    return calls;
 }
 
 static NSString *str(id v) { return [v isKindOfClass:NSString.class] ? v : nil; }
@@ -670,7 +801,11 @@ static NSDictionary *openAIToolAnswer(id json) {
         if (![c isKindOfClass:NSDictionary.class]) continue;
         NSDictionary *f = c[@"function"];
         if (![f isKindOfClass:NSDictionary.class] || !str(f[@"name"])) continue;
-        [calls addObject:@{@"id": str(c[@"id"]) ?: NSUUID.UUID.UUIDString, @"name": f[@"name"], @"arguments": jsonDict(f[@"arguments"])}];
+        id raw = f[@"arguments"];
+        NSDictionary *args = jsonDict(raw);
+        NSMutableDictionary *call = [@{@"id": str(c[@"id"]) ?: NSUUID.UUID.UUIDString, @"name": f[@"name"], @"arguments": args} mutableCopy];
+        if (!args.count && [raw isKindOfClass:NSString.class] && [[raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] length] > 2) call[@"bad_arguments"] = raw;
+        [calls addObject:call];
     }
     return @{@"role": @"assistant", @"content": str(msg[@"content"]) ?: @"", @"tool_calls": calls};
 }
@@ -778,8 +913,23 @@ void MRGAIChatTools(NSString *system, NSArray<NSDictionary *> *messages, NSArray
     MRGProvider p = MRGAIProvider();
     NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();
     if (p == MRGProviderNone || !key || !model) { done(nil, @"Add an API key in Mirage settings first."); return; }
+    NSMutableSet *names = [NSMutableSet set];
+    for (NSDictionary *t in tools) if ([t[@"name"] isKindOfClass:NSString.class]) [names addObject:t[@"name"]];
     void (^finish)(NSDictionary *, NSString *) = ^(NSDictionary *a, NSString *e) {
         if (!e && !a) e = [NSString stringWithFormat:@"%@ sent an answer Mirage couldn't read. Try again.", MRGProviderName(p)];
+        if (a && names.count) {
+            // Calls written as text become real calls; the text never shows them.
+            NSString *cleaned = nil;
+            NSArray *textCalls = MRGParseTextToolCalls(str(a[@"content"]) ?: @"", names, &cleaned);
+            NSArray *apiCalls = [a[@"tool_calls"] isKindOfClass:NSArray.class] ? a[@"tool_calls"] : @[];
+            if (textCalls.count || ![cleaned isEqualToString:str(a[@"content"]) ?: @""]) {
+                NSMutableDictionary *m = [a mutableCopy];
+                m[@"content"] = cleaned ?: @"";
+                if (!apiCalls.count && textCalls.count) { m[@"tool_calls"] = textCalls; [m removeObjectForKey:@"raw"]; }
+                MRGDJLog(@"chat: %lu tool call%@ written as text, run as calls", (unsigned long)textCalls.count, textCalls.count == 1 ? @"" : @"s");
+                a = m;
+            }
+        }
         done(e ? nil : a, e);
     };
     switch (p) {
@@ -804,6 +954,16 @@ void MRGAIChatTools(NSString *system, NSArray<NSDictionary *> *messages, NSArray
         }
         default: {
             send(p, request(p, key, @"/chat/completions", openAIToolBody(p, model, system, messages, tools, YES)), ^(id j, NSData *d, NSInteger s, NSString *e) {
+                // Groq (and some others) answer 400 tool_use_failed when the model botched a call, with what it wrote in
+                // failed_generation: read the calls from that instead of failing.
+                id err = [j isKindOfClass:NSDictionary.class] ? j[@"error"] : nil;
+                NSString *failed = [err isKindOfClass:NSDictionary.class] ? str(err[@"failed_generation"]) : nil;
+                if (s == 400 && failed.length && names.count) {
+                    NSString *cleaned = nil;
+                    NSArray *calls = MRGParseTextToolCalls(failed, names, &cleaned);
+                    MRGDJLog(@"chat: %@ said tool_use_failed; %lu call%@ recovered from its text", MRGProviderName(p), (unsigned long)calls.count, calls.count == 1 ? @"" : @"s");
+                    if (calls.count) { done(@{@"role": @"assistant", @"content": cleaned ?: @"", @"tool_calls": calls}, nil); return; }
+                }
                 if (s == 400) {
                     send(p, request(p, key, @"/chat/completions", openAIToolBody(p, model, system, messages, tools, NO)), ^(id j2, NSData *d2, NSInteger s2, NSString *e2) {
                         finish(e2 ? nil : openAIToolAnswer(j2), e2);

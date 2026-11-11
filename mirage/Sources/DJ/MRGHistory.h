@@ -34,3 +34,6 @@ NSArray<NSDictionary *> *MRGHistoryTopTracks(NSString *year, NSUInteger limit);
 NSArray<NSDictionary *> *MRGHistoryRecent(NSUInteger limit);
 // Minutes and plays per year: year, plays, minutes.
 NSArray<NSDictionary *> *MRGHistoryYears(void);
+// The listener's taste for the DJ: onRepeat [{title, artist, uri, plays}] (last 28 days), recentArtists [names],
+// allTimeArtists [names], throwbacks [{title, artist, uri, plays, year}] (well played, not for 4 months).
+NSDictionary *MRGHistoryTaste(void);

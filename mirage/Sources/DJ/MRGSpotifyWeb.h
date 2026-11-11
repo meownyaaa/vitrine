@@ -13,3 +13,14 @@ NSString *MRGImageURL(NSString *spotifyImage);
 // Web API search (type track, artist, album or playlist): tracks as MRGWebResolve's dictionaries; the others as uri,
 // name, image, popularity, genres (artists), owner (playlists), artist (albums).
 void MRGWebSearch(NSString *query, NSString *type, NSInteger limit, void (^done)(NSArray<NSDictionary *> *results, NSString *error));
+
+// Artist lookups for requests that name an artist (all through the Web API search, with fallbacks; never throw):
+// the artist meant by a typed name or abbreviation: uri, name, image, popularity, genres (how: which search found it).
+void MRGWebFindArtist(NSString *query, void (^done)(NSDictionary *artist, NSString *how));
+// Their most played tracks (MRGWebResolve dictionaries), up to limit.
+void MRGWebArtistTracks(NSDictionary *artist, NSInteger limit, void (^done)(NSArray<NSDictionary *> *tracks));
+void MRGWebRelatedArtists(NSDictionary *artist, void (^done)(NSArray<NSDictionary *> *artists));
+void MRGWebArtist(NSString *uri, void (^done)(NSDictionary *artist));
+// Fuzzy name matching shared with the DJ.
+BOOL MRGNamesMatch(NSString *a, NSString *b);
+NSInteger MRGEditDistance(NSString *a, NSString *b);

@@ -49,8 +49,16 @@ static NSArray<NSDictionary *> *tools(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         list = @[
-            tool(@"search", @"Search Spotify's catalog. Returns tracks (uri, title, artist, album, popularity 0-100), artists, albums or playlists. Use it to find exact track URIs before playing, queueing or adding them.",
-                 @{@"query": S(@"what to search for, e.g. 'artist:Burial' or 'Archangel Burial'"), @"type": @{@"type": @"string", @"enum": @[@"track", @"artist", @"album", @"playlist"]}, @"limit": I(@"1-10, default 5")}, @[@"query"]),
+            tool(@"search", @"Search Spotify's catalog. Returns tracks (uri, title, artist, album, popularity 0-100), artists, albums or playlists. Use it to find exact track URIs before playing, queueing or adding them. Artist search understands nicknames, abbreviations and typos.",
+                 @{@"query": S(@"what to search for, e.g. 'Archangel Burial', 'artist:Burial' or just an artist's name"), @"type": @{@"type": @"string", @"enum": @[@"track", @"artist", @"album", @"playlist"]}, @"limit": I(@"1-10, default 5")}, @[@"query"]),
+            tool(@"play_artist", @"Start a DJ set built around an artist: their songs plus artists right next to them (mode 'mix'), only their songs ('only'), or music that sounds like them ('like'). Use this whenever they ask for an artist by name, nickname or abbreviation (e.g. 'play some yvl', 'run pz', 'stuff like clairo').",
+                 @{@"artist": S(@"the artist as the listener wrote it or its full name"), @"mode": @{@"type": @"string", @"enum": @[@"mix", @"only", @"like"]}}, @[@"artist"]),
+            tool(@"dj_segment", @"Start a Spotify-DJ-style segment from their own history: 'throwbacks' (songs they loved and haven't played in a while), 'on_repeat' (what they've been playing lately and songs close to it), 'discover' (new-to-them songs in their lane), or 'favorites'.",
+                 @{@"kind": @{@"type": @"string", @"enum": @[@"throwbacks", @"on_repeat", @"discover", @"favorites"]}}, @[@"kind"]),
+            tool(@"switch_it_up", @"Change the DJ set's direction (a new set in a clearly different direction, like Spotify DJ's switch button).", @{}, @[]),
+            tool(@"player_control", @"Control playback: skip to the next song, go back, pause or resume.", @{@"action": @{@"type": @"string", @"enum": @[@"next", @"previous", @"pause", @"resume"]}}, @[@"action"]),
+            tool(@"like_track", @"Like a track (save it to Liked Songs) or unlike it. Without a uri it's the song playing now.", @{@"uri": S(@"spotify:track: URI, optional"), @"unlike": @{@"type": @"boolean", @"description": @"true to remove it from Liked Songs"}}, @[]),
+            tool(@"taste_profile", @"What the listener is into, from the history on this phone: on repeat lately, top artists lately and all time, throwbacks.", @{}, @[]),
             tool(@"play_tracks", @"Play these tracks now in Spotify, as a DJ set (the first plays, the rest are queued).", @{@"uris": A(@"spotify:track: URIs, in order"), @"intro": S(@"optional short line the DJ says before the first one")}, @[@"uris"]),
             tool(@"queue_tracks", @"Add tracks to the end of Spotify's queue without interrupting what's playing.", @{@"uris": A(@"spotify:track: URIs")}, @[@"uris"]),
             tool(@"start_dj_set", @"Start a full Mirage DJ set from a request (the DJ picks about 15 songs, plays them and talks between them).", @{@"request": S(@"the vibe, genre, era or constraints, in the listener's words")}, @[@"request"]),
@@ -60,7 +68,7 @@ static NSArray<NSDictionary *> *tools(void) {
             tool(@"top_listening", @"The listener's most played artists or tracks by minutes, all time or for one year, from the history on this phone.", @{@"kind": @{@"type": @"string", @"enum": @[@"artists", @"tracks"]}, @"year": S(@"e.g. '2023'; omit for all time"), @"limit": I(@"1-20, default 10")}, @[@"kind"]),
             tool(@"history_overview", @"What the listening history on this phone covers (dates, plays, minutes per year, recorded vs imported) and the latest plays.", @{@"recent": I(@"how many latest plays to include, 0-20")}, @[]),
             tool(@"create_playlist", @"Create a new playlist in the listener's library, optionally with tracks.", @{@"name": S(@"playlist name"), @"uris": A(@"spotify:track: URIs to add, optional")}, @[@"name"]),
-            tool(@"add_to_playlist", @"Add tracks to a playlist. The playlist can be a spotify:playlist: URI or link, the name of one Mirage made, or 'current' for the playlist playing now.", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs")}, @[@"playlist", @"uris"]),
+            tool(@"add_to_playlist", @"Add tracks to a playlist. The playlist can be a spotify:playlist: URI or link, the name of one Mirage made, or 'current' for the playlist playing now. Without uris it adds the song playing now.", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs (optional: the song playing now)")}, @[@"playlist"]),
             tool(@"remove_from_playlist", @"Remove tracks from a playlist (URI, link, name of one Mirage made, or 'current').", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs")}, @[@"playlist", @"uris"]),
             tool(@"delete_playlist", @"Ask to delete (remove from the library) a playlist. This does NOT delete it: it shows the listener a Delete button to confirm. Tell them to tap it.", @{@"playlist": S(@"URI, link, name of one Mirage made, or 'current'")}, @[@"playlist"]),
             tool(@"list_playlists", @"Playlists Mirage can act on: ones it created, and the one playing now. (It can't read the listener's whole library.)", @{}, @[]),
@@ -77,6 +85,8 @@ static NSArray<NSDictionary *> *tools(void) {
     NSMutableArray<NSString *> *_notes;            // things that happened outside a turn, told with the next message
     NSMutableDictionary<NSString *, NSDictionary *> *_known;   // uri → track dict, from searches and history
     NSUInteger _turn;
+    NSDictionary *_lastToolResult;
+    BOOL _nudged;
 }
 
 + (instancetype)shared {
@@ -113,18 +123,27 @@ static NSArray<NSDictionary *> *tools(void) {
     NSString *coverage = [h[@"plays"] integerValue]
         ? [NSString stringWithFormat:@"%@ plays from %@ to %@ (%@ imported from Spotify data, %@ recorded by Mirage since %@)", h[@"plays"], isoDay(h[@"from"]), isoDay(h[@"to"]), h[@"importedPlays"], h[@"livePlays"], isoDay(h[@"liveSince"])]
         : [NSString stringWithFormat:@"nothing yet (Mirage records from %@ on; no Spotify data imported)", isoDay(h[@"liveSince"]) ?: @"now"];
+    NSDictionary *now = MRGNowPlaying();
     NSMutableString *p = [NSMutableString stringWithFormat:
-        @"You are Mirage DJ, chatting with the listener inside their Spotify app. How you talk: %@\n"
-        @"Today is %@.\n\n"
-        @"You can act with tools: search Spotify, play or queue tracks, start a DJ set, answer questions about their listening, and create playlists, add or remove songs, or ask to delete a playlist.\n"
+        @"You are Mirage DJ, the listener's personal DJ inside their Spotify app — like Spotify's own DJ, but you can also chat. How you talk: %@\n"
+        @"Today is %@. Playing now: %@.\n\n"
+        @"Understanding them:\n"
+        @"- They write casually: slang, abbreviations, typos, no punctuation (\"sum\" = some, \"ts\" = this, \"rn\" = right now, \"fr\", \"lowkey\", \"bangers\", \"slaps\", \"run it\", \"throw on\"). Work out what they mean and act; don't ask unless it's truly ambiguous.\n"
+        @"- Short names are usually artists (\"yvl\", \"pz\", \"uzi\", \"carti\"): if they ask to play one, call play_artist with it as written (it resolves nicknames and abbreviations on Spotify). For a specific song, search type track, then play_tracks.\n"
+        @"- \"make/create a playlist (named X)\" → create_playlist right away with that name (add songs only if they asked). \"add this\" → add_to_playlist without uris (the song playing now). \"skip\", \"pause\", \"go back\" → player_control. \"like this\"/\"save this\" → like_track.\n"
+        @"- \"throwbacks\", \"old stuff i used to play\" → dj_segment throwbacks; \"what i've been playing\" → on_repeat; \"something new\" → discover; \"switch it up\" → switch_it_up; a vibe, genre or mood → start_dj_set with their words.\n\n"
         @"Rules:\n"
-        @"- For any fact about their listening (first plays, counts, top artists, dates) call a tool; never guess or invent numbers or dates. "
-        @"The listening history on this phone covers: %@. If it doesn't cover what they ask (for example plays before Mirage was installed), say so plainly and tell them they can import their Spotify data in Settings → Mirage → AI DJ → Listening history.\n"
-        @"- Before playing, queueing or adding songs, get real URIs with search. Pick real songs that fit; for underground requests prefer low popularity.\n"
-        @"- delete_playlist only shows a Delete button; the playlist is deleted only if they tap it. Never claim it is deleted.\n"
-        @"- If a tool fails, say what failed in plain words, don't pretend it worked. You can't read their whole library; you can act on playlists Mirage made, the one playing, or one they name by link.\n"
-        @"- Keep replies short (1–3 sentences): cards in the chat already show the details (images, dates, tracks). No markdown tables.",
-        MRGDJPersonaStyle(), isoDay(NSDate.date), coverage];
+        @"- Use the function-calling tools to act. NEVER write a tool call, a function name, JSON or a spotify: URI in your reply text; the listener only sees your words and the cards.\n"
+        @"- For any fact about their listening (first plays, counts, top artists, dates) call a tool; never invent numbers or dates. The listening history on this phone covers: %@. If it doesn't cover what they ask, say so and tell them they can import their Spotify data in Settings → Mirage → AI DJ → Listening history.\n"
+        @"- Before playing, queueing or adding specific songs, get real URIs with search.\n"
+        @"- delete_playlist only shows a Delete button; it's deleted only if they tap it. Never claim it is deleted.\n"
+        @"- If a tool fails, say what failed in plain words (use its error), don't pretend it worked. If a tool says your arguments were invalid, call it again correctly.\n"
+        @"- Keep replies short (1–2 sentences), like a DJ talking, not an assistant. Cards already show details. No markdown tables, no lists of URIs.",
+        MRGDJPersonaStyle(), isoDay(NSDate.date), now ? [NSString stringWithFormat:@"%@ — %@", now[@"title"], now[@"artist"] ?: @""] : @"nothing", coverage];
+    NSString *taste = MRGDJTasteText();
+    if (taste) [p appendFormat:@"\n\nTheir taste (from the history on this phone; use it to pick and to talk about their music):\n%@", taste];
+    NSString *style = MRGDJStyleInstructions();
+    if (style) [p appendFormat:@"\n\n%@", style];
     NSString *custom = MRGDJCustomPrompt();
     if (custom) [p appendFormat:@"\n\nThe listener's own instructions for you:\n%@", custom];
     return p;
@@ -135,12 +154,15 @@ static NSArray<NSDictionary *> *tools(void) {
     if (!text.length || _busy) return;
     if (MRGAIProvider() == MRGProviderNone) { [self add:[MRGChatItem kind:@"error" text:@"Add your AI provider's API key in Settings → Mirage → AI DJ first." card:nil]]; return; }
     [self add:[MRGChatItem kind:@"user" text:text card:nil]];
+    MRGDJNoteUserMessage(text);
     NSString *content = text;
     if (_notes.count) { content = [NSString stringWithFormat:@"(Since your last reply: %@)\n\n%@", [_notes componentsJoinedByString:@" "], text]; [_notes removeAllObjects]; }
     [_transcript addObject:@{@"role": @"user", @"content": content}];
     [self trim];
     MRGDJLog(@"chat: message with %@ (%@)%@", MRGProviderName(MRGAIProvider()), MRGAIModel() ?: @"?", MRGProviderHasTools(MRGAIProvider()) ? @"" : @", no tools on this provider");
     [self setBusy:YES text:@"Thinking…"];
+    _nudged = NO;
+    _lastToolResult = nil;
     [self step:0 turn:++_turn];
 }
 
@@ -158,19 +180,38 @@ static NSArray<NSDictionary *> *tools(void) {
         if (turn != self->_turn) return;
         if (error) {
             MRGDJLog(@"chat: error: %@", error);
+            if (round > 0 && self->_lastToolResult) {
+                // The actions already ran: say so rather than only showing the error.
+                [self add:[MRGChatItem kind:@"note" text:@"(The DJ's reply didn't come through, but the steps above ran.)" card:nil]];
+            }
             // The user message stays, so "try again" works; an unanswered tool call would break the next turn.
             [self add:[MRGChatItem kind:@"error" text:error card:nil]];
             [self setBusy:NO text:nil];
             return;
         }
         NSArray *calls = [assistant[@"tool_calls"] isKindOfClass:NSArray.class] ? assistant[@"tool_calls"] : @[];
-        [self->_transcript addObject:assistant];
-        NSString *said = str(assistant[@"content"]);
-        if (said) [self add:[MRGChatItem kind:@"dj" text:[said stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] card:nil]];
-        if (!calls.count || round >= 6) {
+        NSString *said = [str(assistant[@"content"]) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (!said.length && !calls.count && round == 0 && !self->_nudged) {
+            // An empty answer: ask once more, plainly.
+            self->_nudged = YES;
+            MRGDJLog(@"chat: empty answer, asking again");
+            [self->_transcript addObject:@{@"role": @"assistant", @"content": @"…"}];
+            [self->_transcript addObject:@{@"role": @"user", @"content": @"(Your last answer was empty. Act on my message with the tools, then reply in a sentence.)"}];
+            [self step:round + 1 turn:turn];
+            return;
+        }
+        NSMutableDictionary *stored = [assistant mutableCopy];
+        stored[@"content"] = said ?: @"";
+        [self->_transcript addObject:stored];
+        if (said.length) [self add:[MRGChatItem kind:@"dj" text:said card:nil]];
+        if (!calls.count || round >= 8) {
             if (calls.count) {
-                // Out of rounds: answer the calls so the transcript stays valid, and stop.
                 for (NSDictionary *c in calls) [self->_transcript addObject:@{@"role": @"tool", @"tool_call_id": c[@"id"] ?: @"", @"name": c[@"name"] ?: @"", @"content": json(@{@"error": @"too many steps"})}];
+            }
+            if (!said.length && round > 0) {
+                // Tools ran but the model said nothing: a plain closing line from the last result.
+                NSString *err = str(self->_lastToolResult[@"error"]);
+                [self add:[MRGChatItem kind:err ? @"error" : @"dj" text:err ? [@"That didn't work: " stringByAppendingString:err] : @"Done." card:nil]];
             }
             [self setBusy:NO text:nil];
             return;
@@ -188,13 +229,20 @@ static NSArray<NSDictionary *> *tools(void) {
     NSDictionary *c = calls[i];
     NSString *name = str(c[@"name"]) ?: @"";
     NSDictionary *args = [c[@"arguments"] isKindOfClass:NSDictionary.class] ? c[@"arguments"] : @{};
-    MRGDJLog(@"chat: tool %@", name);
+    MRGDJLog(@"chat: tool %@%@%@", name, [c[@"from_text"] boolValue] ? @" (written as text)" : @"", str(c[@"bad_arguments"]) ? @" (invalid arguments)" : @"");
     [self setBusy:YES text:[self busyFor:name]];
     void (^answer)(id) = ^(id result) {
         if (turn != self->_turn) return;
+        self->_lastToolResult = [result isKindOfClass:NSDictionary.class] ? result : nil;
+        if (str(result[@"error"])) MRGDJLog(@"chat: tool %@ failed: %@", name, result[@"error"]);
         [self->_transcript addObject:@{@"role": @"tool", @"tool_call_id": str(c[@"id"]) ?: @"", @"name": name, @"content": json(result)}];
         [self runCalls:calls index:i + 1 turn:turn done:done];
     };
+    if (str(c[@"bad_arguments"])) {
+        NSString *raw = c[@"bad_arguments"];
+        answer(@{@"error": [NSString stringWithFormat:@"Your arguments for %@ weren't valid JSON (%@). Call it again with valid JSON arguments.", name, raw.length > 120 ? [raw substringToIndex:120] : raw]});
+        return;
+    }
     @try { [self run:name args:args answer:answer]; }
     @catch (NSException *e) { answer(@{@"error": [NSString stringWithFormat:@"%@: %@", e.name, e.reason]}); }
 }
@@ -203,7 +251,9 @@ static NSArray<NSDictionary *> *tools(void) {
     NSDictionary *m = @{@"search": @"Searching Spotify…", @"play_tracks": @"Starting playback…", @"queue_tracks": @"Queueing…",
                         @"start_dj_set": @"Starting a set…", @"first_played": @"Checking your history…", @"track_stats": @"Checking your history…",
                         @"top_listening": @"Checking your history…", @"history_overview": @"Checking your history…",
-                        @"create_playlist": @"Creating the playlist…", @"add_to_playlist": @"Adding songs…", @"remove_from_playlist": @"Removing songs…"};
+                        @"create_playlist": @"Creating the playlist…", @"add_to_playlist": @"Adding songs…", @"remove_from_playlist": @"Removing songs…",
+                        @"play_artist": @"Finding the artist…", @"dj_segment": @"Starting a set…", @"switch_it_up": @"Switching it up…",
+                        @"player_control": @"On it…", @"like_track": @"Saving…", @"taste_profile": @"Checking your history…"};
     return m[tool] ?: @"Working…";
 }
 
@@ -246,10 +296,32 @@ static NSDictionary *notFound(NSString *ref) {
     if ([name isEqualToString:@"search"]) {
         NSString *type = str(args[@"type"]) ?: @"track";
         NSInteger limit = [args[@"limit"] respondsToSelector:@selector(integerValue)] ? [args[@"limit"] integerValue] : 5;
-        MRGWebSearch(str(args[@"query"]), type, MAX(1, MIN(10, limit ?: 5)), ^(NSArray<NSDictionary *> *results, NSString *error) {
+        NSString *q = str(args[@"query"]) ?: @"";
+        MRGWebSearch(q, type, MAX(1, MIN(10, limit ?: 5)), ^(NSArray<NSDictionary *> *results, NSString *error) {
             if (error) { answer(@{@"error": error}); return; }
             if ([type isEqualToString:@"track"]) [self remember:results];
-            answer(@{@"results": results ?: @[]});
+            if (results.count) { answer(@{@"results": results}); return; }
+            // Nothing as typed: an artist by nickname, abbreviation or typo, or the query without field filters.
+            NSString *bare = [[q stringByReplacingOccurrencesOfString:@"artist:" withString:@""] stringByReplacingOccurrencesOfString:@"track:" withString:@""];
+            bare = [bare stringByReplacingOccurrencesOfString:@"\"" withString:@""];
+            MRGWebFindArtist(bare, ^(NSDictionary *artist, NSString *how) {
+                if ([type isEqualToString:@"artist"]) { answer(artist ? @{@"results": @[artist], @"note": [NSString stringWithFormat:@"matched by %@", how]} : @{@"results": @[], @"note": @"No artist found; if it's an abbreviation, search its full name."}); return; }
+                if (artist) {
+                    MRGWebArtistTracks(artist, MAX(1, MIN(10, limit ?: 5)), ^(NSArray<NSDictionary *> *tracks) {
+                        [self remember:tracks];
+                        answer(@{@"results": tracks, @"note": [NSString stringWithFormat:@"No exact match; these are tracks by %@.", artist[@"name"]]});
+                    });
+                    return;
+                }
+                if (![bare isEqualToString:q]) {
+                    MRGWebSearch(bare, type, 5, ^(NSArray<NSDictionary *> *r2, NSString *e2) {
+                        if ([type isEqualToString:@"track"]) [self remember:r2];
+                        answer(@{@"results": r2 ?: @[]});
+                    });
+                    return;
+                }
+                answer(@{@"results": @[]});
+            });
         });
         return;
     }
@@ -276,6 +348,51 @@ static NSDictionary *notFound(NSString *ref) {
         [MRGDJ.shared startWithRequest:str(args[@"request"])];
         [self add:[MRGChatItem kind:@"note" text:@"Starting a DJ set… it shows up in the DJ sheet and on Now Playing." card:nil]];
         answer(@{@"ok": @YES, @"note": @"The set is being picked and will start in a few seconds."});
+        return;
+    }
+    if ([name isEqualToString:@"play_artist"]) {
+        NSString *artist = str(args[@"artist"]);
+        if (!artist) { answer(@{@"error": @"No artist given."}); return; }
+        NSString *mode = str(args[@"mode"]) ?: @"mix";
+        NSString *request = [mode isEqualToString:@"only"] ? [NSString stringWithFormat:@"only %@", artist]
+                          : [mode isEqualToString:@"like"] ? [NSString stringWithFormat:@"music like %@", artist] : [NSString stringWithFormat:@"play %@", artist];
+        [MRGDJ.shared startWithRequest:request];
+        [self add:[MRGChatItem kind:@"note" text:[NSString stringWithFormat:@"Building a %@ set… it shows up in the DJ sheet and on Now Playing.", artist] card:nil]];
+        answer(@{@"ok": @YES, @"note": @"The DJ is finding the artist on Spotify and building the set (their songs plus close neighbours); it starts in a few seconds."});
+        return;
+    }
+    if ([name isEqualToString:@"dj_segment"]) {
+        NSString *kind = str(args[@"kind"]) ?: @"favorites";
+        NSDictionary *requests = @{
+            @"throwbacks": @"Throwback set: songs this listener loved and hasn't played in a while (start from the Throwbacks list, then the same artists and era). Lines can say it's a throwback.",
+            @"on_repeat": @"On repeat set: what they've been playing most lately (the On repeat list) and songs right next to it.",
+            @"discover": @"Discover set: songs new to them that sit right in their lane (same scenes as their top artists), no songs from their history.",
+            @"favorites": @"Favorites set: their top artists and best-loved songs, mixed like a radio show."};
+        [MRGDJ.shared startWithRequest:requests[kind] ?: requests[@"favorites"]];
+        [self add:[MRGChatItem kind:@"note" text:@"Starting the set… it shows up in the DJ sheet and on Now Playing." card:nil]];
+        answer(@{@"ok": @YES, @"segment": kind});
+        return;
+    }
+    if ([name isEqualToString:@"switch_it_up"]) {
+        [MRGDJ.shared switchItUp];
+        answer(@{@"ok": @YES, @"note": @"A new set in a different direction is being picked."});
+        return;
+    }
+    if ([name isEqualToString:@"player_control"]) {
+        NSString *action = str(args[@"action"]) ?: @"next";
+        MRGPlayerControl(action, ^(BOOL ok, NSString *error) { answer(ok ? @{@"ok": @YES, @"action": action} : @{@"error": error ?: @"Spotify's player refused."}); });
+        return;
+    }
+    if ([name isEqualToString:@"like_track"]) {
+        NSString *uri = str(args[@"uri"]) ?: str(MRGNowPlaying()[@"uri"]);
+        if (![uri hasPrefix:@"spotify:track:"]) { answer(@{@"error": @"Nothing is playing and no track was given."}); return; }
+        BOOL unlike = [args[@"unlike"] respondsToSelector:@selector(boolValue)] && [args[@"unlike"] boolValue];
+        MRGLikeTrack(uri, !unlike, ^(BOOL ok, NSString *error) { answer(ok ? @{@"ok": @YES, @"liked": @(!unlike)} : @{@"error": error ?: @"Spotify's library refused."}); });
+        return;
+    }
+    if ([name isEqualToString:@"taste_profile"]) {
+        NSDictionary *t = MRGHistoryTaste();
+        answer(t.count ? t : @{@"note": @"No history yet."});
         return;
     }
     if ([name isEqualToString:@"now_playing"]) {
@@ -362,6 +479,7 @@ static NSDictionary *notFound(NSString *ref) {
         NSDictionary *pl = [self playlistFrom:str(args[@"playlist"]) ?: @""];
         if (!pl) { answer(notFound(str(args[@"playlist"]))); return; }
         NSArray *uris = strings(args[@"uris"]);
+        if (!uris.count && add && str(MRGNowPlaying()[@"uri"])) { uris = @[MRGNowPlaying()[@"uri"]]; [self remember:@[MRGNowPlaying()]]; }
         MRGPlaylistDone done = ^(BOOL ok, NSString *uri, NSString *error) {
             if (ok) [self add:[MRGChatItem kind:@"card" text:nil card:@{@"type": @"playlist", @"name": pl[@"name"] ?: @"Playlist", @"uri": pl[@"uri"],
                                @"detail": [NSString stringWithFormat:@"%@ %lu song%@", add ? @"Added" : @"Removed", (unsigned long)uris.count, uris.count == 1 ? @"" : @"s"]}]];

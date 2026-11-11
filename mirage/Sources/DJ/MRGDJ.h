@@ -62,3 +62,13 @@ void MRGDJSetShowsPlayerButton(BOOL on);
 BOOL MRGDJDucks(void);
 void MRGDJSetDucks(BOOL on);
 NSString *MRGDJDeviceVoiceName(void);   // the on-device voice it picked, for settings
+
+// Talking like the listener (Settings → AI DJ → Talk like me, on by default): their last chat messages, kept on this
+// phone, are given to the model as samples of how they write.
+BOOL MRGDJMirrorsUser(void);
+void MRGDJSetMirrorsUser(BOOL on);
+void MRGDJNoteUserMessage(NSString *text);
+void MRGDJForgetUserStyle(void);
+NSString *MRGDJStyleInstructions(void);   // nil when off or too few samples
+// The listener's taste from the on-phone history (on repeat, top and recent artists, throwbacks) as prompt text, or nil.
+NSString *MRGDJTasteText(void);

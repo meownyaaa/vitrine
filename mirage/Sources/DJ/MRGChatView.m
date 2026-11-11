@@ -3,6 +3,7 @@
 #import "MRGAI.h"
 #import "MRGDJLog.h"
 #import "MRGBackgroundView.h"
+#import "../MRGSettings.h"
 #import <objc/runtime.h>
 
 static UIColor *kDim(void) { return [UIColor colorWithWhite:1 alpha:0.6]; }
@@ -145,7 +146,11 @@ static NSString *longDate(NSDate *d) {
     fresh.accessibilityLabel = @"New chat";
     MRGBlockButton *close = [MRGBlockButton symbol:@"xmark" size:15 tint:UIColor.whiteColor action:^{ [weakSelf dismissViewControllerAnimated:YES completion:nil]; }];
     close.accessibilityLabel = @"Close";
-    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[mark, title, [UIView new], fresh, close]];
+    MRGBlockButton *gear = [MRGBlockButton symbol:@"gearshape.fill" size:16 tint:UIColor.whiteColor action:^{ if (weakSelf) MRGShowDJSettings(weakSelf); }];
+    gear.accessibilityLabel = @"AI DJ settings";
+    title.adjustsFontSizeToFitWidth = YES;
+    title.minimumScaleFactor = 0.7;
+    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[mark, title, [UIView new], gear, fresh, close]];
     head.spacing = 14;
     head.alignment = UIStackViewAlignmentCenter;
     head.translatesAutoresizingMaskIntoConstraints = NO;
@@ -337,11 +342,28 @@ static NSString *longDate(NSDate *d) {
     date.text = longDate(c[@"date"]);
     UILabel *track = label(13, UIFontWeightRegular, kDim(), 2);
     track.text = [c[@"firstTrack"] length] ? [NSString stringWithFormat:@"with “%@”", c[@"firstTrack"]] : nil;
-    UILabel *stats = label(12, UIFontWeightMedium, kDim(), 1);
-    stats.text = [NSString stringWithFormat:@"%@ plays · %@ min since%@", c[@"plays"], c[@"minutes"], [c[@"source"] isEqualToString:@"live"] ? @" · recorded by Mirage" : @""];
-    UIStackView *texts = [[UIStackView alloc] initWithArrangedSubviews:@[cap, name, date, track, stats]];
+    // Two short lines that wrap instead of truncating (0.3.1 cut "1 plays · 0 min since · recorded…" off).
+    NSInteger plays = [c[@"plays"] respondsToSelector:@selector(integerValue)] ? [c[@"plays"] integerValue] : 0;
+    NSInteger minutes = [c[@"minutes"] respondsToSelector:@selector(integerValue)] ? [c[@"minutes"] integerValue] : 0;
+    NSMutableArray *bits = [NSMutableArray arrayWithObject:[NSString stringWithFormat:@"%ld play%@ since", (long)plays, plays == 1 ? @"" : @"s"]];
+    if (minutes > 0) [bits addObject:minutes >= 120 ? [NSString stringWithFormat:@"%.1f h", minutes / 60.0] : [NSString stringWithFormat:@"%ld min", (long)minutes]];
+    UILabel *stats = label(12, UIFontWeightMedium, kDim(), 2);
+    stats.text = [bits componentsJoinedByString:@" · "];
+    stats.adjustsFontSizeToFitWidth = YES;
+    stats.minimumScaleFactor = 0.8;
+    UILabel *source = label(11, UIFontWeightRegular, kDim(), 1);
+    source.text = [c[@"source"] isEqualToString:@"live"] ? @"Recorded by Mirage" : @"From your Spotify data";
+    source.adjustsFontSizeToFitWidth = YES;
+    source.minimumScaleFactor = 0.8;
+    name.adjustsFontSizeToFitWidth = YES;
+    name.minimumScaleFactor = 0.7;
+    UIStackView *texts = [[UIStackView alloc] initWithArrangedSubviews:@[cap, name, date, track, stats, source]];
     texts.axis = UILayoutConstraintAxisVertical;
     texts.spacing = 2;
+    [texts setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [texts setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    for (UILabel *l in @[cap, name, date, track, stats, source]) [l setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [pic setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     NSMutableArray *views = [NSMutableArray arrayWithObjects:pic, texts, nil];
     NSString *uri = c[@"firstURI"];
     if ([uri hasPrefix:@"spotify:track:"]) {

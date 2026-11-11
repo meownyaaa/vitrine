@@ -9,6 +9,7 @@
 #import <objc/message.h>
 #import "MRGDJLog.h"
 #import "MRGChatView.h"
+#import "../MRGSettings.h"
 
 #pragma mark - shared bits
 
@@ -379,7 +380,14 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     [chat setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     [chat.widthAnchor constraintEqualToConstant:40].active = YES;
     [chat.heightAnchor constraintEqualToConstant:40].active = YES;
-    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[mark, title, [UIView new], _spinner, chat]];
+    UIButton *gear = [UIButton systemButtonWithImage:[UIImage systemImageNamed:@"gearshape.fill"
+        withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] target:self action:@selector(openSettings)];
+    gear.tintColor = UIColor.whiteColor;
+    gear.accessibilityLabel = @"AI DJ settings";
+    [gear setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [gear.widthAnchor constraintEqualToConstant:40].active = YES;
+    [gear.heightAnchor constraintEqualToConstant:40].active = YES;
+    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[mark, title, [UIView new], _spinner, chat, gear]];
     head.spacing = 8;
     head.alignment = UIStackViewAlignmentCenter;
 
@@ -639,6 +647,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
 }
 - (void)stop { [MRGDJ.shared stop]; }
 - (void)openChat { [self.view endEditing:YES]; MRGShowDJChat(self); }
+- (void)openSettings { [self.view endEditing:YES]; MRGShowDJSettings(self); }
 
 - (void)sendRequest {
     NSString *text = [_field.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];

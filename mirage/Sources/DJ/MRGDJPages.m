@@ -1,5 +1,7 @@
 #import "../MRGSafe.h"
 #import "MRGDJPages.h"
+#import "MRGPlayer.h"
+#import "MRGHistory.h"
 #import "MRGVoice.h"
 #import "MRGDJ.h"
 #import "MRGAI.h"
@@ -64,7 +66,24 @@
 
 #pragma mark - Voice
 
-static NSString *const kSample = @"yo, it's your DJ. this one's been on repeat all week, so let's get into it.";
+// A preview line that sounds like a real DJ break, about the music actually on (or their top artist), so voices are
+// judged on the kind of line they'll say.
+static NSString *sampleLine(void) {
+    NSDictionary *now = MRGNowPlaying();
+    NSString *artist = [now[@"artist"] isKindOfClass:NSString.class] && [now[@"artist"] length] ? now[@"artist"] : nil;
+    NSString *title = [now[@"title"] isKindOfClass:NSString.class] && [now[@"title"] length] ? now[@"title"] : nil;
+    if (!artist) {
+        NSArray *top = MRGHistoryTopArtists(nil, 1);
+        NSString *n = [top.firstObject isKindOfClass:NSDictionary.class] ? top.firstObject[@"name"] : nil;
+        if ([n isKindOfClass:NSString.class] && n.length) artist = n;
+    }
+    // Short enough for every voice engine (Groq's Orpheus takes 200 characters).
+    if (artist && title)
+        return [NSString stringWithFormat:@"Alright, that's %@ with \"%@\", and it never misses. Stay right here, I've got a couple more just like it.", artist, title];
+    if (artist)
+        return [NSString stringWithFormat:@"What's good, it's your DJ. You've had %@ in heavy rotation, so I pulled some deep cuts from that same lane. Let's go.", artist];
+    return @"What's good, it's your DJ. Got a couple of favorites, one throwback and something new lined up for you. Let's get into it.";
+}
 
 @interface MRGVoicePageController : MRGDJTablePage
 @end
@@ -199,7 +218,7 @@ static NSString *const kSample = @"yo, it's your DJ. this one's been on repeat a
 
 - (void)preview:(NSInteger)engine voice:(NSString *)voice {
     [self.spinner startAnimating];
-    [MRGVoiceSpeaker.shared speak:kSample engine:engine voice:voice started:^{ [self.spinner stopAnimating]; } finished:^{ [self.spinner stopAnimating]; }];
+    [MRGVoiceSpeaker.shared speak:sampleLine() engine:engine voice:voice started:^{ [self.spinner stopAnimating]; } finished:^{ [self.spinner stopAnimating]; }];
 }
 
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {

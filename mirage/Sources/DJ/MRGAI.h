@@ -61,3 +61,7 @@ void MRGAIChatTools(NSString *system, NSArray<NSDictionary *> *messages, NSArray
 
 // Picking, exposed for the self-test: the best of `ids` for `provider`, or nil.
 NSString *MRGAIPickModel(MRGProvider provider, NSArray<NSString *> *ids);
+
+// Tool calls a model wrote as text (Harmony, <tool_call>, JSON, name(args), "name: key: value"), for the names given;
+// *cleaned gets the text without them.
+NSArray<NSDictionary *> *MRGParseTextToolCalls(NSString *text, NSSet<NSString *> *names, NSString **cleaned);

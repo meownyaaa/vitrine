@@ -2,6 +2,29 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.4.0
+
+- **Artist requests are that artist.** "play some yvl", "only pz", "stuff like clairo": Mirage finds the artist on Spotify
+  (artist search as typed and in capitals, the closest name or matching initials, then a track search, then a combined
+  search, then your provider is asked to expand the abbreviation and Spotify is searched again), fetches their tracks
+  (top-tracks, or an `artist:"Name"` search) and related artists, and the set has to be theirs: at least 7 of 15 by them
+  (all for "only", 2-3 for "like"); when the model's picks fall short, their own tracks are woven in.
+- **Taste from what you play**: on repeat (last 4 weeks of Mirage's recording), top artists lately and all time, and
+  throwbacks (well played, not for 4 months) go into every set and the chat. With no request it mixes like Spotify's DJ.
+- **Talks like you** (AI DJ → Talk like me, on by default): your last 30 chat messages, kept on the phone, are given to
+  the model as samples of how you write.
+- **Chat**: tool calls a model writes as text (Harmony, `<tool_call>`, JSON, `name(args)`, `name: key: value`) are run as
+  calls and never shown; Groq's `tool_use_failed` answers are recovered from `failed_generation`; invalid arguments are
+  sent back for a retry; up to 9 steps. New tools: play_artist, dj_segment (throwbacks, on repeat, discover, favorites),
+  switch_it_up, player_control (next, previous, pause, resume), like_track, taste_profile.
+- **Playlists** go through Spotify's playlist v2 API on its spclient host with the app's own headers first
+  (`POST /playlist/v2/playlist`, `POST /playlist/v2/user/<you>/rootlist/changes`, `POST /playlist/v2/playlist/<id>/changes`),
+  and the Esperanto calls as the fallback. Every request and answer is in the DJ log (`playlists:` lines).
+- **Playback**: when the set's first track is loaded but paused, Mirage presses play (up to twice) before giving up.
+- **Matching**: fuzzy titles and artists (edit distance, "feat."/"&"/"x" splits, "&" = "and"), and a third, title-only search.
+- **Settings**: every DJ setting is on its own AI DJ page; Mirage's settings keep one AI DJ row, and the DJ sheet and the
+  chat have a settings button.
+
 ## Using it
 
 1. Go to **Mirage settings → AI DJ → API key** and paste a key. Mirage works out the provider from the key, reads that provider's model list, picks a fast, cheap chat model (marked ✦) and checks that the key works. If it can't tell (Mistral keys have no prefix) or guesses wrong, pick it under **Provider**; with a key already saved, that re-checks the saved key as the provider you picked. Errors show the provider's HTTP status and its own message.

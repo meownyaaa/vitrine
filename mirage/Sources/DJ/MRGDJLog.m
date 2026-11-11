@@ -2,7 +2,7 @@
 #import <objc/runtime.h>
 
 static NSMutableArray<NSString *> *sLines;
-static const NSUInteger kMax = 200;
+static const NSUInteger kMax = 600;
 
 static NSString *logPath(void) {
     NSString *dir = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"Mirage"];

@@ -23,7 +23,14 @@ static BOOL sg_pageConforms;
 typedef NS_ENUM(NSInteger, MRGSection) { MRGSecPreview, MRGSecMedia, MRGSecLook, MRGSecScreens, MRGSecShop, MRGSecDJ, MRGSecAbout, MRGSecCount };
 
 @interface MRGSettingsController : UITableViewController <PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
+@property (nonatomic) BOOL djOnly;   // the AI DJ page: every DJ setting, in its own groups (like Vitrine's tabs)
 @end
+
+// The AI DJ page's groups, as rows of the old DJ section (djCell: row numbers; 12 is Talk like me).
+static NSArray<NSArray<NSNumber *> *> *djGroups(void) {
+    return @[@[@0, @1, @2], @[@3, @4, @12], @[@6], @[@7, @8, @9], @[@10, @5, @11]];
+}
+static NSArray<NSString *> *djGroupTitles(void) { return @[@"AI provider", @"Voice & personality", @"Your listening", @"On screen", @"Mirage DJ"]; }
 
 @implementation MRGSettingsController {
     UIActivityIndicatorView *_spinner;
@@ -31,12 +38,19 @@ typedef NS_ENUM(NSInteger, MRGSection) { MRGSecPreview, MRGSecMedia, MRGSecLook,
 
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
 
-- (NSString *)spt_pageIdentifier { return @"mirage"; }
-- (NSURL *)spt_pageURI { return [NSURL URLWithString:@"spotify:internal:mirage"]; }
+- (NSString *)spt_pageIdentifier { return self.djOnly ? @"mirage-dj" : @"mirage"; }
+- (NSURL *)spt_pageURI { return [NSURL URLWithString:self.djOnly ? @"spotify:internal:mirage-dj" : @"spotify:internal:mirage"]; }
+
+// The DJ row for an index path of the AI DJ page, or -1.
+- (NSInteger)djRowAt:(NSIndexPath *)ip {
+    NSArray *g = djGroups();
+    if (ip.section < 0 || ip.section >= (NSInteger)g.count || ip.row < 0 || ip.row >= (NSInteger)[g[ip.section] count]) return -1;
+    return [g[ip.section][ip.row] integerValue];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Mirage";
+    self.title = self.djOnly ? @"AI DJ" : @"Mirage";
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.tableView.backgroundColor = UIColor.blackColor;
     // The page draws its own background, laid out for the whole window (not the table's frame, which
@@ -71,26 +85,28 @@ static const CGFloat kBottomChrome = 150;
 
 #pragma mark - table
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return MRGSecCount; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return self.djOnly ? djGroups().count : MRGSecCount; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     return MRGSafeCount(^NSInteger { return [self mrg_rowsIn:t section:s]; });
 }
 
 - (NSInteger)mrg_rowsIn:(UITableView *)t section:(NSInteger)s {
+    if (self.djOnly) return s < (NSInteger)djGroups().count ? [djGroups()[s] count] : 0;
     switch (s) {
         case MRGSecPreview: return 2;              // enabled, preview
         case MRGSecMedia: return 3;                // photos, files, remove
         case MRGSecLook: return 6;                 // blur, dim, scale, top fade, clear pages, profile glow
         case MRGSecScreens: return 5;
         case MRGSecShop: return 1;
-        case MRGSecDJ: return 12;                  // key, provider, model, voice, vibe, chat, history, duck, Home chip, player button, open, debug log
+        case MRGSecDJ: return 1;                   // AI DJ → its own page
         case MRGSecAbout: return 2;
     }
     return 0;
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
+    if (self.djOnly) return s < (NSInteger)djGroupTitles().count ? djGroupTitles()[s] : nil;
     return @[@"Backgrounds", @"Media", @"Look", @"Show on", @"Addon Shop", @"AI DJ", @"About"][s];
 }
 
@@ -99,18 +115,28 @@ static const CGFloat kBottomChrome = 150;
 }
 
 - (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
+    if (self.djOnly) {
+        switch (s) {
+            case 0: return @"Bring your own key: OpenAI, Gemini (Google AI Studio keys, AQ.… or AIza…), Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together, DeepSeek or Mistral. The key stays in this phone's keychain.";
+            case 1: return @"Talk like me: the DJ mirrors how you write to it in the chat (your last messages, kept on this phone, go to your provider with each request). Turn it off to keep only the persona.";
+            case 2: return @"The DJ picks and talks from what you actually play: on repeat lately, your top artists and throwbacks, from Mirage's own recording and any Spotify data you import.";
+            case 4: return @"Privacy: only track and artist names (what's playing, your history summary, the queue), what you type, and answers a chat question needs are sent to your provider. On Spotify Free, Spotify may shuffle the set and its skip limit still applies.";
+        }
+        return nil;
+    }
     switch (s) {
         case MRGSecMedia: return @"Images (PNG, JPG, HEIC), GIFs (converted to a looping MP4 when you pick them) and videos (MP4, MOV). Videos play muted, never touch Spotify's audio, and pause when Spotify is in the background.";
         case MRGSecLook: return @"Top fade is the dark shade Spotify lays behind the status bar and the header: Soft keeps a third of it, Off removes it. Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are. Profile picture glow replaces the profile page's color gradient with a soft glow of that color around your picture.";
         case MRGSecScreens: return @"Everywhere puts the background behind every page, Home and Library included. The side drawer has its own switch, a little dimmer so its text stays readable.";
         case MRGSecDJ:
-            return @"Bring your own key: OpenAI, Gemini (Google AI Studio keys, AQ.… or AIza…), Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together, DeepSeek or Mistral. The key stays in this phone's keychain. Privacy: only track and artist names (what's playing, what you played, the queue around it), what you type, and answers from your on-phone listening history that a chat question needs are sent to your provider. Voice: iPhone voices, your provider's voices, or ElevenLabs with its own key. On Spotify Free, Spotify may shuffle the set and its skip limit still applies.";
+            return @"Voice, personality, provider, chat and the DJ's other settings are on the AI DJ page. Bring your own key: OpenAI, Gemini (Google AI Studio keys, AQ.… or AIza…), Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together, DeepSeek or Mistral. The key stays in this phone's keychain. Privacy: only track and artist names (what's playing, what you played, the queue around it), what you type, and answers from your on-phone listening history that a chat question needs are sent to your provider. Voice: iPhone voices, your provider's voices, or ElevenLabs with its own key. On Spotify Free, Spotify may shuffle the set and its skip limit still applies.";
         case MRGSecAbout: return @"Mirage is free software under the GPL-3.0, built on Vitrine (github.com/meownyaaa/vitrine), itself a fork of Chroma by skopevoj (spoti.pw, up to v0.21.1).";
     }
     return nil;
 }
 
 - (CGFloat)tableView:(UITableView *)t heightForRowAtIndexPath:(NSIndexPath *)ip {
+    if (self.djOnly) return 48;
     if (ip.section == MRGSecPreview && ip.row == 1) return MRGCurrentKind() == MRGMediaNone ? 52 : 200;
     if (ip.section == MRGSecLook && ip.row < 2) return 64;
     return 48;
@@ -227,6 +253,7 @@ static UITableViewCell *baseCell(void) {
         case 8: return [self switchCell:@"DJ chip on Home" on:MRGDJShowsPill() tag:21 symbol:@"capsule.fill"];
         case 9: return [self switchCell:@"DJ button on Now Playing" on:MRGDJShowsPlayerButton() tag:22 symbol:@"play.circle.fill"];
         case 10: return [self actionCell:@"Open Mirage DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
+        case 12: return [self switchCell:@"Talk like me" on:MRGDJMirrorsUser() tag:23 symbol:@"person.wave.2.fill"];
         default: {
             UITableViewCell *c = [self actionCell:@"DJ debug log" symbol:@"ladybug.fill" destructive:NO enabled:YES];
             c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -273,7 +300,7 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
 
 - (void)editKey { [self editKeyAs:MRGProviderNone]; }
 
-- (void)reloadDJ { [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:MRGSecDJ] withRowAnimation:UITableViewRowAnimationNone]; }
+- (void)reloadDJ { [self.tableView reloadData]; }
 
 - (void)editKeyAs:(MRGProvider)forced {
     BOOL hasKey = MRGAIProvider() != MRGProviderNone;
@@ -332,6 +359,7 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
 }
 
 - (UITableViewCell *)mrg_cellIn:(UITableView *)t at:(NSIndexPath *)ip {
+    if (self.djOnly) { NSInteger row = [self djRowAt:ip]; return row >= 0 ? [self djCell:row] : baseCell(); }
     MRGScreen screens = MRGScreens();
     BOOL hasMedia = MRGCurrentKind() != MRGMediaNone;
     switch (ip.section) {
@@ -385,7 +413,16 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
             return [self switchCell:titles[ip.row] on:(screens & (1 << ip.row)) != 0 tag:100 + ip.row symbol:symbols[ip.row]];
         }
         case MRGSecShop: return [self comingSoon:@"Addon Shop" symbol:@"bag.fill"];
-        case MRGSecDJ: return [self djCell:ip.row];
+        case MRGSecDJ: {
+            UITableViewCell *c = [self actionCell:@"AI DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
+            MRGProvider provider = MRGAIProvider();
+            c.detailTextLabel.text = provider != MRGProviderNone ? [NSString stringWithFormat:@"%@ · %@", MRGProviderName(provider), MRGDJPersonaNames()[MRGDJPersona()]] : @"Set up";
+            c.detailTextLabel.textColor = UIColor.grayColor;
+            c.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+            c.detailTextLabel.minimumScaleFactor = 0.7;
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
         case MRGSecAbout: {
             UITableViewCell *c = baseCell();
             c.textLabel.text = ip.row == 0 ? @"Version" : @"Vitrine";
@@ -399,18 +436,20 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
 
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [t deselectRowAtIndexPath:ip animated:YES];
-    if (ip.section == MRGSecDJ) {
-        if (ip.row == 0) [self editKey];
-        else if (ip.row == 1) [self pickProvider:[t cellForRowAtIndexPath:ip]];
-        else if (ip.row == 2 && MRGAIProvider() != MRGProviderNone) [self pickModel:[t cellForRowAtIndexPath:ip]];
-        else if (ip.row == 3) MRGPushPage(self, MRGVoicePage());
-        else if (ip.row == 4) MRGPushPage(self, MRGVibePage());
-        else if (ip.row == 5 && MRGAIProvider() != MRGProviderNone) MRGShowDJChat(self);
-        else if (ip.row == 6) MRGPushPage(self, MRGHistoryPage());
-        else if (ip.row == 10) MRGShowDJ(self);
-        else if (ip.row == 11) MRGPushPage(self, MRGDJLogPage());
+    if (self.djOnly) {
+        NSInteger row = [self djRowAt:ip];
+        if (row == 0) [self editKey];
+        else if (row == 1) [self pickProvider:[t cellForRowAtIndexPath:ip]];
+        else if (row == 2 && MRGAIProvider() != MRGProviderNone) [self pickModel:[t cellForRowAtIndexPath:ip]];
+        else if (row == 3) MRGPushPage(self, MRGVoicePage());
+        else if (row == 4) MRGPushPage(self, MRGVibePage());
+        else if (row == 5 && MRGAIProvider() != MRGProviderNone) MRGShowDJChat(self);
+        else if (row == 6) MRGPushPage(self, MRGHistoryPage());
+        else if (row == 10) MRGShowDJ(self);
+        else if (row == 11) MRGPushPage(self, MRGDJLogPage());
         return;
     }
+    if (ip.section == MRGSecDJ) { MRGShowDJSettings(self); return; }
     if (ip.section != MRGSecMedia) return;
     if (ip.row == 0) [self pickFromPhotos];
     else if (ip.row == 1) [self pickFromFiles];
@@ -434,6 +473,7 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
     else if (sw.tag == 20) MRGDJSetDucks(sw.on);
     else if (sw.tag == 21) MRGDJSetShowsPill(sw.on);
     else if (sw.tag == 22) MRGDJSetShowsPlayerButton(sw.on);
+    else if (sw.tag == 23) MRGDJSetMirrorsUser(sw.on);
     else if (sw.tag >= 100) {
         MRGScreen bit = 1 << (sw.tag - 100);
         MRGSetScreens(sw.on ? (MRGScreens() | bit) : (MRGScreens() & ~bit));
@@ -528,6 +568,20 @@ void MRGRegisterSettingsPage(void) {
 
 void MRGShowSettings(UIViewController *owner) {
     MRGSettingsController *page = [MRGSettingsController new];
+    if (owner.navigationController && sg_pageConforms) {
+        [owner.navigationController pushViewController:page animated:YES];
+        return;
+    }
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:page];
+    nav.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    [owner presentViewController:nav animated:YES completion:nil];
+}
+
+// The AI DJ page on its own (from the Mirage settings row, the DJ sheet's and the chat's settings buttons).
+void MRGShowDJSettings(UIViewController *owner) {
+    MRGSettingsController *page = [MRGSettingsController new];
+    page.djOnly = YES;
     if (owner.navigationController && sg_pageConforms) {
         [owner.navigationController pushViewController:page animated:YES];
         return;

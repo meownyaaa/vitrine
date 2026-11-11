@@ -1,5 +1,6 @@
 #import "MRGPlaylists.h"
 #import "MRGDJLog.h"
+#import "MRGPlayer.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -226,11 +227,133 @@ static void playlistModify(NSString *playlist, NSData *modReq, void (^done)(BOOL
     });
 }
 
+#pragma mark - spclient (the playlist v2 HTTP API Spotify's own clients use)
+
+// Path 1, tried first: Spotify's playlist v2 API on its spclient host, with the app's own headers (authorization,
+// client-token, …, captured from Spotify's requests by MRGPlayer) and JSON bodies, as Spotify's web player sends them:
+//   create:  POST /playlist/v2/playlist                          {"ops":[{kind 6 UPDATE_LIST_ATTRIBUTES, name}]} → {"uri"}
+//   library: POST /playlist/v2/user/<username>/rootlist/changes   {"deltas":[{"ops":[{kind 2 ADD | 3 REM, items:[{uri}]}]}]}
+//   tracks:  POST /playlist/v2/playlist/<id>/changes              same delta shape, track URIs
+// Path 2, when that fails: the Esperanto calls above (RootlistModificationService / PlaylistService).
+// Every request and answer (status, the start of the body) goes to the DJ log.
+
+static NSString *snippet(NSData *d) {
+    if (!d.length) return @"(empty)";
+    NSString *t = [[NSString alloc] initWithData:[d subdataWithRange:NSMakeRange(0, MIN(d.length, (NSUInteger)240))] encoding:NSUTF8StringEncoding];
+    return t.length ? [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "] : [NSString stringWithFormat:@"(%lu bytes, not text)", (unsigned long)d.length];
+}
+
+static void spclient(NSString *method, NSString *path, id body, void (^done)(id json, NSInteger status, NSString *error)) {
+    NSDictionary *h = MRGSpotifyHeaders();
+    if (!h[@"authorization"]) {
+        MRGDJLog(@"playlists: spclient %@ %@ skipped: no Spotify token captured yet", method, path);
+        done(nil, 0, @"Spotify hasn't signed a request yet (browse any page in Spotify, then try again).");
+        return;
+    }
+    NSString *url = [NSString stringWithFormat:@"https://%@%@", MRGSpclientHost(), path];
+    NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    r.HTTPMethod = method;
+    r.timeoutInterval = 20;
+    [h enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *stop) { [r setValue:v forHTTPHeaderField:k]; }];
+    [r setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    if (body) {
+        [r setValue:@"application/json;charset=UTF-8" forHTTPHeaderField:@"Content-Type"];
+        r.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    }
+    NSString *shownPath = path;
+    NSString *user = MRGSpotifyUsername();
+    if (user.length) shownPath = [shownPath stringByReplacingOccurrencesOfString:user withString:@"<you>"];
+    MRGDJLog(@"playlists: spclient %@ %@ (%lu bytes)", method, shownPath, (unsigned long)r.HTTPBody.length);
+    [[NSURLSession.sharedSession dataTaskWithRequest:r completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+        NSInteger status = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
+        id json = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSString *message = nil;
+        if (error) message = error.localizedDescription;
+        else if (status < 200 || status >= 300) message = [NSString stringWithFormat:@"Spotify answered HTTP %ld: %@", (long)status, snippet(data)];
+        MRGDJLog(@"playlists: spclient %@ %@ -> %ld %@", method, shownPath, (long)status, message ?: snippet(data));
+        dispatch_async(dispatch_get_main_queue(), ^{ done(json, status, message); });
+    }] resume];
+}
+
+static NSString *nowMs(void) { return [NSString stringWithFormat:@"%lld", (long long)(NSDate.date.timeIntervalSince1970 * 1000)]; }
+
+static NSDictionary *delta(NSArray *ops) {
+    return @{@"deltas": @[@{@"ops": ops, @"info": @{@"source": @{@"client": @5}}}], @"wantResultingRevisions": @NO, @"wantSyncResult": @NO, @"nonces": @[]};
+}
+static NSArray *items(NSArray<NSString *> *uris, BOOL stamp) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSString *u in uris) {
+        NSMutableDictionary *attrs = [@{@"formatAttributes": @[], @"availableSignals": @[]} mutableCopy];
+        if (stamp) attrs[@"timestamp"] = nowMs();
+        [a addObject:@{@"uri": u, @"attributes": attrs}];
+    }
+    return a;
+}
+static NSDictionary *addOp(NSArray<NSString *> *uris, BOOL first) {
+    return @{@"kind": @2, @"add": first ? @{@"items": items(uris, YES), @"addFirst": @YES} : @{@"items": items(uris, YES), @"addLast": @YES}};
+}
+static NSDictionary *remOp(NSArray<NSString *> *uris) {
+    return @{@"kind": @3, @"rem": @{@"items": items(uris, NO), @"itemsAsKey": @YES}};
+}
+static NSString *playlistID(NSString *uri) {
+    return [uri hasPrefix:@"spotify:playlist:"] ? [uri substringFromIndex:17] : nil;
+}
+static NSString *rootlistPath(void) {
+    NSString *u = MRGSpotifyUsername();
+    if (!u.length) return nil;
+    NSMutableCharacterSet *ok = [NSCharacterSet.URLPathAllowedCharacterSet mutableCopy];
+    [ok removeCharactersInString:@"/"];
+    return [NSString stringWithFormat:@"/playlist/v2/user/%@/rootlist/changes", [u stringByAddingPercentEncodingWithAllowedCharacters:ok]];
+}
+
+static void spCreate(NSString *title, void (^done)(NSString *uri, NSString *error)) {
+    NSDictionary *body = @{@"ops": @[@{@"kind": @6, @"updateListAttributes": @{@"newAttributes": @{@"values": @{@"name": title, @"formatAttributes": @[], @"pictureSize": @[]}, @"noValue": @[]}}}]};
+    spclient(@"POST", @"/playlist/v2/playlist", body, ^(id json, NSInteger status, NSString *error) {
+        NSString *uri = [json isKindOfClass:NSDictionary.class] && [json[@"uri"] isKindOfClass:NSString.class] ? json[@"uri"] : nil;
+        if (!uri.length) { done(nil, error ?: @"Spotify made no playlist (no uri in its answer)."); return; }
+        NSString *path = rootlistPath();
+        if (!path) {
+            MRGDJLog(@"playlists: made %@ but your username isn't known yet, so it can't be put in your library this way", uri);
+            done(uri, @"no username");
+            return;
+        }
+        spclient(@"POST", path, delta(@[addOp(@[uri], YES)]), ^(id j2, NSInteger s2, NSString *e2) {
+            done(uri, e2);
+        });
+    });
+}
+
+static void spTracks(NSString *playlist, NSArray<NSString *> *uris, BOOL add, void (^done)(NSString *error)) {
+    NSString *pid = playlistID(playlist);
+    if (!pid) { done(@"Not a playlist URI."); return; }
+    NSDictionary *body = delta(@[add ? addOp(uris, NO) : remOp(uris)]);
+    spclient(@"POST", [NSString stringWithFormat:@"/playlist/v2/playlist/%@/changes", pid], body, ^(id json, NSInteger status, NSString *error) { done(error); });
+}
+
+static void spUnfollow(NSString *playlist, void (^done)(NSString *error)) {
+    NSString *path = rootlistPath();
+    if (!path) { done(@"Your Spotify username isn't known yet (open your Library once)."); return; }
+    spclient(@"POST", path, delta(@[remOp(@[playlist])]), ^(id json, NSInteger status, NSString *error) { done(error); });
+}
+
+#pragma mark - operations (spclient first, Esperanto as the fallback)
+
+static void esperantoCreate(NSString *title, void (^done)(NSString *uri, NSString *error)) {
+    rootlistModify(modification(@"create", @"start", nil, title, YES, nil, nil, 1), ^(BOOL ok, NSString *uri, NSString *error) {
+        if (ok && uri.length) { done(uri, nil); return; }
+        MRGDJLog(@"playlists: esperanto create at the top refused (%@), trying without a position", error ?: @"no uri");
+        rootlistModify(modification(@"create", nil, nil, title, YES, nil, nil, 1), ^(BOOL ok2, NSString *uri2, NSString *error2) {
+            done(ok2 && uri2.length ? uri2 : nil, ok2 && uri2.length ? nil : (error2 ?: error ?: @"Spotify didn't return the new playlist."));
+        });
+    });
+}
+
 void MRGPlaylistCreate(NSString *name, NSArray<NSString *> *uris, MRGPlaylistDone done) {
     NSString *title = name.length ? [name substringToIndex:MIN(name.length, (NSUInteger)100)] : @"Mirage DJ";
     NSArray *tracks = trackURIs(uris);
-    MRGDJLog(@"playlists: create \"%@\" with %lu tracks", title, (unsigned long)tracks.count);
-    void (^fill)(NSString *) = ^(NSString *uri) {
+    MRGDJLog(@"playlists: create \"%@\" with %lu tracks (username %@, token %@, transport %@)", title, (unsigned long)tracks.count,
+             MRGSpotifyUsername().length ? @"known" : @"unknown", MRGSpotifyHeaders()[@"authorization"] ? @"yes" : @"no", sTransport ? @"seen" : @"not seen");
+    void (^fill)(NSString *, NSString *) = ^(NSString *uri, NSString *note) {
         rememberMade(title, uri);
         if (!tracks.count) { finish(@"create", done, YES, uri, nil); return; }
         MRGPlaylistAdd(uri, tracks, ^(BOOL ok, NSString *u, NSString *error) {
@@ -238,12 +361,21 @@ void MRGPlaylistCreate(NSString *name, NSArray<NSString *> *uris, MRGPlaylistDon
             else finish(@"create", done, NO, uri, [NSString stringWithFormat:@"The playlist was made but its songs weren't added: %@", error]);
         });
     };
-    rootlistModify(modification(@"create", @"start", nil, title, YES, nil, nil, 1), ^(BOOL ok, NSString *uri, NSString *error) {
-        if (ok && uri.length) { fill(uri); return; }
-        MRGDJLog(@"playlists: create at the top refused (%@), trying without a position", error ?: @"no uri");
-        rootlistModify(modification(@"create", nil, nil, title, YES, nil, nil, 1), ^(BOOL ok2, NSString *uri2, NSString *error2) {
-            if (ok2 && uri2.length) fill(uri2);
-            else finish(@"create", done, NO, nil, error2 ?: error ?: @"Spotify didn't return the new playlist.");
+    spCreate(title, ^(NSString *uri, NSString *error) {
+        if (uri && !error) { MRGDJLog(@"playlists: created via spclient and added to your library"); fill(uri, nil); return; }
+        if (uri) {
+            // Made but not in the library: try the Esperanto rootlist add before giving it back as is.
+            MRGDJLog(@"playlists: %@ made via spclient; library add failed (%@)", uri, error);
+            rootlistModify(modification(@"add", @"start", nil, nil, NO, @[uri], nil, 0), ^(BOOL ok, NSString *u, NSString *e) {
+                MRGDJLog(@"playlists: esperanto library add of the new playlist %@", ok ? @"done" : [@"failed: " stringByAppendingString:e ?: @"?"]);
+                fill(uri, nil);
+            });
+            return;
+        }
+        MRGDJLog(@"playlists: spclient create failed (%@), trying Esperanto", error);
+        esperantoCreate(title, ^(NSString *uri2, NSString *error2) {
+            if (uri2) { fill(uri2, nil); return; }
+            finish(@"create", done, NO, nil, [NSString stringWithFormat:@"spclient: %@ · esperanto: %@", error ?: @"?", error2 ?: @"?"]);
         });
     });
 }
@@ -252,15 +384,16 @@ void MRGPlaylistAdd(NSString *playlist, NSArray<NSString *> *uris, MRGPlaylistDo
     NSArray *tracks = trackURIs(uris);
     if (!playlist.length || !tracks.count) { finish(@"add", done, NO, playlist, @"No playlist or no tracks."); return; }
     MRGDJLog(@"playlists: add %lu tracks to %@", (unsigned long)tracks.count, playlist);
-    playlistModify(playlist, modification(@"add", nil, @"end", nil, NO, tracks, nil, 0), ^(BOOL ok, NSString *error) {
-        finish(@"add", done, ok, playlist, error);
+    spTracks(playlist, tracks, YES, ^(NSString *error) {
+        if (!error) { finish(@"add", done, YES, playlist, nil); return; }
+        MRGDJLog(@"playlists: spclient add failed (%@), trying Esperanto", error);
+        playlistModify(playlist, modification(@"add", nil, @"end", nil, NO, tracks, nil, 0), ^(BOOL ok, NSString *error2) {
+            finish(@"add", done, ok, playlist, ok ? nil : [NSString stringWithFormat:@"spclient: %@ · esperanto: %@", error, error2 ?: @"?"]);
+        });
     });
 }
 
-void MRGPlaylistRemove(NSString *playlist, NSArray<NSString *> *uris, MRGPlaylistDone done) {
-    NSArray *tracks = trackURIs(uris);
-    if (!playlist.length || !tracks.count) { finish(@"remove", done, NO, playlist, @"No playlist or no tracks."); return; }
-    MRGDJLog(@"playlists: remove %lu tracks from %@", (unsigned long)tracks.count, playlist);
+static void esperantoRemove(NSString *playlist, NSArray *tracks, void (^done)(BOOL ok, NSString *error)) {
     // The rows of those tracks first (PlaylistFindRequest: 1 playlist_uri, 2 item_uris → items: 1 uri, 2 row_ids).
     NSMutableData *find = [NSMutableData data];
     putString(find, 1, playlist);
@@ -272,10 +405,20 @@ void MRGPlaylistRemove(NSString *playlist, NSArray<NSString *> *uris, MRGPlaylis
             if (![item isKindOfClass:NSData.class]) continue;
             for (id r in readFields(item)[@2]) { NSString *s = str(r); if (s.length) [rows addObject:s]; }
         }
-        MRGDJLog(@"playlists: find %@ (%lu rows)", error ?: statusError(f) ?: @"answered", (unsigned long)rows.count);
-        if (!error && !statusError(f) && resp.length && !rows.count) { finish(@"remove", done, NO, playlist, @"Those songs aren't in that playlist."); return; }
-        playlistModify(playlist, modification(@"remove", nil, nil, nil, NO, tracks, rows, 0), ^(BOOL ok, NSString *err) {
-            finish(@"remove", done, ok, playlist, err);
+        MRGDJLog(@"playlists: esperanto find %@ (%lu rows)", error ?: statusError(f) ?: @"answered", (unsigned long)rows.count);
+        playlistModify(playlist, modification(@"remove", nil, nil, nil, NO, tracks, rows, 0), done);
+    });
+}
+
+void MRGPlaylistRemove(NSString *playlist, NSArray<NSString *> *uris, MRGPlaylistDone done) {
+    NSArray *tracks = trackURIs(uris);
+    if (!playlist.length || !tracks.count) { finish(@"remove", done, NO, playlist, @"No playlist or no tracks."); return; }
+    MRGDJLog(@"playlists: remove %lu tracks from %@", (unsigned long)tracks.count, playlist);
+    spTracks(playlist, tracks, NO, ^(NSString *error) {
+        if (!error) { finish(@"remove", done, YES, playlist, nil); return; }
+        MRGDJLog(@"playlists: spclient remove failed (%@), trying Esperanto", error);
+        esperantoRemove(playlist, tracks, ^(BOOL ok, NSString *error2) {
+            finish(@"remove", done, ok, playlist, ok ? nil : [NSString stringWithFormat:@"spclient: %@ · esperanto: %@", error, error2 ?: @"?"]);
         });
     });
 }
@@ -283,11 +426,14 @@ void MRGPlaylistRemove(NSString *playlist, NSArray<NSString *> *uris, MRGPlaylis
 void MRGPlaylistDelete(NSString *playlist, MRGPlaylistDone done) {
     if (!playlist.length) { finish(@"delete", done, NO, nil, @"No playlist."); return; }
     MRGDJLog(@"playlists: remove %@ from the library", playlist);
-    rootlistModify(modification(@"remove", nil, nil, nil, NO, @[playlist], nil, 0), ^(BOOL ok, NSString *uri, NSString *error) {
-        // Removing returns no uri; an empty answer without an error status is taken as accepted, and logged as such.
-        BOOL accepted = ok || [error isEqualToString:kEmpty];
-        if (!ok && accepted) MRGDJLog(@"playlists: delete answered empty, taken as accepted (check your Library)");
-        if (accepted) forgetMade(playlist);
-        finish(@"delete", done, accepted, playlist, accepted ? nil : error);
+    spUnfollow(playlist, ^(NSString *error) {
+        if (!error) { forgetMade(playlist); finish(@"delete", done, YES, playlist, nil); return; }
+        MRGDJLog(@"playlists: spclient library remove failed (%@), trying Esperanto", error);
+        rootlistModify(modification(@"remove", nil, nil, nil, NO, @[playlist], nil, 0), ^(BOOL ok, NSString *uri, NSString *error2) {
+            BOOL accepted = ok || [error2 isEqualToString:kEmpty];
+            if (!ok && accepted) MRGDJLog(@"playlists: esperanto delete answered empty, taken as accepted (check your Library)");
+            if (accepted) forgetMade(playlist);
+            finish(@"delete", done, accepted, playlist, accepted ? nil : [NSString stringWithFormat:@"spclient: %@ · esperanto: %@", error, error2 ?: @"?"]);
+        });
     });
 }

@@ -419,3 +419,49 @@ NSArray<NSDictionary *> *MRGHistoryYears(void) {
         return out;
     });
 }
+
+// What the DJ reads as the listener's taste (on Q, from the index): on repeat (the last 28 days of Mirage's own
+// recording, tracks played at least twice), the artists of those weeks, all-time top artists, and throwbacks (tracks
+// with real time in them that haven't been played for 4 months; mostly from an imported Spotify history).
+NSDictionary *MRGHistoryTaste(void) {
+    return onQ(^id {
+        double now = NSDate.date.timeIntervalSince1970, since = now - 28 * 86400;
+        NSMutableDictionary<NSString *, NSMutableDictionary *> *tracks = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSNumber *> *artists = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSString *> *artistNames = [NSMutableDictionary dictionary];
+        for (NSDictionary *e in idx()[@"recent"]) {
+            if (![e isKindOfClass:NSDictionary.class] || [e[@"at"] doubleValue] < since) continue;
+            NSString *title = [e[@"title"] isKindOfClass:NSString.class] ? e[@"title"] : nil, *artist = [e[@"artist"] isKindOfClass:NSString.class] ? e[@"artist"] : @"";
+            if (!title.length) continue;
+            NSString *k = [NSString stringWithFormat:@"%@|%@", norm(title), norm(artist)];
+            NSMutableDictionary *t = tracks[k] ?: (tracks[k] = [@{@"title": title, @"artist": artist, @"uri": e[@"uri"] ?: @"", @"plays": @0} mutableCopy]);
+            t[@"plays"] = @([t[@"plays"] integerValue] + 1);
+            NSString *ak = norm(artist);
+            if (ak.length) { artists[ak] = @(artists[ak].integerValue + 1); artistNames[ak] = artist; }
+        }
+        NSArray *byPlays = [tracks.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"plays"] compare:a[@"plays"]]; }];
+        NSMutableArray *onRepeat = [NSMutableArray array];
+        for (NSDictionary *t in byPlays) { if ([t[@"plays"] integerValue] < 2) break; [onRepeat addObject:t]; if (onRepeat.count >= 12) break; }
+        NSMutableArray *recentArtists = [NSMutableArray array];
+        for (NSString *k in [artists keysSortedByValueUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [b compare:a]; }]) {
+            [recentArtists addObject:artistNames[k]];
+            if (recentArtists.count >= 10) break;
+        }
+        NSDictionary *all = idx()[@"artists"];
+        NSArray *topKeys = [all keysSortedByValueUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"ms"] ?: @0 compare:a[@"ms"] ?: @0]; }];
+        NSMutableArray *allTime = [NSMutableArray array];
+        for (NSString *k in topKeys) { NSString *n = all[k][@"name"]; if ([n isKindOfClass:NSString.class] && n.length) [allTime addObject:n]; if (allTime.count >= 12) break; }
+        NSMutableArray *oldies = [NSMutableArray array];
+        for (NSDictionary *t in [idx()[@"tracks"] allValues]) {
+            if (![t isKindOfClass:NSDictionary.class]) continue;
+            if ([t[@"plays"] integerValue] >= 4 && [t[@"last"] doubleValue] < now - 120 * 86400) [oldies addObject:t];
+        }
+        [oldies sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"plays"] compare:a[@"plays"]]; }];
+        NSMutableArray *throwbacks = [NSMutableArray array];
+        for (NSDictionary *t in oldies) {
+            [throwbacks addObject:@{@"title": t[@"title"] ?: @"", @"artist": t[@"artist"] ?: @"", @"uri": t[@"uri"] ?: @"", @"plays": t[@"plays"] ?: @0, @"year": yearOf([t[@"last"] doubleValue])}];
+            if (throwbacks.count >= 12) break;
+        }
+        return @{@"onRepeat": onRepeat, @"recentArtists": recentArtists, @"allTimeArtists": allTime, @"throwbacks": throwbacks};
+    });
+}

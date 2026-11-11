@@ -33,3 +33,11 @@ void MRGWaitForPlayback(NSArray<NSString *> *tracks, NSString *contextURI, NSTim
 // it never clicks) and brings it back. NO when Spotify's AudioOutputUnitStart could not be rebound: the DJ
 // then talks over the music at full level.
 BOOL MRGDuckMusic(BOOL duck);
+
+// Player controls on the music player: "resume", "pause", "next", "previous" (done may be nil).
+void MRGPlayerControl(NSString *what, void (^done)(BOOL ok, NSString *error));
+// Like / unlike a track (Liked Songs) through Spotify's collection platform. NO when it hasn't been seen yet.
+void MRGLikeTrack(NSString *uri, BOOL like, void (^done)(BOOL ok, NSString *error));
+// The signed-in username (from Spotify's own requests and auth session), or nil; the spclient host Spotify uses.
+NSString *MRGSpotifyUsername(void);
+NSString *MRGSpclientHost(void);
