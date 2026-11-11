@@ -38,6 +38,73 @@ static void clearView(UIView *v) {
     if (bgView.alpha != 0) bgView.alpha = 0;
 }
 
+#pragma mark - list cells
+
+// Lists inside a page that has a background (Library's rows and grid, mostly) whose cells Spotify fills
+// opaque black. Tagged lists clear their visible cells' dark fills on each of their own layout passes,
+// which run on scroll and after reuse, so recycled cells come out clear too.
+static char kListKey;
+static NSUInteger sg_taggedLists;
+
+// Only opaque, near-black fills: artwork, colored badges, glass and Vitrine's tinted cards keep theirs.
+static BOOL isDarkFill(UIColor *c) {
+    if (!c) return NO;
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (![c getRed:&r green:&g blue:&b alpha:&a]) {
+        CGFloat w = 0;
+        if (![c getWhite:&w alpha:&a]) return NO;
+        r = g = b = w;
+    }
+    return a > 0.9 && MAX(r, MAX(g, b)) < 0.22;
+}
+
+static void clearDarkFill(UIView *v) {
+    if (!v || [v isKindOfClass:UIVisualEffectView.class] || [v isKindOfClass:UIImageView.class]) return;
+    UIColor *c = v.backgroundColor;
+    if (!isDarkFill(c)) return;
+    if (!isCleared(v)) objc_setAssociatedObject(v, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(v, &kOriginalColorKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    v.backgroundColor = UIColor.clearColor;
+}
+
+static void clearCell(UIView *cell) {
+    clearDarkFill(cell);
+    UIView *content = [cell isKindOfClass:UICollectionViewCell.class] ? ((UICollectionViewCell *)cell).contentView
+                    : [cell isKindOfClass:UITableViewCell.class] ? ((UITableViewCell *)cell).contentView : nil;
+    UIView *back = [cell isKindOfClass:UICollectionViewCell.class] ? ((UICollectionViewCell *)cell).backgroundView
+                 : [cell isKindOfClass:UITableViewCell.class] ? ((UITableViewCell *)cell).backgroundView : nil;
+    clearDarkFill(back);
+    clearDarkFill(content);
+    // The cell-sized fills inside it (row containers, tile plates), two levels down.
+    CGSize size = cell.bounds.size;
+    for (UIView *a in content.subviews) {
+        if (a.bounds.size.width < size.width * 0.9 || a.bounds.size.height < size.height * 0.9) continue;
+        clearDarkFill(a);
+        for (UIView *b in a.subviews)
+            if (b.bounds.size.width >= size.width * 0.9 && b.bounds.size.height >= size.height * 0.9) clearDarkFill(b);
+    }
+}
+
+static void clearCells(UIScrollView *list) {
+    NSArray *cells = [list isKindOfClass:UICollectionView.class] ? (NSArray *)((UICollectionView *)list).visibleCells
+                   : [list isKindOfClass:UITableView.class] ? (NSArray *)((UITableView *)list).visibleCells : nil;
+    for (UIView *cell in cells) clearCell(cell);
+}
+
+static void tagList(UIScrollView *list) {
+    if (objc_getAssociatedObject(list, &kListKey)) return;
+    objc_setAssociatedObject(list, &kListKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    sg_taggedLists++;
+}
+
+static void untagList(UIView *list) {
+    if (!objc_getAssociatedObject(list, &kListKey)) return;
+    objc_setAssociatedObject(list, &kListKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (sg_taggedLists) sg_taggedLists--;
+}
+
+static inline BOOL isTaggedList(UIView *v) { return sg_taggedLists && objc_getAssociatedObject(v, &kListKey); }
+
 static void restoreView(UIView *v) {
     if (!isCleared(v)) return;
     id original = objc_getAssociatedObject(v, &kOriginalColorKey);
@@ -61,6 +128,26 @@ static void forEachFullSizeView(UIView *root, CGSize page, int depth, void (^blo
     }
 }
 
+// The page's main lists, however deep they sit (Library nests its grid well below the page view):
+// lists as wide as the page and at least 40% of its height. Cells are not walked into.
+static void tagPageLists(UIView *host) {
+    CGSize page = host.bounds.size;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:host.subviews];
+    NSUInteger seen = 0;
+    while (stack.count && seen++ < 3000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:MRGBackgroundView.class] || [v isKindOfClass:UICollectionViewCell.class] ||
+            [v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UIVisualEffectView.class]) continue;
+        if (([v isKindOfClass:UICollectionView.class] || [v isKindOfClass:UITableView.class]) &&
+            v.bounds.size.width >= page.width * 0.9 && v.bounds.size.height >= page.height * 0.4) {
+            clearView(v);
+            tagList((UIScrollView *)v);
+            clearCells((UIScrollView *)v);
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+}
+
 #pragma mark - attaching
 
 static void detach(UIView *host) {
@@ -68,8 +155,15 @@ static void detach(UIView *host) {
     if (!bg) return;
     [bg removeFromSuperview];
     objc_setAssociatedObject(host, &kBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    restoreView(host);
-    forEachFullSizeView(host, host.bounds.size, 0, ^(UIView *v) { restoreView(v); });
+    // Everything Mirage cleared under this host: page fills, list fills and cell fills.
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:host];
+    NSUInteger seen = 0;
+    while (stack.count && seen++ < 5000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        restoreView(v);
+        untagList(v);
+        [stack addObjectsFromArray:v.subviews];
+    }
 }
 
 // One background per stack of hosts: Home's Funkis page holds the Evo page, every page sits in a
@@ -120,6 +214,7 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!onTop && MRGClearPages()) {
         clearView(host);
         forEachFullSizeView(host, host.bounds.size, 0, ^(UIView *v) { clearView(v); });
+        tagPageLists(host);
     }
 }
 
@@ -129,6 +224,15 @@ static void hostDisappeared(UIView *host) {
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
     if (bg && !bg.hidden) bg.hidden = YES;
 }
+
+%group MRGLists
+%hook UICollectionView
+- (void)layoutSubviews { %orig; if (isTaggedList(self)) clearCells(self); }
+%end
+%hook UITableView
+- (void)layoutSubviews { %orig; if (isTaggedList(self)) clearCells(self); }
+%end
+%end
 
 #pragma mark - screens
 
@@ -202,6 +306,7 @@ static void relayoutAll(void) {
 
 %ctor {
     @autoreleasepool {
+        %init(MRGLists);
         if (NSClassFromString(@"_TtC19Home_FunkisPageImpl20FunkisViewController")) %init(MRGHome);
         if (NSClassFromString(@"_TtC16Home_EvoPageImpl33EvoLoadableResourceViewController")) %init(MRGHomeEvo);
         if (NSClassFromString(@"_TtC28YourLibrary_YourLibraryXImpl25YourLibraryViewController")) %init(MRGLibrary);
