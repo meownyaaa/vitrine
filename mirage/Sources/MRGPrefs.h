@@ -35,6 +35,8 @@ void MRGSetScreens(MRGScreen s);
 BOOL MRGClearPages(void);      // make Spotify's own full-screen page fills transparent
 void MRGSetClearPages(BOOL on);
 BOOL MRGWantsScreen(MRGScreen s);
+BOOL MRGProfileGlow(void);     // profile page: the dominant color as a glow around the picture, not page-wide
+void MRGSetProfileGlow(BOOL on);
 
 // Media in Documents/Mirage/.
 MRGMediaKind MRGCurrentKind(void);

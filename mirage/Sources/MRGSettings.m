@@ -68,7 +68,7 @@ static const CGFloat kBottomChrome = 150;
     switch (s) {
         case MRGSecPreview: return 2;              // enabled, preview
         case MRGSecMedia: return 3;                // photos, files, remove
-        case MRGSecLook: return 4;                 // blur, dim, scale, clear pages
+        case MRGSecLook: return 5;                 // blur, dim, scale, clear pages, profile glow
         case MRGSecScreens: return 4;
         case MRGSecShop: case MRGSecDJ: return 1;
         case MRGSecAbout: return 2;
@@ -83,7 +83,7 @@ static const CGFloat kBottomChrome = 150;
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     switch (s) {
         case MRGSecMedia: return @"Images (PNG, JPG, HEIC), GIFs (converted to a looping MP4 when you pick them) and videos (MP4, MOV). Videos play muted, never touch Spotify's audio, and pause when Spotify is in the background.";
-        case MRGSecLook: return @"Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are.";
+        case MRGSecLook: return @"Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are. Profile picture glow replaces the profile page's color gradient with a soft glow of that color around your picture.";
         case MRGSecScreens: return @"Everywhere puts the background behind every page, Home and Library included.";
         case MRGSecAbout: return @"Mirage is free software under the GPL-3.0, built on Vitrine (github.com/meownyaaa/vitrine), itself a fork of Chroma by skopevoj (spoti.pw, up to v0.21.1).";
     }
@@ -202,7 +202,8 @@ static UITableViewCell *baseCell(void) {
                 [seg sizeToFit];
                 return c;
             }
-            return [self switchCell:@"Clear page backgrounds" on:MRGClearPages() tag:2 symbol:nil];
+            if (ip.row == 3) return [self switchCell:@"Clear page backgrounds" on:MRGClearPages() tag:2 symbol:nil];
+            return [self switchCell:@"Profile picture glow" on:MRGProfileGlow() tag:3 symbol:nil];
         case MRGSecScreens: {
             NSArray *titles = @[@"Home", @"Now Playing", @"Library", @"Everywhere"];
             NSArray *symbols = @[@"house.fill", @"play.circle.fill", @"books.vertical.fill", @"square.stack.3d.up.fill"];
@@ -242,6 +243,7 @@ static UITableViewCell *baseCell(void) {
 - (void)switched:(UISwitch *)sw {
     if (sw.tag == 1) MRGSetBackgroundEnabled(sw.on);
     else if (sw.tag == 2) MRGSetClearPages(sw.on);
+    else if (sw.tag == 3) MRGSetProfileGlow(sw.on);
     else if (sw.tag >= 100) {
         MRGScreen bit = 1 << (sw.tag - 100);
         MRGSetScreens(sw.on ? (MRGScreens() | bit) : (MRGScreens() & ~bit));
