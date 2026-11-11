@@ -1,33 +1,170 @@
 // The profile page over a Mirage background. Spotify paints the page's header with the profile picture's
-// dominant color (a fill and a gradient across the whole top) and the sections under it on opaque black,
-// which over a background reads as a colored slab and a black band. With "Profile picture glow" on, the
-// page-wide color goes and the same color is drawn as a soft glow and ring just around the picture; the
-// black page bands are cleared either way. Only while the page sits over a visible Mirage background
+// dominant color (a fill and a gradient across the top), shows a collapsed header bar in that color once the
+// picture has mostly scrolled away, and lays the sections under it on opaque dark gray, which over a
+// background reads as a colored slab, a box that snaps in on scroll, and a gray band. With "Profile picture
+// glow" on the page-wide color goes and the same color is drawn as a soft glow and ring just around the
+// picture; the dark bands are cleared either way. Only while the page sits over a visible Mirage background
 // (Everywhere), and all of it is put back when that or the toggle goes.
 //
 // Spotify 9.1.90 (class dump): Profile_CommonImpl.ProfileViewController > ProfileView (an
 // SPTEntityHeaderViewController header whose content is Profile_CommonImpl.ProfileHeaderViewController,
-// and componentsCollectionView). The header's views are Swift components with no recorded tree yet, so
-// they are found by shape: page-wide gradient views/layers and colored fills in the header, and the
-// picture as the largest round, square image view in it.
+// and componentsCollectionView). The header's views are Swift components with no recorded tree, so they are
+// found by shape.
+//
+// 0.1.2 cleared those views once per pass, and Spotify set them again on every scroll frame and at the
+// collapse threshold: the box came back and the glow flickered against the repaint. Now the layers are
+// suppressed at their setters: each one Mirage takes over gets a runtime subclass of its own layer class
+// (the way KVO does it) whose setBackgroundColor:, setOpacity:, setHidden: and setColors: keep Mirage's value
+// and remember Spotify's for later. Wide views across the top of the page are taken over before Spotify
+// paints them, so the collapsed bar's fill never shows. Nothing else in the app is touched.
 #import "MRGPrefs.h"
 #import "MRGBackgroundView.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <CoreImage/CoreImage.h>
 
-@interface MRGGlowView : UIView
-@property (nonatomic, strong) UIColor *color;
-@property (nonatomic, weak) UIView *picture;
-- (void)placeAround:(UIView *)picture;
-@end
+#pragma mark - suppressing a layer's setters
 
-static char kProfileKey, kGlowKey, kSavedAlphaKey, kSavedColorKey, kSavedHiddenKey, kTintKey;
-// Everything changed on profile pages, to put back.
-static NSHashTable *sg_touched;
+// What Mirage holds on a layer. The associated value is Spotify's latest value, boxed (NSNull for nil).
+static char kSupBG, kSupOpacity, kSupHidden, kSupColors, kSupBase, kGlowRelated;
+static NSHashTable *sg_suppressed;
+static NSMutableDictionary<NSString *, Class> *sg_subclasses;
 
-static NSHashTable *touched(void) {
-    if (!sg_touched) sg_touched = [NSHashTable weakObjectsHashTable];
-    return sg_touched;
+static BOOL isSuppressing(CALayer *l, const void *key) { return objc_getAssociatedObject(l, key) != nil; }
+
+static Class suppressingClass(Class base) {
+    NSString *name = NSStringFromClass(base);
+    if ([name hasPrefix:@"MRGSup_"]) return base;
+    if ([name hasPrefix:@"NSKVONotifying_"] || [name containsString:@"<"]) return Nil;
+    if (!sg_subclasses) sg_subclasses = [NSMutableDictionary dictionary];
+    Class sub = sg_subclasses[name];
+    if (sub) return sub;
+    NSString *subName = [@"MRGSup_" stringByAppendingString:name];
+    sub = objc_allocateClassPair(base, subName.UTF8String, 0);
+    if (!sub) return Nil;
+
+    class_addMethod(sub, @selector(setBackgroundColor:), imp_implementationWithBlock(^(CALayer *self, CGColorRef color) {
+        struct objc_super sup = {self, base};
+        if (isSuppressing(self, &kSupBG)) {
+            objc_setAssociatedObject(self, &kSupBG, color ? (id)[UIColor colorWithCGColor:color] : (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            color = NULL;
+        }
+        ((void (*)(struct objc_super *, SEL, CGColorRef))objc_msgSendSuper)(&sup, @selector(setBackgroundColor:), color);
+    }), "v@:^{CGColor=}");
+    class_addMethod(sub, @selector(setOpacity:), imp_implementationWithBlock(^(CALayer *self, float opacity) {
+        struct objc_super sup = {self, base};
+        if (isSuppressing(self, &kSupOpacity)) {
+            objc_setAssociatedObject(self, &kSupOpacity, @(opacity), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            opacity = 0;
+        }
+        ((void (*)(struct objc_super *, SEL, float))objc_msgSendSuper)(&sup, @selector(setOpacity:), opacity);
+    }), "v@:f");
+    class_addMethod(sub, @selector(setHidden:), imp_implementationWithBlock(^(CALayer *self, BOOL hidden) {
+        struct objc_super sup = {self, base};
+        if (isSuppressing(self, &kSupHidden)) {
+            objc_setAssociatedObject(self, &kSupHidden, @(hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            hidden = YES;
+        }
+        ((void (*)(struct objc_super *, SEL, BOOL))objc_msgSendSuper)(&sup, @selector(setHidden:), hidden);
+    }), "v@:B");
+    if ([base isSubclassOfClass:CAGradientLayer.class]) {
+        class_addMethod(sub, @selector(setColors:), imp_implementationWithBlock(^(CALayer *self, NSArray *colors) {
+            struct objc_super sup = {self, base};
+            if (isSuppressing(self, &kSupColors)) {
+                objc_setAssociatedObject(self, &kSupColors, colors ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                colors = nil;
+            }
+            ((void (*)(struct objc_super *, SEL, NSArray *))objc_msgSendSuper)(&sup, @selector(setColors:), colors);
+        }), "v@:@");
+    }
+    // Still reports the class it was, as a KVO subclass does.
+    class_addMethod(sub, @selector(class), imp_implementationWithBlock(^Class(id self) { return base; }), "#@:");
+    objc_registerClassPair(sub);
+    sg_subclasses[name] = sub;
+    return sub;
+}
+
+static BOOL adopt(CALayer *l) {
+    if ([NSStringFromClass(object_getClass(l)) hasPrefix:@"MRGSup_"]) return YES;
+    Class base = object_getClass(l);
+    Class sub = suppressingClass(base);
+    if (!sub) return NO;
+    objc_setAssociatedObject(l, &kSupBase, base, OBJC_ASSOCIATION_ASSIGN);
+    object_setClass(l, sub);
+    if (!sg_suppressed) sg_suppressed = [NSHashTable weakObjectsHashTable];
+    [sg_suppressed addObject:l];
+    return YES;
+}
+
+// Each takes the current value as Spotify's and applies Mirage's at once, without an animation.
+static void suppressBG(CALayer *l, BOOL glow) {
+    if (isSuppressing(l, &kSupBG) || !adopt(l)) return;
+    CGColorRef c = l.backgroundColor;
+    objc_setAssociatedObject(l, &kSupBG, c ? (id)[UIColor colorWithCGColor:c] : (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (glow) objc_setAssociatedObject(l, &kGlowRelated, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    l.backgroundColor = NULL;
+    [CATransaction commit];
+}
+
+static void suppressOpacity(CALayer *l) {
+    if (isSuppressing(l, &kSupOpacity) || !adopt(l)) return;
+    objc_setAssociatedObject(l, &kSupOpacity, @(l.opacity), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kGlowRelated, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    l.opacity = 0;
+    [CATransaction commit];
+}
+
+static void suppressHidden(CALayer *l) {
+    if (isSuppressing(l, &kSupHidden) || !adopt(l)) return;
+    objc_setAssociatedObject(l, &kSupHidden, @(l.hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kGlowRelated, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    l.hidden = YES;
+}
+
+static void suppressColors(CAGradientLayer *l) {
+    if (isSuppressing(l, &kSupColors) || !adopt(l)) return;
+    objc_setAssociatedObject(l, &kSupColors, l.colors ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kGlowRelated, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    l.colors = nil;
+    [CATransaction commit];
+}
+
+// Spotify's latest values back, and the layer its own class again.
+static void release_(CALayer *l) {
+    id bg = objc_getAssociatedObject(l, &kSupBG), op = objc_getAssociatedObject(l, &kSupOpacity);
+    id hid = objc_getAssociatedObject(l, &kSupHidden), cols = objc_getAssociatedObject(l, &kSupColors);
+    objc_setAssociatedObject(l, &kSupBG, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kSupOpacity, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kSupHidden, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kSupColors, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(l, &kGlowRelated, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (bg) l.backgroundColor = bg == NSNull.null ? NULL : ((UIColor *)bg).CGColor;
+    if (op) l.opacity = [op floatValue];
+    if (hid) l.hidden = [hid boolValue];
+    if (cols && [l isKindOfClass:CAGradientLayer.class]) ((CAGradientLayer *)l).colors = cols == NSNull.null ? nil : cols;
+    [CATransaction commit];
+    Class base = objc_getAssociatedObject(l, &kSupBase);
+    if (base) object_setClass(l, base);
+    objc_setAssociatedObject(l, &kSupBase, nil, OBJC_ASSOCIATION_ASSIGN);
+    [sg_suppressed removeObject:l];
+}
+
+static UIView *ownerView(CALayer *l) {
+    for (CALayer *x = l; x; x = x.superlayer) if ([x.delegate isKindOfClass:UIView.class]) return (UIView *)x.delegate;
+    return nil;
+}
+
+static void releaseIn(UIView *page, BOOL glowOnly) {
+    for (CALayer *l in sg_suppressed.allObjects) {
+        if (glowOnly && !objc_getAssociatedObject(l, &kGlowRelated)) continue;
+        UIView *owner = ownerView(l);
+        if (owner && page && ![owner isDescendantOfView:page]) continue;
+        release_(l);
+    }
 }
 
 #pragma mark - colors
@@ -40,12 +177,12 @@ static BOOL rgba(UIColor *c, CGFloat *r, CGFloat *g, CGFloat *b, CGFloat *a) {
     return NO;
 }
 
-static BOOL isDark(UIColor *c) {
+// The page's dark grays: opaque, and darker than Spotify's elevated surfaces' lightest.
+static BOOL isDarkGray(UIColor *c) {
     CGFloat r, g, b, a;
-    return rgba(c, &r, &g, &b, &a) && a > 0.9 && MAX(r, MAX(g, b)) < 0.22;
+    return rgba(c, &r, &g, &b, &a) && a > 0.85 && MAX(r, MAX(g, b)) < 0.3 && MAX(r, MAX(g, b)) - MIN(r, MIN(g, b)) < 0.08;
 }
 
-// A fill that carries the header's color: opaque enough and not black, white or grey.
 static BOOL isTint(UIColor *c) {
     CGFloat r, g, b, a;
     if (!rgba(c, &r, &g, &b, &a) || a < 0.3) return NO;
@@ -53,7 +190,6 @@ static BOOL isTint(UIColor *c) {
     return hi >= 0.15 && hi - lo > 0.06;
 }
 
-// Bright and saturated enough to glow over a dimmed background.
 static UIColor *glowColor(UIColor *c) {
     CGFloat h, s, v, a;
     if (![c getHue:&h saturation:&s brightness:&v alpha:&a]) return c;
@@ -61,10 +197,7 @@ static UIColor *glowColor(UIColor *c) {
 }
 
 static UIColor *averageColor(UIImage *image) {
-    static NSMapTable *cache;
-    if (!cache) cache = [NSMapTable weakToStrongObjectsMapTable];
-    UIColor *known = [cache objectForKey:image];
-    if (known || !image) return known;
+    if (!image) return nil;
     CIImage *input = image.CIImage ?: (image.CGImage ? [CIImage imageWithCGImage:image.CGImage] : nil);
     if (!input) return nil;
     CIFilter *avg = [CIFilter filterWithName:@"CIAreaAverage"];
@@ -72,15 +205,14 @@ static UIColor *averageColor(UIImage *image) {
     [avg setValue:[CIVector vectorWithCGRect:input.extent] forKey:kCIInputExtentKey];
     static CIContext *ctx;
     if (!ctx) ctx = [CIContext contextWithOptions:@{kCIContextWorkingColorSpace: NSNull.null}];
-    uint8_t px[4] = {0};
     if (!avg.outputImage) return nil;
+    uint8_t px[4] = {0};
     [ctx render:avg.outputImage toBitmap:px rowBytes:4 bounds:CGRectMake(0, 0, 1, 1) format:kCIFormatRGBA8 colorSpace:nil];
-    UIColor *c = [UIColor colorWithRed:px[0] / 255.0 green:px[1] / 255.0 blue:px[2] / 255.0 alpha:1];
-    [cache setObject:c forKey:image];
-    return c;
+    return [UIColor colorWithRed:px[0] / 255.0 green:px[1] / 255.0 blue:px[2] / 255.0 alpha:1];
 }
 
 static UIColor *firstTint(NSArray *cgColors) {
+    if (![cgColors isKindOfClass:NSArray.class]) return nil;
     for (id cg in cgColors) {
         UIColor *c = [UIColor colorWithCGColor:(__bridge CGColorRef)cg];
         if (isTint(c)) return c;
@@ -90,9 +222,21 @@ static UIColor *firstTint(NSArray *cgColors) {
 
 #pragma mark - the glow
 
+// One per page, made once. It sits under the picture in the picture's container and follows it frame by frame
+// through a display link that moves it only when the picture moved; every change is made with actions off,
+// so nothing animates or pulses.
+@interface MRGGlowView : UIView
+@property (nonatomic, weak) UIView *picture;
+- (void)setGlowColor:(UIColor *)color;
+@end
+
 @implementation MRGGlowView {
     CAGradientLayer *_glow;
     CAShapeLayer *_ring;
+    CADisplayLink *_link;
+    UIColor *_color;
+    CGRect _placed;
+    CGFloat _alpha;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -100,27 +244,37 @@ static UIColor *firstTint(NSArray *cgColors) {
     self.userInteractionEnabled = NO;
     self.accessibilityElementsHidden = YES;
     self.backgroundColor = UIColor.clearColor;
+    _placed = CGRectNull;
+    _alpha = -1;
     _glow = [CAGradientLayer layer];
     _glow.type = kCAGradientLayerRadial;
     _glow.startPoint = CGPointMake(0.5, 0.5);
     _glow.endPoint = CGPointMake(1, 1);
     _glow.locations = @[@0, @0.42, @0.62, @1];
-    [self.layer addSublayer:_glow];
     _ring = [CAShapeLayer layer];
     _ring.fillColor = UIColor.clearColor.CGColor;
     _ring.lineWidth = 3;
     _ring.shadowOpacity = 1;
     _ring.shadowRadius = 10;
     _ring.shadowOffset = CGSizeZero;
+    // No implicit animation on anything of the glow's, ever.
+    NSDictionary *none = @{@"bounds": NSNull.null, @"position": NSNull.null, @"frame": NSNull.null, @"colors": NSNull.null,
+                           @"path": NSNull.null, @"strokeColor": NSNull.null, @"shadowColor": NSNull.null, @"opacity": NSNull.null,
+                           @"shadowPath": NSNull.null, @"contents": NSNull.null};
+    _glow.actions = none;
+    _ring.actions = none;
+    [self.layer addSublayer:_glow];
     [self.layer addSublayer:_ring];
     return self;
 }
 
-- (void)setColor:(UIColor *)color {
+- (id<CAAction>)actionForLayer:(CALayer *)layer forKey:(NSString *)event { return (id<CAAction>)NSNull.null; }
+
+- (void)setGlowColor:(UIColor *)color {
+    if ([color isEqual:_color]) return;
     _color = color;
     UIColor *c = color ?: UIColor.whiteColor;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
     _glow.colors = @[(id)[c colorWithAlphaComponent:0.95].CGColor, (id)[c colorWithAlphaComponent:0.7].CGColor,
                      (id)[c colorWithAlphaComponent:0.25].CGColor, (id)[c colorWithAlphaComponent:0].CGColor];
     _ring.strokeColor = [c colorWithAlphaComponent:0.9].CGColor;
@@ -128,26 +282,68 @@ static UIColor *firstTint(NSArray *cgColors) {
     [CATransaction commit];
 }
 
-// The glow is twice the picture's size, centred on it, in whatever view it stands in.
-- (void)placeAround:(UIView *)picture {
-    UIView *host = self.superview;
-    if (!host || !picture.window) return;
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [_link invalidate];
+    _link = nil;
+    if (self.window) {
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(follow)];
+        [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        [self follow];
+    }
+}
+
+- (void)removeFromSuperview {
+    [_link invalidate];
+    _link = nil;
+    [super removeFromSuperview];
+}
+
+// The picture's own fade (the header fades it out as it collapses), up to the glow's container.
+static CGFloat alphaUpTo(UIView *view, UIView *stop) {
+    CGFloat a = 1;
+    for (UIView *v = view; v && v != stop; v = v.superview) a *= v.hidden ? 0 : v.alpha;
+    return a;
+}
+
+- (void)follow {
+    UIView *picture = self.picture, *host = self.superview;
+    if (!picture.window || !host) return;
     CGRect p = [host convertRect:picture.bounds fromView:picture];
-    CGFloat side = MAX(p.size.width, p.size.height);
-    CGRect frame = CGRectInset(p, -side * 0.5, -side * 0.5);
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    [UIView performWithoutAnimation:^{ self.frame = frame; }];
-    _glow.frame = self.bounds;
-    CGRect ringRect = CGRectInset(CGRectMake(side * 0.5, side * 0.5, p.size.width, p.size.height), -3, -3);
-    _ring.frame = self.bounds;
-    _ring.path = [UIBezierPath bezierPathWithOvalInRect:ringRect].CGPath;
+    CGFloat alpha = alphaUpTo(picture, host);
+    BOOL moved = !CGRectEqualToRect(p, _placed);
+    if (!moved && fabs(alpha - _alpha) < 0.01) return;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (moved) {
+        _placed = p;
+        CGFloat side = MAX(p.size.width, p.size.height);
+        CGRect frame = CGRectInset(p, -side * 0.5, -side * 0.5);
+        [UIView performWithoutAnimation:^{ self.frame = frame; }];
+        _glow.frame = self.bounds;
+        _ring.frame = self.bounds;
+        _ring.path = [UIBezierPath bezierPathWithOvalInRect:CGRectInset(CGRectMake(side * 0.5, side * 0.5, p.size.width, p.size.height), -3, -3)].CGPath;
+    }
+    if (fabs(alpha - _alpha) >= 0.01) {
+        _alpha = alpha;
+        [UIView performWithoutAnimation:^{ self.alpha = alpha; }];
+    }
     [CATransaction commit];
 }
+
+- (void)dealloc { [_link invalidate]; }
 
 @end
 
 #pragma mark - page
+
+@interface MRGWeakBox : NSObject
+@property (nonatomic, weak) id object;
+@end
+@implementation MRGWeakBox
+@end
+
+static char kProfileKey, kGlowKey, kPictureKey, kColorKey, kColorImageKey, kLastStyleKey, kEpochKey;
+static NSUInteger sg_settingsEpoch;
 
 static BOOL overMirageBackground(UIView *page) {
     if (!MRGBackgroundEnabled() || MRGCurrentKind() == MRGMediaNone) return NO;
@@ -158,71 +354,10 @@ static BOOL overMirageBackground(UIView *page) {
     return NO;
 }
 
-static void saveAlpha(UIView *v) {
-    if (!objc_getAssociatedObject(v, &kSavedAlphaKey)) objc_setAssociatedObject(v, &kSavedAlphaKey, @(v.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [touched() addObject:v];
-}
-
-static void saveColor(UIView *v) {
-    if (!objc_getAssociatedObject(v, &kSavedColorKey))
-        objc_setAssociatedObject(v, &kSavedColorKey, v.backgroundColor ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [touched() addObject:v];
-}
-
-static void hideLayer(CALayer *l) {
-    if (!objc_getAssociatedObject(l, &kSavedHiddenKey)) objc_setAssociatedObject(l, &kSavedHiddenKey, @(l.hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [touched() addObject:l];
-    if (!l.hidden) l.hidden = YES;
-}
-
-static char kSavedColorsKey;
-static void saveGradient(CAGradientLayer *l) {
-    if (!objc_getAssociatedObject(l, &kSavedColorsKey))
-        objc_setAssociatedObject(l, &kSavedColorsKey, l.colors ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [touched() addObject:l];
-    if (l.colors.count) l.colors = nil;
-}
-
-static BOOL isGlowTouch(id o) { return objc_getAssociatedObject(o, &kTintKey) != nil; }
-
-static void restoreObject(id o, BOOL glowOnly) {
-    if (glowOnly && !isGlowTouch(o)) return;
-    if ([o isKindOfClass:CALayer.class]) {
-        NSNumber *h = objc_getAssociatedObject(o, &kSavedHiddenKey);
-        if (h) ((CALayer *)o).hidden = h.boolValue;
-        objc_setAssociatedObject(o, &kSavedHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        id colors = objc_getAssociatedObject(o, &kSavedColorsKey);
-        if (colors && [o isKindOfClass:CAGradientLayer.class]) ((CAGradientLayer *)o).colors = colors == NSNull.null ? nil : colors;
-        objc_setAssociatedObject(o, &kSavedColorsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    } else if ([o isKindOfClass:UIView.class]) {
-        UIView *v = o;
-        NSNumber *a = objc_getAssociatedObject(v, &kSavedAlphaKey);
-        if (a) v.alpha = a.doubleValue;
-        id c = objc_getAssociatedObject(v, &kSavedColorKey);
-        if (c) v.backgroundColor = c == NSNull.null ? nil : c;
-        objc_setAssociatedObject(v, &kSavedAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(v, &kSavedColorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    objc_setAssociatedObject(o, &kTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
 static void removeGlow(UIView *page) {
     MRGGlowView *glow = objc_getAssociatedObject(page, &kGlowKey);
     [glow removeFromSuperview];
     objc_setAssociatedObject(page, &kGlowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-static void restorePage(UIView *page, BOOL glowOnly) {
-    removeGlow(page);
-    for (id o in touched().allObjects) {
-        if ([o isKindOfClass:UIView.class] && ![(UIView *)o isDescendantOfView:page]) continue;
-        if ([o isKindOfClass:CALayer.class]) {
-            UIView *owner = (UIView *)((CALayer *)o).delegate;
-            for (CALayer *l = o; !owner && l; l = l.superlayer) if ([l.delegate isKindOfClass:UIView.class]) owner = (UIView *)l.delegate;
-            if (owner && ![owner isDescendantOfView:page]) continue;
-        }
-        restoreObject(o, glowOnly);
-    }
 }
 
 static BOOL isHeaderController(UIResponder *r) {
@@ -231,102 +366,93 @@ static BOOL isHeaderController(UIResponder *r) {
 }
 
 static UIView *headerIn(UIView *page) {
-    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:page.subviews];
-    NSUInteger seen = 0;
-    UIView *found = nil;
-    while (stack.count && seen++ < 1500) {
-        UIView *v = stack.firstObject; [stack removeObjectAtIndex:0];   // breadth first: the outermost header
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithArray:page.subviews];
+    for (NSUInteger i = 0; i < queue.count && i < 1500; i++) {
+        UIView *v = queue[i];
         if ([v isKindOfClass:UICollectionViewCell.class]) continue;
-        if ([v.nextResponder isKindOfClass:UIViewController.class] && isHeaderController(v.nextResponder)) { found = v; break; }
-        [stack addObjectsFromArray:v.subviews];
+        if ([v.nextResponder isKindOfClass:UIViewController.class] && isHeaderController(v.nextResponder)) return v;
+        [queue addObjectsFromArray:v.subviews];
     }
-    return found;
+    return nil;
+}
+
+static BOOL isRoundPicture(UIView *v) {
+    if (![v isKindOfClass:UIImageView.class] || !((UIImageView *)v).image) return NO;
+    CGSize s = v.bounds.size;
+    CGFloat radius = MAX(v.layer.cornerRadius, v.superview.layer.cornerRadius);
+    BOOL round = radius >= s.width * 0.4 || v.layer.mask || v.superview.layer.mask;
+    return fabs(s.width - s.height) < 2 && s.width >= 56 && s.width <= 240 && round;
 }
 
 static void styleProfile(UIView *page) {
     if (!page.window) return;
-    if (!overMirageBackground(page)) { restorePage(page, NO); return; }
+    if (!overMirageBackground(page)) { releaseIn(page, NO); removeGlow(page); return; }
     objc_setAssociatedObject(page, &kProfileKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     BOOL glowOn = MRGProfileGlow();
-    if (!glowOn) restorePage(page, YES);
+    if (!glowOn) { releaseIn(page, YES); removeGlow(page); }
 
-    CGFloat W = page.bounds.size.width;
+    CGSize P = page.bounds.size;
     UIView *header = headerIn(page);
-    CGFloat headerBottom = header ? CGRectGetMaxY([page convertRect:header.bounds fromView:header]) : page.bounds.size.height * 0.5;
-    UIColor *tint = nil;
-    UIImageView *picture = nil;
+    UIImageView *picture = ((MRGWeakBox *)objc_getAssociatedObject(page, &kPictureKey)).object;
+    if (picture && (!picture.window || ![picture isDescendantOfView:page])) picture = nil;
+    BOOL findPicture = glowOn && !picture;
+    UIColor *tint = objc_getAssociatedObject(page, &kColorKey);
 
     NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:page.subviews];
     NSUInteger seen = 0;
     while (stack.count && seen++ < 3000) {
         UIView *v = stack.lastObject; [stack removeLastObject];
         if ([v isKindOfClass:MRGBackgroundView.class] || [v isKindOfClass:MRGGlowView.class] ||
-            [v isKindOfClass:UIVisualEffectView.class] || v.hidden) continue;
-        BOOL cell = [v isKindOfClass:UICollectionViewCell.class] || [v isKindOfClass:UITableViewCell.class];
+            [v isKindOfClass:UIVisualEffectView.class]) continue;
+        // Cells are Mirage's list clearing's (MRGBackgrounds.x); nothing of the header lives in one.
+        if ([v isKindOfClass:UICollectionViewCell.class] || [v isKindOfClass:UITableViewCell.class]) continue;
         CGRect f = [page convertRect:v.bounds fromView:v];
-        BOOL wide = f.size.width >= W * 0.9;
-        BOOL inHeader = header ? [v isDescendantOfView:header] || v == header : CGRectGetMinY(f) < headerBottom;
+        BOOL wide = f.size.width >= P.width * 0.9;
+        BOOL list = [v isKindOfClass:UIScrollView.class];
+        BOOL inHeader = header && (v == header || [v isDescendantOfView:header]);
+        // Across the top of the page: the header at rest and the collapsed bar that shows on scroll.
+        BOOL topBar = wide && !list && CGRectGetMinY(f) < P.height * 0.25 && f.size.height <= 200;
 
-        // The black bands: the page's own wide fills and the sections' (cells, headers) near-black fills.
-        if (isDark(v.backgroundColor) && (wide || cell || [v isKindOfClass:UICollectionReusableView.class])) {
-            saveColor(v);
-            v.backgroundColor = UIColor.clearColor;
-        }
-        if (cell) {
-            for (UIView *sub in ((UICollectionViewCell *)v).contentView.subviews) {
-                if (isDark(sub.backgroundColor) && sub.bounds.size.width >= v.bounds.size.width * 0.9) {
-                    saveColor(sub);
-                    sub.backgroundColor = UIColor.clearColor;
-                }
-            }
-            continue;   // nothing of the header lives in a cell
-        }
+        // The dark gray bands, from "Playlists" down and under the header: page-wide fills and section headers.
+        if (!list && (wide || [v isKindOfClass:UICollectionReusableView.class]) && isDarkGray(v.backgroundColor) && !inHeader && !topBar)
+            suppressBG(v.layer, NO);
+        if (list && isDarkGray(v.backgroundColor)) suppressBG(v.layer, NO);
 
-        if (inHeader) {
-            // The page-wide color: gradient views and layers, and colored fills.
-            if (wide && glowOn) {
-                BOOL gradientLayer = [v.layer isKindOfClass:CAGradientLayer.class];
-                BOOL gradientView = gradientLayer || [NSStringFromClass(v.class) containsString:@"Gradient"];
-                if (gradientLayer) tint = tint ?: firstTint(((CAGradientLayer *)v.layer).colors);
-                if (gradientView && !v.subviews.count) {
-                    // A leaf: faded out whole.
-                    saveAlpha(v);
-                    objc_setAssociatedObject(v, &kTintKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    if (v.alpha != 0) v.alpha = 0;
-                    continue;
-                }
-                if (gradientLayer) {
-                    // It holds the header's content (maybe the picture): only its colors go.
-                    saveGradient((CAGradientLayer *)v.layer);
-                    objc_setAssociatedObject(v.layer, &kTintKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                }
-                if (isTint(v.backgroundColor)) {
-                    tint = tint ?: v.backgroundColor;
-                    saveColor(v);
-                    objc_setAssociatedObject(v, &kTintKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    v.backgroundColor = UIColor.clearColor;
-                }
-                for (CALayer *l in v.layer.sublayers) {
-                    if (![l isKindOfClass:CAGradientLayer.class] || l.bounds.size.width < W * 0.9) continue;
-                    tint = tint ?: firstTint(((CAGradientLayer *)l).colors);
-                    objc_setAssociatedObject(l, &kTintKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    hideLayer(l);
-                }
+        if (glowOn && (inHeader || topBar) && wide && !list) {
+            CALayer *layer = v.layer;
+            BOOL gradientLayer = [layer isKindOfClass:CAGradientLayer.class];
+            if (gradientLayer) tint = tint ?: firstTint(objc_getAssociatedObject(layer, &kSupColors) ?: ((CAGradientLayer *)layer).colors);
+            if (isTint(v.backgroundColor)) tint = tint ?: v.backgroundColor;
+            if ((gradientLayer || [NSStringFromClass(v.class) containsString:@"Gradient"]) && !v.subviews.count) {
+                suppressOpacity(layer);
+                continue;
             }
-            // The picture: the largest square, round image view in the header.
-            if ([v isKindOfClass:UIImageView.class] && ((UIImageView *)v).image) {
-                CGSize s = v.bounds.size;
-                CGFloat radius = MAX(v.layer.cornerRadius, v.superview.layer.cornerRadius);
-                BOOL round = radius >= s.width * 0.4 || v.layer.mask || v.superview.layer.mask;
-                if (fabs(s.width - s.height) < 2 && s.width >= 56 && s.width <= 240 && round &&
-                    s.width > picture.bounds.size.width) picture = (UIImageView *)v;
+            if (gradientLayer) suppressColors((CAGradientLayer *)layer);
+            // Taken over before Spotify paints it, so the collapsed bar's fill never shows.
+            suppressBG(layer, YES);
+            for (CALayer *sub in layer.sublayers) {
+                if (![sub isKindOfClass:CAGradientLayer.class] || sub.bounds.size.width < P.width * 0.9) continue;
+                tint = tint ?: firstTint(((CAGradientLayer *)sub).colors);
+                suppressHidden(sub);
             }
         }
+        if (findPicture && (inHeader || CGRectGetMinY(f) < P.height * 0.5) && isRoundPicture(v) &&
+            v.bounds.size.width > picture.bounds.size.width) picture = (UIImageView *)v;
         [stack addObjectsFromArray:v.subviews];
     }
 
-    if (!glowOn || !picture) { removeGlow(page); return; }
-    UIColor *color = glowColor(tint ?: averageColor(picture.image) ?: UIColor.whiteColor);
+    if (!glowOn || !picture) { if (!picture) removeGlow(page); return; }
+    MRGWeakBox *box = [MRGWeakBox new];
+    box.object = picture;
+    objc_setAssociatedObject(page, &kPictureKey, box, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // The color, once per picture: Spotify's own from the header, or the picture's average.
+    if (objc_getAssociatedObject(page, &kColorImageKey) != picture.image || !tint) {
+        if (!tint) tint = averageColor(picture.image);
+        objc_setAssociatedObject(page, &kColorImageKey, picture.image, OBJC_ASSOCIATION_ASSIGN);
+    }
+    if (tint) objc_setAssociatedObject(page, &kColorKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
     // In the picture's container, under the picture; higher up past containers that clip and are too small.
     CGFloat need = MAX(picture.bounds.size.width, picture.bounds.size.height) * 2;
     UIView *below = picture, *container = picture.superview;
@@ -341,72 +467,59 @@ static void styleProfile(UIView *page) {
         glow = [[MRGGlowView alloc] initWithFrame:CGRectZero];
         objc_setAssociatedObject(page, &kGlowKey, glow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (glow.superview != container || [container.subviews indexOfObject:glow] + 1 != [container.subviews indexOfObject:below])
-        [container insertSubview:glow belowSubview:below];
-    if (![glow.color isEqual:color]) glow.color = color;
     glow.picture = picture;
-    [glow placeAround:picture];
-}
-
-// Between full passes (at most two a second) a header layout only re-applies what is already known: the
-// page-wide color stays off and the glow follows the picture. A scroll lays the header out every frame.
-static char kLastStyleKey;
-static NSUInteger sg_settingsEpoch;
-static char kEpochKey;
-
-static void reapplyProfile(UIView *page) {
-    for (id o in touched().allObjects) {
-        if (!isGlowTouch(o)) continue;
-        if ([o isKindOfClass:CAGradientLayer.class] && objc_getAssociatedObject(o, &kSavedColorsKey)) {
-            if (((CAGradientLayer *)o).colors.count) ((CAGradientLayer *)o).colors = nil;
-        } else if ([o isKindOfClass:CALayer.class]) {
-            if (!((CALayer *)o).hidden) ((CALayer *)o).hidden = YES;
-        } else if ([o isKindOfClass:UIView.class] && [(UIView *)o isDescendantOfView:page]) {
-            UIView *v = o;
-            if (objc_getAssociatedObject(v, &kSavedAlphaKey) && v.alpha != 0) v.alpha = 0;
-            if (objc_getAssociatedObject(v, &kSavedColorKey) && CGColorGetAlpha(v.backgroundColor.CGColor) > 0) v.backgroundColor = UIColor.clearColor;
-        }
+    [glow setGlowColor:glowColor(tint ?: UIColor.whiteColor)];
+    if (glow.superview != container) [container insertSubview:glow belowSubview:below];
+    else {
+        NSUInteger gi = [container.subviews indexOfObject:glow], bi = [container.subviews indexOfObject:below];
+        if (bi != NSNotFound && gi > bi) [container insertSubview:glow belowSubview:below];
     }
-    MRGGlowView *glow = objc_getAssociatedObject(page, &kGlowKey);
-    UIView *picture = glow.picture;
-    if (glow.superview && picture) [glow placeAround:picture];
 }
 
-static void profileLaidOut(UIView *page) {
+// Full passes at most four times a second; the setters keep everything in place between them and the glow
+// follows the picture on its own.
+static void profileLaidOut(UIView *page, CFTimeInterval interval) {
     CFTimeInterval now = CACurrentMediaTime();
     NSNumber *last = objc_getAssociatedObject(page, &kLastStyleKey);
     BOOL sameSettings = [objc_getAssociatedObject(page, &kEpochKey) unsignedIntegerValue] == sg_settingsEpoch;
+    if (sameSettings && last && now - last.doubleValue < interval) return;
     objc_setAssociatedObject(page, &kEpochKey, @(sg_settingsEpoch), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (sameSettings && last && now - last.doubleValue < 0.5) {
-        if (MRGProfileGlow() && overMirageBackground(page)) reapplyProfile(page);
-        return;
-    }
     objc_setAssociatedObject(page, &kLastStyleKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     styleProfile(page);
 }
 
+static UIView *profilePageAbove(UIView *view) {
+    for (UIView *v = view; v; v = v.superview) if (objc_getAssociatedObject(v, &kProfileKey)) return v;
+    return nil;
+}
+
 %group MRGProfile
 %hook _TtC18Profile_CommonImpl21ProfileViewController
-- (void)viewDidLayoutSubviews { %orig; profileLaidOut(((UIViewController *)self).view); }
+- (void)viewDidLayoutSubviews { %orig; profileLaidOut(((UIViewController *)self).view, 0.25); }
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     UIView *page = ((UIViewController *)self).view;
-    styleProfile(page);
-    // The header's component fills in after the page appears (the picture and its color load).
+    profileLaidOut(page, 0);
+    // The header fills in after the page appears (the picture and its color load).
     __weak UIView *weakPage = page;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (weakPage) styleProfile(weakPage);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakPage) profileLaidOut(weakPage, 0);
     });
 }
 %end
 
-// The header moves and repaints as the page scrolls (it is pinned and fades to its minimum height).
+// The header reports every scroll frame here; a view Spotify adds at the collapse threshold is caught by the
+// next pass, a quarter second at most.
 %hook SPTEntityHeaderViewController
 - (void)viewDidLayoutSubviews {
     %orig;
-    UIView *page = ((UIViewController *)self).view.superview;
-    for (; page; page = page.superview) if (objc_getAssociatedObject(page, &kProfileKey)) break;
-    if (page) profileLaidOut(page);
+    UIView *page = profilePageAbove(((UIViewController *)self).view.superview);
+    if (page) profileLaidOut(page, 0.25);
+}
+- (void)parentScrollViewDidChangeContentOffset {
+    %orig;
+    UIView *page = profilePageAbove(((UIViewController *)self).view.superview);
+    if (page) profileLaidOut(page, 0.25);
 }
 %end
 %end
@@ -417,7 +530,7 @@ static void profileLaidOut(UIView *page) {
         if (!NSClassFromString(@"SPTEntityHeaderViewController")) return;
         %init(MRGProfile);
         // A settings change lays every page out again (MRGBackgrounds.x relayoutAll); the next pass on a
-        // profile page is a full one, so the toggle takes effect at once.
+        // profile page is then a full one, so the toggle takes effect at once.
         [NSNotificationCenter.defaultCenter addObserverForName:MRGSettingsChangedNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
             sg_settingsEpoch++;
         }];
