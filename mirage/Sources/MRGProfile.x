@@ -358,6 +358,7 @@ static CGFloat alphaUpTo(UIView *view, UIView *stop) {
 + (instancetype)with:(id)object { MRGWeakBox *b = [self new]; b.object = object; return b; }
 @end
 
+static char kRetryKey;
 static char kProfileKey, kGlowKey, kPictureKey, kColorKey, kImageColorKey, kHeaderKey, kHeaderPageKey, kLastPassKey, kLastHeaderKey,
             kEpochKey, kPictureOfKey;
 static NSUInteger sg_settingsEpoch;
@@ -433,12 +434,25 @@ static UIView *findHeader(UIView *page) {
 }
 
 // Round and square, about an avatar's size; the image may not be in yet (the glow comes up without it).
-static BOOL isRoundPicture(UIView *v) {
+static BOOL isSquarePicture(UIView *v) {
     if (![v isKindOfClass:UIImageView.class]) return NO;
     CGSize s = v.bounds.size;
+    return fabs(s.width - s.height) < 2 && s.width >= 56 && s.width <= 240;
+}
+
+static BOOL isRoundPicture(UIView *v) {
+    if (!isSquarePicture(v)) return NO;
+    CGSize s = v.bounds.size;
     CGFloat radius = MAX(v.layer.cornerRadius, v.superview.layer.cornerRadius);
-    BOOL round = radius >= s.width * 0.4 || v.layer.mask || v.superview.layer.mask || v.superview.layer.cornerRadius >= s.width * 0.4;
-    return fabs(s.width - s.height) < 2 && s.width >= 56 && s.width <= 240 && round;
+    return radius >= s.width * 0.4 || v.layer.mask || v.superview.layer.mask || v.superview.layer.cornerRadius >= s.width * 0.4;
+}
+
+// Whether a gradient-ish view may be faded out whole: never a picture, never anything holding one, never
+// anything square (the avatar's own plate or ring) -- only the header's color fills, which run across it.
+static BOOL isFillShaped(UIView *v, CGFloat W) {
+    if ([v isKindOfClass:UIImageView.class] || [v isKindOfClass:UILabel.class]) return NO;
+    CGSize s = v.bounds.size;
+    return s.width >= W * 0.9 && s.height < s.width * 0.9;
 }
 
 #pragma mark - color and glow
@@ -512,14 +526,28 @@ static void ensureGlow(UIView *page, UIImageView *picture) {
 // appear, so the page-wide color is taken over before the first frame Spotify paints it in. Views not laid
 // out yet (width 0) count as wide for gradients, which are the header's color; fills wait for a width, so a
 // button's fill is never taken.
+static void headerPass(UIView *page);
+static void retryHeaderPass(UIView *page) {
+    // Not laid out yet (a page pushed: the header's own views lay out after the controller's pass). Look
+    // again on the next frames, a few times, rather than wait for the next layout event.
+    NSInteger tries = [objc_getAssociatedObject(page, &kRetryKey) integerValue];
+    if (tries >= 30) return;
+    objc_setAssociatedObject(page, &kRetryKey, @(tries + 1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weakPage = page;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(16 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        UIView *p = weakPage;
+        if (p && p.window && !objc_getAssociatedObject(p, &kGlowKey)) headerPass(p);
+    });
+}
+
 static void headerPass(UIView *page) {
     if (!MRGProfileGlow()) return;
     UIView *header = findHeader(page);
-    if (!header) return;
+    if (!header) { retryHeaderPass(page); return; }
     CGFloat W = page.bounds.size.width ?: UIScreen.mainScreen.bounds.size.width;
     UIImageView *picture = weakGet(page, &kPictureKey);
     if (picture && ![picture isDescendantOfView:header]) picture = nil;
-    UIImageView *found = nil;
+    UIImageView *found = nil, *square = nil;
 
     NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:header];
     NSUInteger seen = 0;
@@ -533,7 +561,10 @@ static void headerPass(UIView *page) {
         BOOL gradientLayer = [layer isKindOfClass:CAGradientLayer.class];
         BOOL gradientView = gradientLayer || [NSStringFromClass(v.class) containsString:@"Gradient"];
         if (gradientLayer) noteSpotifyColor(page, objc_getAssociatedObject(layer, &kSupColors) ?: ((CAGradientLayer *)layer).colors, nil);
-        if (gradientView && (wide || unsized) && !v.subviews.count) {
+        // 0.1.4 faded out any leaf gradient view not laid out yet; on a push the header could then come up
+        // blank until the pass after the transition. A view is only faded once it is sized and shaped like a
+        // fill; before that its gradient colors alone go (invisible, its content untouched).
+        if (gradientView && !v.subviews.count && isFillShaped(v, W)) {
             suppressOpacity(layer);
             continue;
         }
@@ -549,10 +580,14 @@ static void headerPass(UIView *page) {
             suppressHidden(sub);
         }
         if (!picture && isRoundPicture(v) && v.bounds.size.width > found.bounds.size.width) found = (UIImageView *)v;
+        if (!picture && isSquarePicture(v) && v.bounds.size.width > square.bounds.size.width) square = (UIImageView *)v;
         [stack addObjectsFromArray:v.subviews];
     }
-    picture = picture ?: found;
-    if (picture) ensureGlow(page, picture);
+    // The round test can miss on the first frames (the corner radius or mask comes with the image): the
+    // header's largest square picture then stands in, so the glow is there during a push, not after it.
+    picture = picture ?: found ?: square;
+    if (picture) { ensureGlow(page, picture); return; }
+    retryHeaderPass(page);
 }
 
 static BOOL isDarkish(UIColor *c) {
