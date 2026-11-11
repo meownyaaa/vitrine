@@ -12,8 +12,8 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := Mirage
 Mirage_FILES := $(shell find Sources -name '*.m' -o -name '*.x' | sort)
-Mirage_CFLAGS := -fobjc-arc -ISources -DMRG_VERSION=\"$(MRG_VERSION)\" -Wno-deprecated-declarations
-Mirage_FRAMEWORKS := UIKit QuartzCore AVFoundation CoreMedia CoreVideo CoreImage ImageIO PhotosUI UniformTypeIdentifiers MobileCoreServices
+Mirage_CFLAGS := -fobjc-arc -ISources -ISources/DJ -DMRG_VERSION=\"$(MRG_VERSION)\" -Wno-deprecated-declarations
+Mirage_FRAMEWORKS := UIKit QuartzCore AVFoundation CoreMedia CoreVideo CoreImage ImageIO PhotosUI UniformTypeIdentifiers MobileCoreServices AudioToolbox Security AVFAudio
 # Runtime swizzling (Logos' internal generator), like Vitrine: no Substrate/ElleKit dependency in the IPA.
 Mirage_LOGOS_DEFAULT_GENERATOR := internal
 
