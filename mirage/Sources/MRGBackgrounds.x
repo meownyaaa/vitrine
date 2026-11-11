@@ -12,6 +12,7 @@
 // view and their full-size wrappers) are made clear, and cleared again on the next layout pass if Spotify or Vitrine sets
 // a color again. Cells, cards, bars and Vitrine's glass are left alone, so the glass now samples
 // the background instead of a flat fill.
+#import "MRGSafe.h"
 #import "MRGPrefs.h"
 #import "MRGBackgroundView.h"
 #import "MRGClearing.h"
@@ -545,30 +546,33 @@ static void rerunHostOf(UIView *list) {
 %group MRGLists
 %hook CALayer
 - (void)setBackgroundColor:(CGColorRef)color {
-    if (dropsPaint(self, color)) color = UIColor.clearColor.CGColor;
-    %orig(color);
+    BOOL drop = NO;
+    @try { drop = dropsPaint(self, color); } @catch (NSException *e) {}
+    %orig(drop ? UIColor.clearColor.CGColor : color);
 }
 %end
 
 // A cell clears itself as it comes on screen or takes its place in a new layout, scroll or not.
 %hook UICollectionReusableView
-- (void)didMoveToWindow { %orig; if (self.window && sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); }
+- (void)didMoveToWindow { %orig; MRGSafeRun("reusable.window", ^{ if (self.window && sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); }); }
 - (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)attributes {
     %orig;
-    if (sg_taggedLists && cellInTaggedList(self) == self) clearCell(self);
+    MRGSafeRun("reusable.attrs", ^{ if (sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); });
 }
 %end
 %hook UITableViewCell
-- (void)didMoveToWindow { %orig; if (self.window && sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); }
+- (void)didMoveToWindow { %orig; MRGSafeRun("tablecell.window", ^{ if (self.window && sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); }); }
 %end
 
 %hook UICollectionView
 - (void)layoutSubviews {
     %orig;
-    if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
-    else adoptListIfPage(self);
+    MRGSafeRun("list.layout", ^{
+        if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
+        else adoptListIfPage(self);
+    });
 }
-- (void)reloadData { %orig; scheduleListClear(self, NO); }
+- (void)reloadData { %orig; MRGSafeRun("list.reload", ^{ scheduleListClear(self, NO); }); }
 - (void)setCollectionViewLayout:(UICollectionViewLayout *)layout animated:(BOOL)animated {
     %orig;
     rerunHostOf(self);
@@ -597,10 +601,12 @@ static void rerunHostOf(UIView *list) {
 %hook UITableView
 - (void)layoutSubviews {
     %orig;
-    if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
-    else adoptListIfPage(self);
+    MRGSafeRun("list.layout", ^{
+        if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
+        else adoptListIfPage(self);
+    });
 }
-- (void)reloadData { %orig; scheduleListClear(self, NO); }
+- (void)reloadData { %orig; MRGSafeRun("list.reload", ^{ scheduleListClear(self, NO); }); }
 %end
 %end
 

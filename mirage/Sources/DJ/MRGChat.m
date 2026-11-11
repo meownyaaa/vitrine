@@ -264,7 +264,9 @@ static NSDictionary *notFound(NSString *ref) {
     if ([name isEqualToString:@"queue_tracks"]) {
         NSArray *tracks = [self tracksFor:strings(args[@"uris"])];
         if (!tracks.count) { answer(@{@"error": @"No spotify:track: URIs given; search first."}); return; }
-        MRGQueueTracks([tracks valueForKey:@"uri"], ^(BOOL ok, NSString *error) {
+        NSMutableArray *queueURIs = [NSMutableArray array];
+        for (NSDictionary *t in tracks) if ([t isKindOfClass:NSDictionary.class] && str(t[@"uri"])) [queueURIs addObject:t[@"uri"]];
+        MRGQueueTracks(queueURIs, ^(BOOL ok, NSString *error) {
             if (ok) [self add:[MRGChatItem kind:@"card" text:nil card:@{@"type": @"tracks", @"title": @"Added to your queue", @"tracks": tracks}]];
             answer(ok ? @{@"ok": @YES, @"queued": @(tracks.count)} : @{@"error": error ?: @"Spotify refused the queue."});
         });

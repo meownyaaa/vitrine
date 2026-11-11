@@ -10,6 +10,9 @@
 //          restricted to the Gemini API). Mistral keys have no prefix (32 letters and digits): chosen by hand.
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
+// Typed JSON access (no KVC: valueForKey: on an array maps over it, and on a string throws).
+static id dictGet(id obj, NSString *key) { return [obj isKindOfClass:NSDictionary.class] ? ((NSDictionary *)obj)[key] : nil; }
+static id firstOf(id arr) { return [arr isKindOfClass:NSArray.class] && [arr count] ? [arr firstObject] : nil; }
 
 MRGProvider MRGDetectProvider(NSString *raw) {
     NSString *key = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -169,9 +172,17 @@ static NSString *const kRecommendedKey = @"mirage.dj.recommended";
 static NSString *const kOverrideKey = @"mirage.dj.model";
 static NSString *const kGeminiQueryKey = @"mirage.dj.geminiKeyInQuery";
 
-MRGProvider MRGAIProvider(void) { return MRGKeychainAPIKey() ? [D() integerForKey:kProviderKey] : MRGProviderNone; }
+MRGProvider MRGAIProvider(void) {
+    if (!MRGKeychainAPIKey()) return MRGProviderNone;
+    NSInteger p = [D() integerForKey:kProviderKey];
+    return [MRGAllProviders() containsObject:@(p)] ? p : MRGProviderNone;
+}
 NSString *MRGAIRecommendedModel(void) { return [D() stringForKey:kRecommendedKey]; }
-NSArray<NSString *> *MRGAIModels(void) { return [D() arrayForKey:kModelsKey] ?: @[]; }
+NSArray<NSString *> *MRGAIModels(void) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (id m in [D() arrayForKey:kModelsKey]) if ([m isKindOfClass:NSString.class]) [a addObject:m];
+    return a;
+}
 NSString *MRGAIModel(void) { return [D() stringForKey:kOverrideKey] ?: MRGAIRecommendedModel(); }
 BOOL MRGAIHasOverride(void) { return [D() stringForKey:kOverrideKey] != nil; }
 void MRGAISetModelOverride(NSString *model) {
@@ -366,7 +377,7 @@ static BOOL isReasoningOpenAI(NSString *m) {
 
 static NSString *textFromOpenAI(id json) {
     id choices = [json isKindOfClass:NSDictionary.class] ? json[@"choices"] : nil;
-    id msg = [choices isKindOfClass:NSArray.class] && [choices count] ? [choices[0] valueForKey:@"message"] : nil;
+    id msg = dictGet(firstOf(choices), @"message");
     id content = [msg isKindOfClass:NSDictionary.class] ? msg[@"content"] : nil;
     return [content isKindOfClass:NSString.class] ? content : nil;
 }
@@ -374,7 +385,7 @@ static NSString *textFromOpenAI(id json) {
 static NSString *textFromGemini(id json) {
     NSMutableString *out = [NSMutableString string];
     id cands = [json isKindOfClass:NSDictionary.class] ? json[@"candidates"] : nil;
-    id parts = [cands isKindOfClass:NSArray.class] && [cands count] ? [[cands[0] valueForKey:@"content"] valueForKey:@"parts"] : nil;
+    id parts = dictGet(dictGet(firstOf(cands), @"content"), @"parts");
     for (id part in [parts isKindOfClass:NSArray.class] ? parts : nil) {
         if (![part isKindOfClass:NSDictionary.class] || [part[@"thought"] boolValue]) continue;
         if ([part[@"text"] isKindOfClass:NSString.class]) [out appendString:part[@"text"]];
@@ -589,7 +600,7 @@ void MRGAISpeech(NSString *text, NSString *voice, double speed, void (^done)(NSD
     send(p, request(p, key, path, body), ^(id j, NSData *d, NSInteger s, NSString *e) {
         if (e) { done(nil, e); return; }
         id cands = [j isKindOfClass:NSDictionary.class] ? j[@"candidates"] : nil;
-        id parts = [cands isKindOfClass:NSArray.class] && [cands count] ? [[cands[0] valueForKey:@"content"] valueForKey:@"parts"] : nil;
+        id parts = dictGet(dictGet(firstOf(cands), @"content"), @"parts");
         NSString *b64 = nil;
         for (id part in [parts isKindOfClass:NSArray.class] ? parts : nil) {
             id inline_ = [part isKindOfClass:NSDictionary.class] ? part[@"inlineData"] : nil;
@@ -652,7 +663,7 @@ static NSDictionary *openAIToolBody(MRGProvider p, NSString *model, NSString *sy
 
 static NSDictionary *openAIToolAnswer(id json) {
     id choices = [json isKindOfClass:NSDictionary.class] ? json[@"choices"] : nil;
-    NSDictionary *msg = [choices isKindOfClass:NSArray.class] && [choices count] ? [choices[0] valueForKey:@"message"] : nil;
+    NSDictionary *msg = dictGet(firstOf(choices), @"message");
     if (![msg isKindOfClass:NSDictionary.class]) return nil;
     NSMutableArray *calls = [NSMutableArray array];
     for (NSDictionary *c in [msg[@"tool_calls"] isKindOfClass:NSArray.class] ? msg[@"tool_calls"] : @[]) {
@@ -717,7 +728,7 @@ static NSDictionary *geminiToolBody(NSString *system, NSArray *messages, NSArray
         if ([role isEqualToString:@"tool"]) {
             NSDictionary *part = @{@"functionResponse": @{@"name": m[@"name"] ?: @"tool", @"response": @{@"result": jsonDict(m[@"content"])}}};
             NSMutableDictionary *last = [contents.lastObject mutableCopy];
-            if ([last[@"role"] isEqualToString:@"user"] && [[last[@"parts"] firstObject] objectForKey:@"functionResponse"]) {
+            if ([last[@"role"] isEqualToString:@"user"] && dictGet(firstOf(last[@"parts"]), @"functionResponse")) {
                 last[@"parts"] = [last[@"parts"] arrayByAddingObject:part];
                 contents[contents.count - 1] = last;
             } else {
@@ -746,7 +757,7 @@ static NSDictionary *geminiToolBody(NSString *system, NSArray *messages, NSArray
 
 static NSDictionary *geminiToolAnswer(id json) {
     id cands = [json isKindOfClass:NSDictionary.class] ? json[@"candidates"] : nil;
-    NSArray *parts = [cands isKindOfClass:NSArray.class] && [cands count] ? [[cands[0] valueForKey:@"content"] valueForKey:@"parts"] : nil;
+    NSArray *parts = dictGet(dictGet(firstOf(cands), @"content"), @"parts");
     if (![parts isKindOfClass:NSArray.class]) return nil;
     NSMutableString *text = [NSMutableString string];
     NSMutableArray *calls = [NSMutableArray array];

@@ -14,6 +14,7 @@
 // the list's contentInset setter and is taken back out in the getter, so Spotify's and Vitrine's own
 // bookkeeping of the inset (Vitrine compares the inset with the one it applied) never sees it and
 // neither keeps adding to it. Without Vitrine, the row is simply the first one.
+#import "MRGSafe.h"
 #import "MRGPrefs.h"
 #import "MRGSettings.h"
 #import <objc/runtime.h>
@@ -183,7 +184,7 @@ static void attachRow(UICollectionView *list) {
 %hook UICollectionView
 - (void)layoutSubviews {
     %orig;
-    if (hasRow(self)) placeRow(self);
+    MRGSafeRun("drawer.layout", ^{ if (hasRow(self)) placeRow(self); });
 }
 
 - (void)setContentInset:(UIEdgeInsets)inset {

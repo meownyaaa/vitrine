@@ -59,10 +59,10 @@ UIColor *MRGAccent(void) {
     NSInteger rgb;
     if (redesign) {
         id v = [d objectForKey:@"spotifyglass.redesign.accent"];
-        rgb = v ? [v integerValue] : 0x37F200;
+        rgb = [v isKindOfClass:NSNumber.class] ? [v integerValue] : 0x37F200;
     } else {
         id v = [d objectForKey:@"spotifyglass.accent"];
-        rgb = v ? [v integerValue] : -1;
+        rgb = [v isKindOfClass:NSNumber.class] ? [v integerValue] : -1;
     }
     if (rgb < 0 || rgb > 0xFFFFFF) rgb = 0x1ED760;
     return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0 green:((rgb >> 8) & 0xFF) / 255.0 blue:(rgb & 0xFF) / 255.0 alpha:1];

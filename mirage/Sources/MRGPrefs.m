@@ -3,7 +3,8 @@
 NSString *const MRGSettingsChangedNotification = @"MirageSettingsChanged";
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
-static id V(NSString *k, id def) { id v = [D() objectForKey:k]; return v ?: def; }
+// Typed: a stored value of another type (a string, an array) is ignored and the default used.
+static id V(NSString *k, id def) { id v = [D() objectForKey:k]; return [v isKindOfClass:NSNumber.class] ? v : def; }
 
 void MRGPostChange(void) {
     void (^post)(void) = ^{ [NSNotificationCenter.defaultCenter postNotificationName:MRGSettingsChangedNotification object:nil]; };

@@ -1,3 +1,4 @@
+#import "MRGSafe.h"
 #import "MRGSettings.h"
 #import "MRGPrefs.h"
 #import "MRGImporter.h"
@@ -73,6 +74,10 @@ static const CGFloat kBottomChrome = 150;
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return MRGSecCount; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
+    return MRGSafeCount(^NSInteger { return [self mrg_rowsIn:t section:s]; });
+}
+
+- (NSInteger)mrg_rowsIn:(UITableView *)t section:(NSInteger)s {
     switch (s) {
         case MRGSecPreview: return 2;              // enabled, preview
         case MRGSecMedia: return 3;                // photos, files, remove
@@ -90,6 +95,10 @@ static const CGFloat kBottomChrome = 150;
 }
 
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
+    return MRGSafeString(^NSString *{ return [self mrg_footerIn:t section:s]; });
+}
+
+- (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
     switch (s) {
         case MRGSecMedia: return @"Images (PNG, JPG, HEIC), GIFs (converted to a looping MP4 when you pick them) and videos (MP4, MOV). Videos play muted, never touch Spotify's audio, and pause when Spotify is in the background.";
         case MRGSecLook: return @"Top fade is the dark shade Spotify lays behind the status bar and the header: Soft keeps a third of it, Off removes it. Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are. Profile picture glow replaces the profile page's color gradient with a soft glow of that color around your picture.";
@@ -319,6 +328,10 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+    return MRGSafeCell(ip, ^UITableViewCell *{ return [self mrg_cellIn:t at:ip]; });
+}
+
+- (UITableViewCell *)mrg_cellIn:(UITableView *)t at:(NSIndexPath *)ip {
     MRGScreen screens = MRGScreens();
     BOOL hasMedia = MRGCurrentKind() != MRGMediaNone;
     switch (ip.section) {

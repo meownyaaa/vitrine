@@ -1,3 +1,4 @@
+#import "../MRGSafe.h"
 #import "MRGDJPages.h"
 #import "MRGVoice.h"
 #import "MRGDJ.h"
@@ -88,6 +89,10 @@ static NSString *const kSample = @"yo, it's your DJ. this one's been on repeat a
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 4; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
+    return MRGSafeCount(^NSInteger { return [self mrg_rowsIn:t section:s]; });
+}
+
+- (NSInteger)mrg_rowsIn:(UITableView *)t section:(NSInteger)s {
     if (s == 0) return 4;
     if (s == 1) return 3;
     if (s == 3) return 1;
@@ -117,6 +122,10 @@ static NSString *const kSample = @"yo, it's your DJ. this one's been on repeat a
 }
 
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
+    return MRGSafeString(^NSString *{ return [self mrg_footerIn:t section:s]; });
+}
+
+- (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
     if (s == 0) return @"AI provider voice works with OpenAI, Gemini, xAI and Groq keys and costs a little per line on your provider's bill. If a network voice fails, the phone's voice speaks instead.";
     if (s == 1) return @"Pitch only changes the iPhone's own voices.";
     if (s == 2 && MRGVoiceGetEngine() == MRGVoiceEnginePhone)
@@ -126,6 +135,10 @@ static NSString *const kSample = @"yo, it's your DJ. this one's been on repeat a
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+    return MRGSafeCell(ip, ^UITableViewCell *{ return [self mrg_cellIn:t at:ip]; });
+}
+
+- (UITableViewCell *)mrg_cellIn:(UITableView *)t at:(NSIndexPath *)ip {
     MRGVoiceEngine engine = MRGVoiceGetEngine();
     if (ip.section == 0) {
         NSArray *titles = @[@"iPhone voice", @"AI provider voice", @"ElevenLabs", @"Off (captions only)"];
@@ -294,9 +307,17 @@ UIViewController *MRGVoicePage(void) { return [MRGVoicePageController new]; }
 - (void)textViewDidEndEditing:(UITextView *)tv { MRGDJSetCustomPrompt(tv.text); }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 3; }
-- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return s == 0 ? MRGDJPersonaNames().count : s == 1 ? 4 : 1; }
+- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
+    return MRGSafeCount(^NSInteger { return [self mrg_rowsIn:t section:s]; });
+}
+
+- (NSInteger)mrg_rowsIn:(UITableView *)t section:(NSInteger)s { return s == 0 ? MRGDJPersonaNames().count : s == 1 ? 4 : 1; }
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s { return @[@"Persona", @"How often the DJ talks", @"Your instructions"][s]; }
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
+    return MRGSafeString(^NSString *{ return [self mrg_footerIn:t section:s]; });
+}
+
+- (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
     if (s == 0) return @"Changes how the DJ talks and how long its lines are, from the next set on. Underground curator also leans the picks off the beaten path.";
     if (s == 1) return @"Auto follows the persona. Every few: the first track of a set and then every third. Only on switches: just when a new set starts.";
     return @"Added to the DJ's instructions for picks and the chat, e.g. \"no rap\", \"call me Alex\", \"mostly 2000s\". Sent to your AI provider with each request.";
@@ -304,6 +325,10 @@ UIViewController *MRGVoicePage(void) { return [MRGVoicePageController new]; }
 - (CGFloat)tableView:(UITableView *)t heightForRowAtIndexPath:(NSIndexPath *)ip { return ip.section == 2 ? 120 : UITableViewAutomaticDimension; }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+    return MRGSafeCell(ip, ^UITableViewCell *{ return [self mrg_cellIn:t at:ip]; });
+}
+
+- (UITableViewCell *)mrg_cellIn:(UITableView *)t at:(NSIndexPath *)ip {
     if (ip.section == 0) {
         UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
         c.backgroundColor = [UIColor colorWithWhite:0.11 alpha:0.9];
@@ -365,15 +390,27 @@ static NSString *day(NSDate *d) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 3; }
-- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return s == 0 ? 4 : s == 1 ? 1 : 2; }
+- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
+    return MRGSafeCount(^NSInteger { return [self mrg_rowsIn:t section:s]; });
+}
+
+- (NSInteger)mrg_rowsIn:(UITableView *)t section:(NSInteger)s { return s == 0 ? 4 : s == 1 ? 1 : 2; }
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s { return @[@"What the DJ chat knows", @"Import", @"Clear"][s]; }
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
+    return MRGSafeString(^NSString *{ return [self mrg_footerIn:t section:s]; });
+}
+
+- (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
     if (s == 0) return @"Mirage records every track it sees play from the moment it was installed (it counts a play at 30 seconds, like Spotify). Spotify's app doesn't keep a full history Mirage can read, so for anything older import your data. Everything stays on this iPhone; the chat sends only the answer to a question (like an artist's first play) to your AI provider.";
     if (s == 1) return @"Request \"Extended streaming history\" at spotify.com/account/privacy (it takes a few days), then pick the ZIP or the Streaming_History_Audio_*.json files here. The shorter \"Account data\" files (StreamingHistory_music_*.json, last year only) work too.";
     return nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+    return MRGSafeCell(ip, ^UITableViewCell *{ return [self mrg_cellIn:t at:ip]; });
+}
+
+- (UITableViewCell *)mrg_cellIn:(UITableView *)t at:(NSIndexPath *)ip {
     if (ip.section == 0) {
         NSDictionary *s = _summary;
         switch (ip.row) {

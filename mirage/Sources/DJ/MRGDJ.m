@@ -13,7 +13,8 @@ NSString *const MRGDJChangedNotification = @"MirageDJChanged";
 NSString *const MRGDJSpeakingNotification = @"MirageDJSpeaking";
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
-static id V(NSString *k, id def) { return [D() objectForKey:k] ?: def; }
+// Typed: a stored value of another type (a string, an array) is ignored and the default used.
+static id V(NSString *k, id def) { id v = [D() objectForKey:k]; return [v isKindOfClass:NSNumber.class] ? v : def; }
 
 BOOL MRGDJShowsPill(void) { return [V(@"mirage.dj.pill", @YES) boolValue]; }
 void MRGDJSetShowsPill(BOOL on) { [D() setBool:on forKey:@"mirage.dj.pill"]; MRGPostChange(); }
@@ -21,6 +22,12 @@ BOOL MRGDJShowsPlayerButton(void) { return [V(@"mirage.dj.playerButton", @YES) b
 void MRGDJSetShowsPlayerButton(BOOL on) { [D() setBool:on forKey:@"mirage.dj.playerButton"]; MRGPostChange(); }
 BOOL MRGDJDucks(void) { return [V(@"mirage.dj.duck", @YES) boolValue]; }
 void MRGDJSetDucks(BOOL on) { [D() setBool:on forKey:@"mirage.dj.duck"]; }
+
+static NSArray<NSString *> *urisOf(NSArray *tracks) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (id t in tracks) { NSString *u = [t isKindOfClass:MRGDJTrack.class] ? ((MRGDJTrack *)t).uri : nil; if ([u isKindOfClass:NSString.class] && u.length) [a addObject:u]; }
+    return a;
+}
 
 @implementation MRGDJTrack
 - (instancetype)init { if ((self = [super init])) _popularity = -1; return self; }
@@ -51,7 +58,13 @@ static NSArray<NSArray *> *personas(void) {
     return list;
 }
 
-NSArray<NSString *> *MRGDJPersonaNames(void) { return [personas() valueForKey:@"firstObject"]; }
+// Not [personas() valueForKey:@"firstObject"]: on an array of arrays KVC maps into each inner array too and asks its
+// strings for "firstObject", which throws (0.3.0's crash in Settings → AI DJ → Vibe).
+NSArray<NSString *> *MRGDJPersonaNames(void) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSArray *p in personas()) [a addObject:[p isKindOfClass:NSArray.class] && [p.firstObject isKindOfClass:NSString.class] ? p.firstObject : @"—"];
+    return a;
+}
 NSArray<NSString *> *MRGDJPersonaBlurbs(void) { NSMutableArray *a = [NSMutableArray array]; for (NSArray *p in personas()) [a addObject:p[1]]; return a; }
 NSInteger MRGDJPersona(void) { NSInteger i = [V(@"mirage.dj.persona", @0) integerValue]; return (i >= 0 && i < (NSInteger)personas().count) ? i : 0; }
 void MRGDJSetPersona(NSInteger i) { [D() setInteger:i forKey:@"mirage.dj.persona"]; }
@@ -245,12 +258,14 @@ static NSDictionary *parseJSON(NSString *text) {
                 [self resolve:items2 cap:cap generation:gen done:^(NSArray<MRGDJTrack *> *found2, NSArray<MRGDJTrack *> *dropped2, NSString *e3) {
                     if (gen != self->_generation) return;
                     NSMutableArray *all = [found mutableCopy];
-                    NSMutableSet *seen = [NSMutableSet setWithArray:[found valueForKey:@"uri"]];
+                    NSMutableSet *seen = [NSMutableSet setWithArray:urisOf(found)];
                     for (MRGDJTrack *t in found2) if (![seen containsObject:t.uri] && all.count < 15) { [seen addObject:t.uri]; [all addObject:t]; }
                     // Still too few under the cap: rather the least popular of what was dropped than nothing.
                     if (all.count < 5) {
-                        NSArray *rest = [[dropped arrayByAddingObjectsFromArray:dropped2] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"uri != nil"]];
-                        rest = [rest sortedArrayUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"popularity" ascending:YES]]];
+                        NSMutableArray *rest0 = [NSMutableArray array];
+                        for (MRGDJTrack *t in [dropped arrayByAddingObjectsFromArray:dropped2]) if (t.uri.length) [rest0 addObject:t];
+                        NSArray *rest = rest0;
+                        rest = [rest sortedArrayUsingComparator:^NSComparisonResult(MRGDJTrack *x, MRGDJTrack *y) { return x.popularity < y.popularity ? NSOrderedAscending : x.popularity > y.popularity ? NSOrderedDescending : NSOrderedSame; }];
                         for (MRGDJTrack *t in rest) if (![seen containsObject:t.uri] && all.count < 8) { [seen addObject:t.uri]; [all addObject:t]; }
                     }
                     if (all.count) done(all, intro, nil);
@@ -377,7 +392,7 @@ static NSDictionary *parseJSON(NSString *text) {
 //  4. If the queue still refuses, "step" mode: whenever a set track ends and something else starts, the next set track
 //     is played as its own context (arrivedAt:).
 - (void)playSet:(NSArray<MRGDJTrack *> *)found intro:(NSString *)intro generation:(NSUInteger)gen {
-    NSArray<NSString *> *uris = [found valueForKey:@"uri"];
+    NSArray<NSString *> *uris = urisOf(found);
     void (^failed)(NSString *) = ^(NSString *why) {
         if (gen != self->_generation) return;
         MRGDJLog(@"set: couldn't start playback: %@", why);
@@ -424,7 +439,7 @@ static NSDictionary *parseJSON(NSString *text) {
 - (void)playFromIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_set.count) return;
     if (index == _currentIndex) return;
-    NSArray<NSString *> *uris = [[_set subarrayWithRange:NSMakeRange(index, _set.count - index)] valueForKey:@"uri"];
+    NSArray<NSString *> *uris = urisOf([_set subarrayWithRange:NSMakeRange(index, _set.count - index)]);
     NSString *target = uris.firstObject;
     NSUInteger gen = _generation;
     _error = nil;

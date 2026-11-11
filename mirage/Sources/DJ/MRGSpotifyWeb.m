@@ -53,7 +53,7 @@ static NSString *enc(NSString *s) {
 static NSDictionary *nameOf(NSDictionary *track) {
     if (![track isKindOfClass:NSDictionary.class] || ![track[@"name"] isKindOfClass:NSString.class]) return nil;
     NSArray *artists = track[@"artists"];
-    NSString *artist = [artists isKindOfClass:NSArray.class] && artists.count ? [artists.firstObject valueForKey:@"name"] : @"";
+    NSString *artist = ([artists isKindOfClass:NSArray.class] && [artists.firstObject isKindOfClass:NSDictionary.class] && [artists.firstObject[@"name"] isKindOfClass:NSString.class]) ? artists.firstObject[@"name"] : @"";
     return @{@"title": track[@"name"], @"artist": [artist isKindOfClass:NSString.class] ? artist : @""};
 }
 
@@ -96,6 +96,13 @@ static NSString *coverOf(NSDictionary *track) {
     return best;
 }
 
+// json[group][@"items"] when both are what they should be, else nil.
+static NSArray *itemsIn(id json, NSString *group) {
+    id g = [json isKindOfClass:NSDictionary.class] ? json[group] : nil;
+    id items = [g isKindOfClass:NSDictionary.class] ? g[@"items"] : nil;
+    return [items isKindOfClass:NSArray.class] ? items : nil;
+}
+
 static NSDictionary *resolved(NSDictionary *track) {
     if (!track) return nil;
     NSMutableDictionary *d = [@{@"uri": track[@"uri"]} mutableCopy];
@@ -113,7 +120,7 @@ static NSDictionary *resolved(NSDictionary *track) {
 // A search hit only counts when both the title and an artist match (normalized; a title may carry a suffix such as
 // "- Remastered"). The first hit is never taken on its own: a song the model made up finds nothing and is dropped.
 static NSDictionary *bestMatch(id json, NSString *title, NSString *artist) {
-    NSArray *items = [json isKindOfClass:NSDictionary.class] ? [json[@"tracks"] valueForKey:@"items"] : nil;
+    NSArray *items = itemsIn(json, @"tracks");
     if (![items isKindOfClass:NSArray.class]) return nil;
     NSString *t = norm(title), *a = norm(artist);
     if (!t.length) return nil;
@@ -171,7 +178,7 @@ void MRGWebSearch(NSString *query, NSString *type, NSInteger limit, void (^done)
     NSString *path = [NSString stringWithFormat:@"/search?type=%@&limit=%ld&q=%@", t, (long)MAX(1, MIN(20, limit)), enc(query)];
     call(@"GET", path, nil, ^(id j, NSInteger s, NSString *e) {
         if (e) { MRGDJLog(@"search (%@): Web API search failed (%@)", t, e); done(nil, e); return; }
-        NSArray *items = [j isKindOfClass:NSDictionary.class] ? [j[[t stringByAppendingString:@"s"]] valueForKey:@"items"] : nil;
+        NSArray *items = itemsIn(j, [t stringByAppendingString:@"s"]);
         NSMutableArray *out = [NSMutableArray array];
         for (NSDictionary *it in [items isKindOfClass:NSArray.class] ? items : @[]) {
             if (![it isKindOfClass:NSDictionary.class] || ![it[@"uri"] isKindOfClass:NSString.class]) continue;

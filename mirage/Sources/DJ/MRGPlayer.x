@@ -157,7 +157,9 @@ NSDictionary *MRGNowPlaying(void) {
 BOOL MRGPlayerIsAd(void) { return [infoOf(stateTrack(currentState()))[@"ad"] boolValue]; }
 
 NSArray<NSDictionary *> *MRGRecentHistory(void) {
-    return [NSUserDefaults.standardUserDefaults arrayForKey:@"mirage.dj.history"] ?: @[];
+    NSMutableArray *a = [NSMutableArray array];
+    for (id d in [NSUserDefaults.standardUserDefaults arrayForKey:@"mirage.dj.history"]) if ([d isKindOfClass:NSDictionary.class]) [a addObject:d];
+    return a;
 }
 
 NSArray<NSDictionary *> *MRGQueueAround(void) {

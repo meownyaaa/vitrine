@@ -8,6 +8,7 @@ static NSString *const kEleven = @"elevenlabs-key";
 
 MRGVoiceEngine MRGVoiceGetEngine(void) {
     id v = [D() objectForKey:@"mirage.dj.voiceEngine"];
+    if (![v isKindOfClass:NSNumber.class]) v = nil;
     if (v) { NSInteger e = [v integerValue]; return (e >= 0 && e <= 3) ? e : MRGVoiceEnginePhone; }
     // 0.2.x kept 0 phone, 1 provider, 2 off.
     NSInteger old = [D() integerForKey:@"mirage.dj.voice"];
@@ -15,9 +16,9 @@ MRGVoiceEngine MRGVoiceGetEngine(void) {
 }
 void MRGVoiceSetEngine(MRGVoiceEngine e) { [D() setInteger:e forKey:@"mirage.dj.voiceEngine"]; }
 
-double MRGVoiceSpeed(void) { id v = [D() objectForKey:@"mirage.dj.speed"]; double s = v ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.7, s)); }
+double MRGVoiceSpeed(void) { id v = [D() objectForKey:@"mirage.dj.speed"]; double s = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.7, s)); }
 void MRGVoiceSetSpeed(double s) { [D() setDouble:s forKey:@"mirage.dj.speed"]; }
-double MRGVoicePitch(void) { id v = [D() objectForKey:@"mirage.dj.pitch"]; double p = v ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.75, p)); }
+double MRGVoicePitch(void) { id v = [D() objectForKey:@"mirage.dj.pitch"]; double p = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.75, p)); }
 void MRGVoiceSetPitch(double p) { [D() setDouble:p forKey:@"mirage.dj.pitch"]; }
 
 #pragma mark - phone voices
@@ -100,7 +101,12 @@ static NSString *elevenError(NSInteger status, NSData *data, NSError *error) {
 }
 
 BOOL MRGElevenHasKey(void) { return MRGKeychainGet(kEleven).length > 0; }
-NSArray<NSDictionary *> *MRGElevenVoices(void) { return [D() arrayForKey:@"mirage.dj.elevenVoices"] ?: @[]; }
+NSArray<NSDictionary *> *MRGElevenVoices(void) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSDictionary *v in [D() arrayForKey:@"mirage.dj.elevenVoices"])
+        if ([v isKindOfClass:NSDictionary.class] && [v[@"id"] isKindOfClass:NSString.class] && [v[@"name"] isKindOfClass:NSString.class]) [a addObject:v];
+    return a;
+}
 NSString *MRGElevenVoice(void) { return [D() stringForKey:@"mirage.dj.elevenVoice"] ?: [MRGElevenVoices().firstObject objectForKey:@"id"]; }
 void MRGElevenSetVoice(NSString *voiceID) { if (voiceID) [D() setObject:voiceID forKey:@"mirage.dj.elevenVoice"]; }
 

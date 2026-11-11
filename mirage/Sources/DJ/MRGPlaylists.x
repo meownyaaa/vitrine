@@ -165,7 +165,12 @@ static void finish(NSString *what, MRGPlaylistDone done, BOOL ok, NSString *uri,
 #pragma mark - made by Mirage
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
-NSArray<NSDictionary *> *MRGPlaylistsMade(void) { return [D() arrayForKey:@"mirage.playlists.made"] ?: @[]; }
+NSArray<NSDictionary *> *MRGPlaylistsMade(void) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSDictionary *d in [D() arrayForKey:@"mirage.playlists.made"])
+        if ([d isKindOfClass:NSDictionary.class] && [d[@"uri"] isKindOfClass:NSString.class] && [d[@"name"] isKindOfClass:NSString.class]) [a addObject:d];
+    return a;
+}
 static void rememberMade(NSString *name, NSString *uri) {
     NSMutableArray *a = [MRGPlaylistsMade() mutableCopy];
     [a insertObject:@{@"name": name ?: @"", @"uri": uri, @"created": @(NSDate.date.timeIntervalSince1970)} atIndex:0];

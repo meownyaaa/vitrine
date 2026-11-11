@@ -17,6 +17,7 @@
 // (the way KVO does it) whose setBackgroundColor:, setOpacity:, setHidden: and setColors: keep Mirage's value
 // and remember Spotify's for later. Wide views across the top of the page are taken over before Spotify
 // paints them, so the collapsed bar's fill never shows. Nothing else in the app is touched.
+#import "MRGSafe.h"
 #import "MRGPrefs.h"
 #import "MRGBackgroundView.h"
 #import "MRGClearing.h"
@@ -874,17 +875,17 @@ static UIView *headerPageOf(CALayer *layer) {
 // against the few pages being styled; nothing else in the app is touched).
 %group MRGProfileSections
 %hook UICollectionReusableView
-- (void)layoutSubviews { %orig; if (sectionsWatched()) sectionPass((UIView *)self); }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
-- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)a { %orig; if (sectionsWatched() && ((UIView *)self).superview) sectionPass((UIView *)self); }
+- (void)layoutSubviews { %orig; MRGSafeRun("profile.section", ^{ if (sectionsWatched()) sectionPass((UIView *)self); }); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; MRGSafeRun("profile.section", ^{ if (w && sectionsWatched()) sectionPass((UIView *)self); }); }
+- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)a { %orig; MRGSafeRun("profile.section", ^{ if (sectionsWatched() && ((UIView *)self).superview) sectionPass((UIView *)self); }); }
 %end
 %hook UICollectionViewCell
-- (void)layoutSubviews { %orig; if (sectionsWatched()) sectionPass((UIView *)self); }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
+- (void)layoutSubviews { %orig; MRGSafeRun("profile.section", ^{ if (sectionsWatched()) sectionPass((UIView *)self); }); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; MRGSafeRun("profile.section", ^{ if (w && sectionsWatched()) sectionPass((UIView *)self); }); }
 %end
 %hook UITableViewCell
-- (void)layoutSubviews { %orig; if (sectionsWatched()) sectionPass((UIView *)self); }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
+- (void)layoutSubviews { %orig; MRGSafeRun("profile.section", ^{ if (sectionsWatched()) sectionPass((UIView *)self); }); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; MRGSafeRun("profile.section", ^{ if (w && sectionsWatched()) sectionPass((UIView *)self); }); }
 %end
 %hook _TtC18Profile_CommonImpl15ProfileListView
 - (void)layoutSubviews {
@@ -893,7 +894,7 @@ static UIView *headerPageOf(CALayer *layer) {
     sectionPass((UIView *)self);
     for (UIView *v in ((UIView *)self).subviews) if ([v isKindOfClass:UITableView.class]) sectionPass(v);
 }
-- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sectionsWatched()) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; MRGSafeRun("profile.section", ^{ if (w && sectionsWatched()) sectionPass((UIView *)self); }); }
 %end
 %end
 
@@ -914,8 +915,10 @@ static UIView *headerPageOf(CALayer *layer) {
 - (void)setImage:(UIImage *)image {
     %orig;
     if (!sg_headers.count) return;
-    UIView *page = weakGet(self, &kPictureOfKey);
-    if (page && image) noteImageColor(page, image);
+    MRGSafeRun("profile.image", ^{
+        UIView *page = weakGet(self, &kPictureOfKey);
+        if (page && image) noteImageColor(page, image);
+    });
 }
 %end
 %end
