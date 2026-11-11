@@ -57,39 +57,6 @@ static NSDictionary *nameOf(NSDictionary *track) {
     return @{@"title": track[@"name"], @"artist": [artist isKindOfClass:NSString.class] ? artist : @""};
 }
 
-void MRGWebTaste(void (^done)(NSArray *, NSArray *, NSArray *)) {
-    NSMutableArray *top = [NSMutableArray array], *artists = [NSMutableArray array], *liked = [NSMutableArray array];
-    dispatch_group_t g = dispatch_group_create();
-    dispatch_group_enter(g);
-    call(@"GET", @"/me/top/tracks?limit=15&time_range=short_term", nil, ^(id j, NSInteger s, NSString *e) {
-        for (id t in [j isKindOfClass:NSDictionary.class] ? j[@"items"] : nil) { NSDictionary *n = nameOf(t); if (n) [top addObject:n]; }
-        dispatch_group_leave(g);
-    });
-    dispatch_group_enter(g);
-    call(@"GET", @"/me/top/artists?limit=10&time_range=medium_term", nil, ^(id j, NSInteger s, NSString *e) {
-        for (id a in [j isKindOfClass:NSDictionary.class] ? j[@"items"] : nil)
-            if ([a isKindOfClass:NSDictionary.class] && [a[@"name"] isKindOfClass:NSString.class]) [artists addObject:a[@"name"]];
-        dispatch_group_leave(g);
-    });
-    dispatch_group_enter(g);
-    call(@"GET", @"/me/tracks?limit=20", nil, ^(id j, NSInteger s, NSString *e) {
-        for (id item in [j isKindOfClass:NSDictionary.class] ? j[@"items"] : nil) {
-            NSDictionary *n = [item isKindOfClass:NSDictionary.class] ? nameOf(item[@"track"]) : nil;
-            if (n) [liked addObject:n];
-        }
-        dispatch_group_leave(g);
-    });
-    dispatch_group_enter(g);
-    call(@"GET", @"/me/player/recently-played?limit=20", nil, ^(id j, NSInteger s, NSString *e) {
-        for (id item in [j isKindOfClass:NSDictionary.class] ? j[@"items"] : nil) {
-            NSDictionary *n = [item isKindOfClass:NSDictionary.class] ? nameOf(item[@"track"]) : nil;
-            if (n && ![top containsObject:n]) [top addObject:n];
-        }
-        dispatch_group_leave(g);
-    });
-    dispatch_group_notify(g, dispatch_get_main_queue(), ^{ done(top, artists, liked); });
-}
-
 static NSString *norm(NSString *s) {
     NSString *l = [[s lowercaseString] stringByFoldingWithOptions:NSDiacriticInsensitiveSearch locale:nil];
     // "Song (feat. X) - Remastered 2011" matches "Song".
@@ -167,60 +134,15 @@ void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSDictionary 
     NSString *path = [NSString stringWithFormat:@"/search?type=track&limit=10&q=%@", enc(strict)];
     call(@"GET", path, nil, ^(id j, NSInteger s, NSString *e) {
         NSDictionary *match = e ? nil : bestMatch(j, title, artist);
-        if (match) { done(match, nil); return; }
+        if (match) { MRGDJLog(@"resolve: found via Web API search (strict track:/artist: query)"); done(match, nil); return; }
         if (e && s != 0 && s != 400 && s != 404) { done(nil, e); return; }
         NSString *loose = [NSString stringWithFormat:@"/search?type=track&limit=10&q=%@", enc([NSString stringWithFormat:@"%@ %@", title, artist])];
         call(@"GET", loose, nil, ^(id j2, NSInteger s2, NSString *e2) {
             NSDictionary *m2 = e2 ? nil : bestMatch(j2, title, artist);
-            if (!m2 && !e2) MRGDJLog(@"resolve: no real match for a pick, dropped");
+            if (m2) MRGDJLog(@"resolve: found via Web API search (loose title + artist query)");
+            else if (!e2) MRGDJLog(@"resolve: no real match for a pick on Web API search, dropped");
+            else MRGDJLog(@"resolve: Web API search failed (%@)", e2);
             done(m2, e2);
         });
-    });
-}
-
-void MRGWebAccount(void (^done)(NSString *product, NSString *error)) {
-    call(@"GET", @"/me", nil, ^(id j, NSInteger s, NSString *e) {
-        NSString *product = [j isKindOfClass:NSDictionary.class] && [j[@"product"] isKindOfClass:NSString.class] ? j[@"product"] : nil;
-        MRGDJLog(@"account: product %@", product ?: @"unknown");
-        done(product, e);
-    });
-}
-
-void MRGWebFillDJPlaylist(NSArray<NSString *> *uris, void (^done)(NSString *, NSString *)) {
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    // PUT /playlists/{id}/items replaces the whole list (the February 2026 name; /tracks before it, tried second).
-    void (^fill)(NSString *) = ^(NSString *playlistID) {
-        NSString *uri = [@"spotify:playlist:" stringByAppendingString:playlistID];
-        call(@"PUT", [NSString stringWithFormat:@"/playlists/%@/items", playlistID], @{@"uris": uris}, ^(id j, NSInteger s, NSString *e) {
-            if (!e) { MRGDJLog(@"playlist: filled %@ with %lu tracks", uri, (unsigned long)uris.count); done(uri, nil); return; }
-            call(@"PUT", [NSString stringWithFormat:@"/playlists/%@/tracks", playlistID], @{@"uris": uris}, ^(id j2, NSInteger s2, NSString *e2) {
-                if (e2 && (s2 == 404 || s2 == 403)) [d removeObjectForKey:@"mirage.dj.playlist"];   // deleted: made again next time
-                if (!e2) MRGDJLog(@"playlist: filled %@ with %lu tracks (old /tracks path)", uri, (unsigned long)uris.count);
-                done(e2 ? nil : uri, e2);
-            });
-        });
-    };
-    NSString *known = [d stringForKey:@"mirage.dj.playlist"];
-    if (known) { fill(known); return; }
-    call(@"POST", @"/me/playlists", @{@"name": @"Mirage DJ", @"public": @NO, @"description": @"Picked by Mirage DJ. Refilled every set."},
-         ^(id j, NSInteger s, NSString *e) {
-        NSString *pid = [j isKindOfClass:NSDictionary.class] ? j[@"id"] : nil;
-        if (![pid isKindOfClass:NSString.class]) { done(nil, e ?: @"Couldn't make the Mirage DJ playlist."); return; }
-        MRGDJLog(@"playlist: made the Mirage DJ playlist %@", pid);
-        [d setObject:pid forKey:@"mirage.dj.playlist"];
-        fill(pid);
-    });
-}
-
-void MRGWebTrackImage(NSString *uri, void (^done)(NSString *)) {
-    static NSMutableDictionary<NSString *, NSString *> *cache;
-    if (!cache) cache = [NSMutableDictionary dictionary];
-    if (![uri hasPrefix:@"spotify:track:"]) { done(nil); return; }
-    NSString *hit = cache[uri];
-    if (hit) { done(hit.length ? hit : nil); return; }
-    call(@"GET", [@"/tracks/" stringByAppendingString:[uri substringFromIndex:14]], nil, ^(id j, NSInteger s, NSString *e) {
-        NSString *cover = e ? nil : coverOf(j);
-        if (cover || (s >= 400 && s < 500 && s != 401 && s != 429)) cache[uri] = cover ?: @"";
-        done(cover);
     });
 }

@@ -13,7 +13,7 @@ void MRGShowDJ(UIViewController *from);
 void MRGDJPlaceHomeEntry(UIView *homeView);
 void MRGDJPlaceChipInPills(UIView *pillScrollView);
 UIView *MRGDJChipHit(UIView *pillScrollView, CGPoint point, UIEvent *event);   // the chip under a touch, or nil
-void MRGDJFollowHeaderButtons(UIView *buttons);   // the header chip takes the redesign pill's rise and fade
+void MRGDJFollowHeaderButtons(UIView *buttons);   // re-places the header chip beside the redesign pill (layout, rise, fade)
 
 // Now Playing: a DJ button in the header row, before the ⋯ (a spacer after the ⌄ keeps the title centered), and a
 // glass caption under the header with the line while the DJ talks. Runs on the header unit's layout passes.

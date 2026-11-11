@@ -1,4 +1,4 @@
-// Mirage DJ: asks the user's AI provider for a set of 8-10 tracks with a short line before each, from the
+// Mirage DJ: asks the user's AI provider for a set of 12 tracks with a short line before each, from the
 // listener's taste (what is playing, what was played, top and liked tracks: names only), finds each on
 // Spotify, plays the set in Spotify's own player and says each line as its track starts, with the music
 // lowered under the voice.
@@ -29,7 +29,7 @@ typedef NS_ENUM(NSInteger, MRGDJState) {
 @property (nonatomic, readonly, copy) NSString *error;        // the last failure, user-facing
 @property (nonatomic, readonly, copy) NSArray<MRGDJTrack *> *set;
 @property (nonatomic, readonly) NSInteger currentIndex;       // in `set`, -1 when the player is elsewhere
-@property (nonatomic, readonly, copy) NSString *playbackMode; // "context", "queue" or "playlist"
+@property (nonatomic, readonly, copy) NSString *playbackMode; // "queue" (the rest of the set is in Spotify's queue) or "step" (each next track played by Mirage)
 @property (nonatomic, readonly, getter=isSpeaking) BOOL speaking;
 - (void)playFromIndex:(NSInteger)index;          // jumps to a track of the set (a new context from it)
 - (void)startWithRequest:(NSString *)request;   // nil: just play something for me; also "Switch it up"

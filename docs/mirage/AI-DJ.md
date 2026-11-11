@@ -1,13 +1,13 @@
 # Mirage DJ (AI DJ, bring your own key)
 
-Mirage DJ, added in 0.2.0, picks 8–10 tracks that suit what you've been listening to and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would. The words come from an AI provider you choose, using your own API key.
+Mirage DJ, added in 0.2.0, picks 12 tracks (mostly well-known ones) that suit what you've been listening to and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would. The words come from an AI provider you choose, using your own API key.
 
 ## Using it
 
 1. Go to **Mirage settings → AI DJ → API key** and paste a key. Mirage works out the provider from the key, reads that provider's model list, picks a fast, cheap chat model (marked ✦) and checks that the key works.
 2. If you want a different model, choose it under **Model**.
 3. Open the DJ from any of these places:
-   - **Home:** the **✦ DJ** chip at the end of Home's filter chips (All, Music, Podcasts…). With Vitrine's redesign, which swaps the chips for a title, the chip sits in the title row just before the glass pill. If the chips are hidden by Vitrine's setting, it sits where they would start.
+   - **Home:** the **✦ DJ** chip at the end of Home's filter chips (All, Music, Podcasts…). With Vitrine's redesign, which swaps the chips for a title, the chip sits in the title row immediately left of the glass menu/avatar pill, as tall as it and centered on it. It is re-placed on every layout pass and every move of that pill, and stays hidden until the pill is laid out below the status bar (0.2.2 could show it at the top-left over the status bar on first launch). If the chips are hidden by Vitrine's setting, it sits where they would start.
    - **Now Playing:** the **✦** button in the top bar, just before the ⋯.
    - **Settings:** **Open Mirage DJ**.
 
@@ -28,7 +28,7 @@ Mirage DJ, added in 0.2.0, picks 8–10 tracks that suit what you've been listen
 The key is kept in the iOS keychain. If the sideloaded app has no keychain access, it goes in a file only the app can read.
 
 Mirage sends your provider only:
-- track and artist names: what's playing, what you played recently, your top and liked tracks
+- track and artist names: what's playing, what Mirage saw you play recently, and what's around it in Spotify's queue
 - the request you type
 
 Your account, your device and your listening times are never sent.
@@ -97,30 +97,29 @@ Sources (checked November 2026):
 
 ## How a set plays
 
-1. **Taste.** Mirage gathers:
-   - the current track
-   - recently played tracks seen by Mirage, or the Web API's recently-played list
-   - your top tracks and artists
-   - your liked tracks
-   - names only
-2. **Model.** The model returns JSON: `intro`, then `tracks[{title, artist, line}]`. Each line is one or two casual sentences.
-3. **Resolve.** Each pick is looked up with Spotify search: first a strict `track:"…" artist:"…"` query, then a loose one, matched on normalized names. Picks that don't resolve are dropped.
-4. **Play.** As of 0.2.2:
-   1. Mirage refills your private **Mirage DJ** playlist with the set over the Web API.
-   2. It plays that playlist the way Spotify's own Play button on a playlist page does: `SPTPlayerContext contextForURI:`, `SPTPlayOptions.skipTo` the first track, and the origin the player builds for itself. If Spotify refuses `skipTo` (Free), it asks again without it.
-   3. It then watches the player for up to 6 s. The set only counts as started once a set track (or the playlist) is actually playing.
-   4. **If the playlist can't be filled:** the first track plays as its own context and the rest are queued.
-   5. **If the player takes neither:** Mirage hands the playlist to Spotify's own link dispatcher, so its page opens and one tap on Play starts it.
-   6. Any failure ends in a "Couldn't start playback: …" line with the reason.
+1. **Taste.** As of 0.2.3 it comes from Spotify's own player only, names only:
+   - the current track (`SPTPlayerState.track`)
+   - the tracks Mirage saw play (kept on the device, `mirage.dj.history`)
+   - what's before and after it in the queue (`SPTPlayerState.reverse` / `future`)
 
-   0.2.0–0.2.1 played a context built from a bare track list (`contextWithTracks:`). That context has no URI. The player took the command, reported success, and then stopped what was playing without starting anything. That is the likely cause of the silent failure and the pause, but it was never confirmed on a device.
+   The Web API's user endpoints (`/me`, `/me/top`, `/me/tracks`, recently-played, `/me/playlists`) answer 404 to the app's token, so Mirage no longer calls them.
+2. **Model.** The model returns JSON: `intro`, then `tracks[{title, artist, line, why}]`, exactly 12 tracks, mostly well-known songs so they resolve.
+3. **Resolve.** Each pick is looked up with the Web API's track search (the one Web API call that works with the app's token): first a strict `track:"…" artist:"…"` query, then a loose one, matched on normalized names. The debug log says which query found it. Picks that don't resolve are dropped.
+4. **Play.** As of 0.2.3, entirely through Spotify's internal player (`SPTEsperantoPlayer`):
+   1. The first track plays as its own context: `SPTPlayerContext contextForURI:` on its `spotify:track:` URI, sent with `playContext:options:origin:` and the origin the player builds for itself (`playOriginWithViewURIOverride:externalReferrer:`). The 0.2.2 log showed this path reaching the track.
+   2. Mirage watches the player's state for up to 8 s until that track is actually playing (`isPlaying`, not `isPaused`).
+   3. Only then is the rest queued with `SPTPlayerQueueWrapperImpl initWithPlayer:` + `queueMultipleTracks:loggingParams:`, tried up to 3 times a second apart. In 0.2.2 the queue was sent straight after the play command and the player answered 409 Conflict.
+   4. If the queue still refuses, Mirage steps through the set itself: when a set track runs out and something else starts, the next set track plays as its own context. If a set track is cut short by something you picked, the DJ steps back.
+   5. The player used is the app's music player, never a DJ, preview or video feature's player (`com.spotify.service.endless.djmusic`, `aidjinteractivity_…`). The log names the feature it picked and sums up the players found once.
+
+   0.2.2 crashed on every Start: it read `-[SPTPlayerState paused]`, a selector that doesn't exist (the getter is `isPaused`). Every message Mirage sends to a Spotify object now checks `respondsToSelector:` first and logs a missing selector once instead of crashing; the playback check runs inside `@try`.
 5. **Tracks are real.** A pick only counts when Spotify's search returns a track whose title and artist both match. Made-up songs are dropped, and the set shows Spotify's own spelling.
 6. **Talk.** Each line is spoken about 0.8 s after its track starts, only while that track is actually playing (not paused, not an ad). The voice uses the system's speech session, never Spotify's audio session.
 7. **Keep going.** When the last track starts, the next set is prepared. Once Spotify's autoplay takes over, the next set starts.
 
 ## Spotify Free
 
-- Free accounts can't always play exact tracks on demand. The Mirage DJ playlist is always what plays first, and on Free Spotify may **shuffle** it. A line can then be spoken over a different track than the one it was written for, so Mirage only speaks lines for tracks that are actually playing.
+- Free accounts can't always play exact tracks on demand or queue tracks. Mirage only speaks lines for tracks that are actually playing.
 - Spotify's skip limit (about 6 an hour) still applies. **Switch it up** starts a new set, which can count as a skip.
 - Ads play as normal. The DJ stays quiet during ads and doesn't lower the volume for them.
 - Mirage doesn't add Premium features. It doesn't block ads.
@@ -128,9 +127,9 @@ Sources (checked November 2026):
 ## Debug log
 
 Settings → Mirage → AI DJ → **DJ debug log** shows the last 200 lines. **Copy** puts them on the clipboard so they can be sent along with a bug report. The log covers:
-- Web API calls and their HTTP status
-- the account's plan
-- every player found
+- Web API search calls and which query found each track
+- a summary of the players found, and the feature of the one used
+- any selector Spotify's objects didn't answer
 - every play path tried and what the player said
 - what the player was doing when verification gave up
 - skipped voice lines
@@ -146,7 +145,7 @@ Verified:
 
 Not yet verified on a device:
 - Direct `playContext` on Free vs Premium
-- whether Spotify's in-app token is accepted by the Web API calls (search, playlist)
+- 0.2.3's track-context + queue-after-verify flow and the step fallback
 - ducking on every output route (Bluetooth/AirPlay)
 - keychain access under Ksign signing
 - provider TTS playback

@@ -574,7 +574,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     BOOL thinking = dj.state == MRGDJThinking, playing = dj.state == MRGDJPlaying;
     if (thinking) [_spinner startAnimating]; else [_spinner stopAnimating];
 
-    // What's playing, with its cover: the player's own image, the set's, or the Web API's.
+    // What's playing, with its cover: the player's own image or the set's.
     NSDictionary *now = MRGNowPlaying();
     _nowCaption.text = playing && dj.currentIndex >= 0 ? @"ON MIRAGE DJ" : @"NOW PLAYING";
     _nowTitle.text = now ? now[@"title"] : @"Nothing playing";
@@ -582,16 +582,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     NSString *uri = now[@"uri"];
     NSString *image = now[@"image"];
     if (!image && dj.currentIndex >= 0 && dj.currentIndex < (NSInteger)dj.set.count) image = dj.set[dj.currentIndex].image;
-    if (image || !uri) {
-        loadImage(_nowArt, image, notePlaceholder(22));
-    } else if (![_nowURI isEqualToString:uri]) {
-        loadImage(_nowArt, nil, notePlaceholder(22));
-        __weak typeof(self) weak = self;
-        MRGWebTrackImage(uri, ^(NSString *url) {
-            typeof(self) s = weak;
-            if (s && url && [MRGNowPlaying()[@"uri"] isEqualToString:uri]) loadImage(s->_nowArt, url, notePlaceholder(22));
-        });
-    }
+    if (image || ![_nowURI isEqualToString:uri]) loadImage(_nowArt, image, notePlaceholder(22));
     _nowURI = uri;
 
     _line.text = dj.currentLine.length ? [NSString stringWithFormat:@"“%@”", dj.currentLine]
@@ -619,8 +610,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     _field.enabled = hasKey;
     _send.enabled = hasKey;
     NSString *provider = hasKey ? MRGProviderName(MRGAIProvider()) : @"your AI provider";
-    _privacy.text = [NSString stringWithFormat:@"Only track and artist names and what you type here go to %@. Playback is Spotify's own.%@", provider,
-                     [dj.playbackMode isEqualToString:@"playlist"] ? @" This set plays from your private “Mirage DJ” playlist (Spotify Free shuffles it)." : @""];
+    _privacy.text = [NSString stringWithFormat:@"Only track and artist names and what you type here go to %@. Playback is Spotify's own.", provider];
 }
 
 - (void)rowTapped:(MRGDJRow *)row {
@@ -873,6 +863,45 @@ static UIView *headerChipHost(UIView *page) {
     return header;
 }
 
+// The top of the area content may use in the window: below the status bar / notch, even before the window has its
+// safe area (Home's first layout passes on launch).
+static CGFloat safeTop(UIWindow *w) {
+    CGFloat top = w.safeAreaInsets.top;
+    if (@available(iOS 13.0, *)) top = MAX(top, w.windowScene.statusBarManager.statusBarFrame.size.height);
+    return top;
+}
+
+// Places the header chip just left of Vitrine's redesign glass pill (SGRHomePillButtons: the menu/avatar pill at the
+// trailing edge of Home's title row): as tall as the pill, centered on its vertical middle, 8pt before it. The pill's
+// layout frame is read from center and bounds (its transform is the scroll rise, copied separately). Until the pill is
+// laid out where it belongs (a real size, in the trailing half of its row, below the safe area top) the chip stays hidden;
+// on Home's first launch passes the pill sits at the origin, which put the chip over the status bar.
+static void placeBesideRedesign(UIView *chip, UIView *redesign) {
+    UIView *host = chip.superview;
+    UIWindow *w = redesign.window;
+    CGSize ps = redesign.bounds.size;
+    BOOL ok = host && w && redesign.superview == host && !redesign.hidden && ps.height >= 30 && ps.width >= 30;
+    CGRect pill = CGRectMake(redesign.center.x - ps.width / 2, redesign.center.y - ps.height / 2, ps.width, ps.height);
+    if (ok) ok = CGRectGetMidX(pill) > host.bounds.size.width / 2;
+    if (ok) ok = CGRectGetMinY([host convertRect:pill toView:w]) >= safeTop(w) - 1;
+    CGRect frame = CGRectZero;
+    if (ok) {
+        ((MRGDJChip *)chip).matchHeight = round(ps.height);
+        ((MRGDJChip *)chip).glassStyle = YES;
+        CGSize s = [chip sizeThatFits:CGSizeZero];
+        frame = CGRectMake(round(CGRectGetMinX(pill) - 8 - s.width), round(CGRectGetMidY(pill) - s.height / 2), s.width, s.height);
+        ok = CGRectGetMinX(frame) >= 8 && CGRectGetMinY([host convertRect:frame toView:w]) >= safeTop(w) - 1;
+    }
+    if (!ok) { if (!chip.hidden) chip.hidden = YES; return; }
+    CGRect bounds = (CGRect){CGPointZero, frame.size};
+    CGPoint center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+    if (!CGRectEqualToRect(chip.bounds, bounds)) chip.bounds = bounds;
+    if (!CGPointEqualToPoint(chip.center, center)) chip.center = center;
+    if (!CGAffineTransformEqualToTransform(chip.transform, redesign.transform)) chip.transform = redesign.transform;
+    if (chip.alpha != redesign.alpha) chip.alpha = redesign.alpha;
+    if (chip.hidden) chip.hidden = NO;
+}
+
 void MRGDJPlaceHomeEntry(UIView *page) {
     if (!page) return;
     UIView *pills = findView(page, ^BOOL(UIView *v) { return classNamed(v, @"PillScrollView"); });
@@ -888,42 +917,34 @@ void MRGDJPlaceHomeEntry(UIView *page) {
     if (!MRGDJShowsPill() || pillsShown || !host || !(redesignShown || pillsHiddenBySetting)) { [chip removeFromSuperview]; return; }
     if (!chip) {
         chip = [MRGDJChip new];
+        chip.hidden = YES;   // shown once a placement checks out
         objc_setAssociatedObject(page, &kHeaderChipKey, chip, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (chip.superview != host) [host addSubview:chip];
     else if (host.subviews.lastObject != chip) [host bringSubviewToFront:chip];
-    CGRect frame;
     if (redesignShown) {
-        // Vitrine's redesign: the title row's glass pill (filter, avatar) at the trailing edge; the chip goes just before it,
-        // as glass too, and rises and fades with it.
-        // As tall as the pill (44pt, the avatar's row), centered on it.
-        chip.matchHeight = round(redesign.bounds.size.height) ?: 44;
-        chip.glassStyle = YES;
-        CGSize s = [chip sizeThatFits:CGSizeZero];
-        CGRect pill = CGRectMake(redesign.center.x - redesign.bounds.size.width / 2, redesign.center.y - redesign.bounds.size.height / 2,
-                                 redesign.bounds.size.width, redesign.bounds.size.height);
-        frame = CGRectMake(round(CGRectGetMinX(pill) - 8 - s.width), round(CGRectGetMidY(pill) - s.height / 2), s.width, s.height);
         objc_setAssociatedObject(redesign, &kHeaderChipKey, chip, OBJC_ASSOCIATION_ASSIGN);
-        chip.transform = redesign.transform;
-        chip.alpha = redesign.alpha;
-    } else {
-        // The chips hidden by a setting: where they would start, next to the avatar.
-        chip.glassStyle = NO;
-        CGSize s = [chip sizeThatFits:CGSizeZero];
-        CGRect where = [pills convertRect:pills.bounds toView:host];
-        frame = CGRectMake(round(CGRectGetMinX(where) + 8), round(CGRectGetMidY(where) - s.height / 2), s.width, s.height);
-        chip.transform = CGAffineTransformIdentity;
-        chip.alpha = 1;
+        placeBesideRedesign(chip, redesign);
+        return;
     }
+    // The chips hidden by a setting: where they would start, next to the avatar.
+    chip.glassStyle = NO;
+    CGSize s = [chip sizeThatFits:CGSizeZero];
+    CGRect where = [pills convertRect:pills.bounds toView:host];
+    CGRect frame = CGRectMake(round(CGRectGetMinX(where) + 8), round(CGRectGetMidY(where) - s.height / 2), s.width, s.height);
+    BOOL ok = where.size.height > 0 && host.window && CGRectGetMinY([host convertRect:frame toView:host.window]) >= safeTop(host.window) - 1;
+    chip.transform = CGAffineTransformIdentity;
+    chip.alpha = 1;
     chip.bounds = (CGRect){CGPointZero, frame.size};
     chip.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+    chip.hidden = !ok;
 }
 
+// Every move of the redesign pill (its layout via center/bounds, its rise and fade via transform/alpha) re-places the chip.
 void MRGDJFollowHeaderButtons(UIView *buttons) {
     UIView *chip = objc_getAssociatedObject(buttons, &kHeaderChipKey);
     if (!chip.superview) return;
-    if (!CGAffineTransformEqualToTransform(chip.transform, buttons.transform)) chip.transform = buttons.transform;
-    if (chip.alpha != buttons.alpha) chip.alpha = buttons.alpha;
+    placeBesideRedesign(chip, buttons);
 }
 
 #pragma mark - Now Playing: the DJ button and caption

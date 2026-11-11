@@ -61,6 +61,10 @@ NSString *MRGDJDeviceVoiceName(void) {
     NSUInteger _generation;                // a newer start makes older answers stale
     BOOL _introPending;
     NSString *_intro;
+    NSInteger _lastIndex;                  // the last set track that played, for stepping on
+    CFTimeInterval _lastStart;             // when it started
+    double _lastDuration;                  // its length in seconds (0: unknown)
+    BOOL _stepping;                        // a step to the next set track is on its way
 }
 
 + (instancetype)shared {
@@ -73,6 +77,7 @@ NSString *MRGDJDeviceVoiceName(void) {
 - (instancetype)init {
     if (!(self = [super init])) return nil;
     _currentIndex = -1;
+    _lastIndex = -1;
     _spoken = [NSMutableSet set];
     _synth = [AVSpeechSynthesizer new];
     _synth.delegate = self;
@@ -102,6 +107,8 @@ NSString *MRGDJDeviceVoiceName(void) {
     _set = @[];
     _next = nil;
     _currentIndex = -1;
+    _lastIndex = -1;
+    _stepping = NO;
     _status = nil;
     [_synth stopSpeakingAtBoundary:AVSpeechBoundaryWord];
     [_audio stop];
@@ -129,7 +136,7 @@ static NSString *const kSystem =
     @"Pick music this listener will love from their taste: mostly songs that fit what they play, plus a few fresh finds in the same lane. "
     @"Order the set so it flows.\n"
     @"Return ONLY a JSON object, no prose: {\"intro\": string, \"tracks\": [{\"artist\": string, \"title\": string, \"line\": string, \"why\": string}]}\n"
-    @"Rules: 8 to 10 tracks. Only real, released songs you are certain exist on Spotify, with the exact official title and the primary artist "
+    @"Rules: exactly 12 tracks. Mostly well-known songs (real hits and fan favourites) so every one is easy to find. Only real, released songs you are certain exist on Spotify, with the exact official title and the primary artist "
     @"as Spotify lists them. Never invent songs, artists or versions; no made-up remixes or 'extended' edits. When unsure, pick a well-known "
     @"song by an artist you know instead. No duplicates, "
     @"nothing from 'just played'. 'line' is what you say right before that track starts: at most 18 words, mentions the song or the "
@@ -143,9 +150,9 @@ static NSString *const kSystem =
     [p appendFormat:@"Now playing: %@\n\n", now ? [NSString stringWithFormat:@"%@ — %@", now[@"title"], now[@"artist"] ?: @""] : @"(nothing)"];
     [p appendFormat:@"Just played:\n%@\n\n", listOf(played, 25)];
     [p appendFormat:@"Around it in the queue:\n%@\n\n", listOf(MRGQueueAround(), 10)];
-    [p appendFormat:@"Their top and recent tracks:\n%@\n\n", listOf(top, 20)];
-    [p appendFormat:@"Their top artists: %@\n\n", artists.count ? [artists componentsJoinedByString:@", "] : @"(unknown)"];
-    [p appendFormat:@"Songs they liked:\n%@\n\n", listOf(liked, 15)];
+    if (top.count) [p appendFormat:@"Their top and recent tracks:\n%@\n\n", listOf(top, 20)];
+    if (artists.count) [p appendFormat:@"Their top artists: %@\n\n", [artists componentsJoinedByString:@", "]];
+    if (liked.count) [p appendFormat:@"Songs they liked:\n%@\n\n", listOf(liked, 15)];
     [p appendFormat:@"Request: %@", request.length ? request : @"(none: just play something great for them right now)"];
     return p;
 }
@@ -179,9 +186,9 @@ static NSDictionary *parseJSON(NSString *text) {
             }];
         });
     };
-    // Taste from the Web API where the token allows; never more than 4 s of waiting for it.
-    MRGWebTaste(^(NSArray *top, NSArray *artists, NSArray *liked) { ask(top, artists, liked); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ ask(@[], @[], @[]); });
+    // Taste from Spotify's own player only: what is playing, what Mirage saw play, and the queue around it. The Web API's
+    // user endpoints (/me/top, /me/tracks, recently-played) answer 404 to the app's token, so they aren't called.
+    ask(nil, nil, nil);
 }
 
 - (void)resolve:(NSArray *)items generation:(NSUInteger)gen done:(void (^)(NSArray<MRGDJTrack *> *, NSString *))done {
@@ -196,7 +203,7 @@ static NSDictionary *parseJSON(NSString *text) {
         t.line = [line isKindOfClass:NSString.class] ? line : nil;
         t.why = [why isKindOfClass:NSString.class] && why.length && why.length <= 32 ? why : nil;
         [slots addObject:t];
-        if (slots.count >= 12) break;
+        if (slots.count >= 14) break;
     }
     __block NSString *lastError = nil;
     dispatch_group_t g = dispatch_group_create();
@@ -226,8 +233,6 @@ static NSDictionary *parseJSON(NSString *text) {
     if (MRGAIProvider() == MRGProviderNone) { [self fail:@"Add your AI provider's API key in Mirage settings first."]; return; }
     NSUInteger gen = ++_generation;
     MRGDJLog(@"start: %@ with %@ (%@)", request.length ? @"a request" : @"no request", MRGProviderName(MRGAIProvider()), MRGAIModel() ?: @"?");
-    static BOOL accountLogged;
-    if (!accountLogged) { accountLogged = YES; MRGWebAccount(^(NSString *product, NSString *error) {}); }
     _state = MRGDJThinking;
     _error = nil;
     _next = nil;
@@ -240,30 +245,16 @@ static NSDictionary *parseJSON(NSString *text) {
     }];
 }
 
-// Playback, in order:
-//  1. The private "Mirage DJ" playlist, refilled with the set over the Web API, played as Spotify's own playlist Play
-//     button plays it (contextForURI, skipTo the first track, the player's own origin). Spotify Free plays it shuffled.
-//  2. The playlist could not be filled: the first track as a context and the rest queued.
-//  3. The player took neither: the playlist is opened in Spotify (its link dispatcher) so one tap on Play starts it.
-// Each step is checked against the player's state (MRGWaitForPlayback), since the player can take a command and play
-// nothing; every outcome ends in a status line or an error, and the debug log.
+// Playback, all through Spotify's own player (no Web API):
+//  1. The first track played as its own context (SPTPlayerContext contextForURI: on spotify:track:…, SPTEsperantoPlayer
+//     playContext:options:origin:), exactly as a track's Play does.
+//  2. Checked against the player's state until that track is actually playing (MRGWaitForPlayback).
+//  3. Only then the rest is queued (SPTPlayerQueueWrapperImpl queueMultipleTracks:loggingParams:), with retries: queued
+//     straight after the play command, the player answered 409 Conflict.
+//  4. If the queue still refuses, "step" mode: whenever a set track ends and something else starts, the next set track
+//     is played as its own context (arrivedAt:).
 - (void)playSet:(NSArray<MRGDJTrack *> *)found intro:(NSString *)intro generation:(NSUInteger)gen {
     NSArray<NSString *> *uris = [found valueForKey:@"uri"];
-    void (^started)(NSString *) = ^(NSString *mode) {
-        if (gen != self->_generation) return;
-        MRGDJLog(@"set: playing (%@)", mode);
-        self->_set = found;
-        self->_playbackMode = mode;
-        self->_state = MRGDJPlaying;
-        self->_status = nil;
-        self->_currentIndex = -1;
-        [self->_spoken removeAllObjects];
-        self->_intro = intro;
-        self->_introPending = intro.length > 0;
-        [self changed];
-        NSDictionary *now = MRGNowPlaying();
-        if (now) [self arrivedAt:now];
-    };
     void (^failed)(NSString *) = ^(NSString *why) {
         if (gen != self->_generation) return;
         MRGDJLog(@"set: couldn't start playback: %@", why);
@@ -273,50 +264,34 @@ static NSDictionary *parseJSON(NSString *text) {
         self->_state = MRGDJIdle;
         [self fail:[NSString stringWithFormat:@"Couldn't start playback: %@", why]];
     };
-    void (^queuePath)(NSString *) = ^(NSString *playlistError) {
+    if (!uris.count) { failed(@"no tracks"); return; }
+    self->_set = found;
+    self->_lastIndex = -1;
+    self->_stepping = YES;   // until the first track is verified, nothing else steps
+    [self setStatusText:@"Starting the first song…"];
+    MRGPlayContextURI(uris.firstObject, nil, ^(BOOL ok, NSString *error) {
         if (gen != self->_generation) return;
-        [self setStatusText:@"Starting the first song…"];
-        MRGPlayTrackThenQueue(uris, ^(BOOL ok, NSString *error) {
+        if (!ok) { self->_stepping = NO; failed(error ?: @"the player refused it"); return; }
+        MRGWaitForPlayback(@[uris.firstObject], nil, 8, ^(BOOL playing, NSString *seen) {
             if (gen != self->_generation) return;
-            if (!ok) { failed([NSString stringWithFormat:@"%@ (playlist: %@)", error ?: @"the player refused it", playlistError ?: @"?"]); return; }
-            MRGWaitForPlayback(uris, nil, 6, ^(BOOL playing, NSString *seen) {
-                if (playing) started(@"queue");
-                else failed([NSString stringWithFormat:@"Spotify took the song but didn't play it; %@ (playlist: %@)", seen, playlistError ?: @"?"]);
-            });
-        });
-    };
-    [self setStatusText:@"Filling your Mirage DJ playlist…"];
-    MRGWebFillDJPlaylist(uris, ^(NSString *playlist, NSString *playlistError) {
-        if (gen != self->_generation) return;
-        if (!playlist) { queuePath(playlistError ?: @"couldn't fill it"); return; }
-        [self setStatusText:@"Starting playback…"];
-        // A beat for Spotify's backend to have the new contents before the player resolves the playlist.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (gen != self->_generation) return;
-            MRGPlayContextURI(playlist, uris.firstObject, ^(BOOL ok, NSString *error) {
+            self->_stepping = NO;
+            if (!playing) { failed([NSString stringWithFormat:@"Spotify took the song but didn't play it; %@", seen]); return; }
+            MRGDJLog(@"set: first track playing, %lu more to queue", (unsigned long)(uris.count - 1));
+            self->_playbackMode = @"step";
+            self->_state = MRGDJPlaying;
+            self->_status = nil;
+            self->_currentIndex = -1;
+            [self->_spoken removeAllObjects];
+            self->_intro = intro;
+            self->_introPending = intro.length > 0;
+            [self changed];
+            NSDictionary *now = MRGNowPlaying();
+            if (now) [self arrivedAt:now];
+            if (uris.count < 2) return;
+            MRGQueueTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)], ^(BOOL queued, NSString *queueError) {
                 if (gen != self->_generation) return;
-                void (^openIt)(NSString *) = ^(NSString *why) {
-                    if (MRGOpenSpotifyURI(playlist)) {
-                        self->_set = found;
-                        self->_playbackMode = @"opened";
-                        self->_state = MRGDJPlaying;
-                        self->_currentIndex = -1;
-                        [self->_spoken removeAllObjects];
-                        self->_intro = intro;
-                        self->_introPending = intro.length > 0;
-                        self->_status = nil;
-                        self->_error = [NSString stringWithFormat:@"Spotify didn't start it on its own (%@). I opened your Mirage DJ playlist: tap Play and I'll talk over it.", why];
-                        MRGDJLog(@"set: opened the playlist for a tap on Play");
-                        [self changed];
-                    } else {
-                        queuePath([@"the player didn't play it: " stringByAppendingString:why]);
-                    }
-                };
-                if (!ok) { openIt(error ?: @"the player refused it"); return; }
-                MRGWaitForPlayback(uris, playlist, 6, ^(BOOL playing, NSString *seen) {
-                    if (playing) started(@"playlist");
-                    else openIt(seen);
-                });
+                self->_playbackMode = queued ? @"queue" : @"step";
+                MRGDJLog(@"set: %@", queued ? @"rest of the set queued" : [NSString stringWithFormat:@"queue refused (%@), stepping track by track", queueError ?: @"?"]);
             });
         });
     });
@@ -325,27 +300,59 @@ static NSDictionary *parseJSON(NSString *text) {
 - (void)playFromIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_set.count) return;
     if (index == _currentIndex) return;
-    NSString *target = _set[index].uri;
-    NSString *playlist = [NSUserDefaults.standardUserDefaults stringForKey:@"mirage.dj.playlist"];
-    NSString *context = playlist ? [@"spotify:playlist:" stringByAppendingString:playlist] : nil;
+    NSArray<NSString *> *uris = [[_set subarrayWithRange:NSMakeRange(index, _set.count - index)] valueForKey:@"uri"];
+    NSString *target = uris.firstObject;
     NSUInteger gen = _generation;
     _error = nil;
+    _stepping = YES;
     [self setStatusText:@"Skipping to it…"];
     MRGDJLog(@"row: jump to %ld", (long)index);
-    void (^result)(BOOL, NSString *) = ^(BOOL ok, NSString *error) {
+    MRGPlayContextURI(target, nil, ^(BOOL ok, NSString *error) {
         if (gen != self->_generation) return;
-        if (!ok) { [self fail:[NSString stringWithFormat:@"Couldn't jump to that song: %@", error ?: @"Spotify refused it (Spotify Free can't pick songs on demand)."]]; return; }
-        MRGWaitForPlayback(@[target], nil, 5, ^(BOOL playing, NSString *seen) {
+        if (!ok) { self->_stepping = NO; [self fail:[NSString stringWithFormat:@"Couldn't jump to that song: %@", error ?: @"Spotify refused it (Spotify Free can't pick songs on demand)."]]; return; }
+        MRGWaitForPlayback(@[target], nil, 6, ^(BOOL playing, NSString *seen) {
             if (gen != self->_generation) return;
+            self->_stepping = NO;
             self->_status = nil;
             if (!playing) { [self fail:[NSString stringWithFormat:@"Spotify didn't jump to that song (%@). On Spotify Free it can't pick songs on demand.", seen]]; return; }
             if (self->_state == MRGDJIdle) self->_state = MRGDJPlaying;
+            self->_playbackMode = @"step";
             [self changed];
+            if (uris.count < 2) return;
+            MRGQueueTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)], ^(BOOL queued, NSString *queueError) {
+                if (gen == self->_generation) self->_playbackMode = queued ? @"queue" : @"step";
+            });
         });
-    };
-    BOOL inPlaylist = context && ([self->_playbackMode isEqualToString:@"playlist"] || [self->_playbackMode isEqualToString:@"opened"]);
-    if (inPlaylist) MRGPlayContextURI(context, target, result);
-    else MRGPlayTrackThenQueue([[_set subarrayWithRange:NSMakeRange(index, _set.count - index)] valueForKey:@"uri"], result);
+    });
+}
+
+// Something outside the set started right after a set track. When that track had (nearly) run out, the set goes on with
+// its next track played as a context; when it was cut short, the listener chose something else and the DJ steps back.
+- (BOOL)stepOnFrom:(NSDictionary *)now {
+    if (_stepping || _lastIndex < 0 || !_set.count) return NO;
+    CFTimeInterval played = CACurrentMediaTime() - _lastStart;
+    BOOL ranOut = _lastDuration > 0 ? played >= _lastDuration - 20 : played >= 90;
+    if (!ranOut) {
+        MRGDJLog(@"step: %@ started %.0fs into a set track, the listener took over", now[@"title"] ?: @"something", played);
+        _lastIndex = -1;
+        return NO;
+    }
+    NSInteger next = _lastIndex + 1;
+    if (next >= (NSInteger)_set.count) return NO;
+    NSString *uri = _set[next].uri;
+    NSUInteger gen = _generation;
+    _stepping = YES;
+    MRGDJLog(@"step: set track %ld ended, playing %ld (%@)", (long)_lastIndex, (long)next, uri);
+    MRGPlayContextURI(uri, nil, ^(BOOL ok, NSString *error) {
+        if (gen != self->_generation) return;
+        if (!ok) { self->_stepping = NO; MRGDJLog(@"step: refused (%@)", error ?: @"?"); return; }
+        MRGWaitForPlayback(@[uri], nil, 6, ^(BOOL playing, NSString *seen) {
+            if (gen != self->_generation) return;
+            self->_stepping = NO;
+            if (!playing) MRGDJLog(@"step: didn't play (%@)", seen);
+        });
+    });
+    return YES;
 }
 
 #pragma mark - following the player
@@ -380,11 +387,16 @@ static NSString *plain(NSString *s) {
 - (void)arrivedAt:(NSDictionary *)now {
     NSString *uri = now[@"uri"];
     NSInteger index = [self indexOf:now];
-    if (index >= 0 && [_playbackMode isEqualToString:@"opened"]) { _playbackMode = @"playlist"; _error = nil; }
     _currentIndex = index;
+    if (index >= 0) {
+        _lastIndex = index;
+        _lastStart = CACurrentMediaTime();
+        _lastDuration = [now[@"duration"] doubleValue];
+    }
+    if (index < 0 && [self stepOnFrom:now]) { [self changed]; return; }
     if (index < 0) {
         // Past the set (Spotify's autoplay took over): the next set, fetched as the last track started, goes on.
-        if (_set.count && _spoken.count && _next.count) {
+        if (_set.count && _spoken.count && _next.count && _lastIndex == (NSInteger)_set.count - 1) {
             NSArray *next = _next;
             _next = nil;
             [self playSet:next intro:nil generation:_generation];

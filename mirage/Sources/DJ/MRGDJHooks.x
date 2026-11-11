@@ -2,7 +2,8 @@
 //  - Home: a DJ chip at the end of the filter chips (Home_PillUIKit.PillScrollView, inside its scroll view), or in the
 //    header row when the chips are not shown (Vitrine's redesign title row, or the chips hidden), placed on Home's
 //    page passes (Home_FunkisPageImpl.FunkisViewController). The redesign's glass pill (SGRHomePillButtons, Vitrine's)
-//    rises and fades with the page by its transform and alpha; the header chip copies them.
+//    rises and fades with the page by its transform and alpha; the header chip is re-placed beside it on every
+//    center/bounds/transform/alpha change, and stays hidden until the pill is laid out below the safe area.
 //  - Now Playing: a DJ button in the header row (NowPlaying_ModesImpl.HeaderElementsUnit) and the caption under it.
 // The settings switches re-run the placement on the views last seen.
 #import "MRGDJView.h"
@@ -45,6 +46,9 @@ static void remember(NSHashTable *__strong *table, id obj) {
 %hook SGRHomePillButtons
 - (void)setTransform:(CGAffineTransform)t { %orig; MRGDJFollowHeaderButtons((UIView *)self); }
 - (void)setAlpha:(CGFloat)a { %orig; MRGDJFollowHeaderButtons((UIView *)self); }
+- (void)setCenter:(CGPoint)c { %orig; MRGDJFollowHeaderButtons((UIView *)self); }
+- (void)setBounds:(CGRect)b { %orig; MRGDJFollowHeaderButtons((UIView *)self); }
+- (void)setHidden:(BOOL)h { %orig; MRGDJFollowHeaderButtons((UIView *)self); }
 %end
 %end
 

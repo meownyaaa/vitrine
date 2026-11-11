@@ -247,12 +247,14 @@ static UIColor *firstTint(NSArray *cgColors) {
     _glow.startPoint = CGPointMake(0.5, 0.5);
     _glow.endPoint = CGPointMake(1, 1);
     _glow.locations = @[@0, @0.42, @0.62, @1];
+    _glow.opacity = 0;   // nothing shows until the picture's color is known
     _ring = [CAShapeLayer layer];
     _ring.fillColor = UIColor.clearColor.CGColor;
     _ring.lineWidth = 3;
     _ring.shadowOpacity = 1;
     _ring.shadowRadius = 10;
     _ring.shadowOffset = CGSizeZero;
+    _ring.opacity = 0;
     // No implicit animation on anything of the glow's, ever.
     NSDictionary *none = @{@"bounds": NSNull.null, @"position": NSNull.null, @"frame": NSNull.null, @"colors": NSNull.null,
                            @"path": NSNull.null, @"strokeColor": NSNull.null, @"shadowColor": NSNull.null, @"opacity": NSNull.null,
@@ -268,33 +270,46 @@ static UIColor *firstTint(NSArray *cgColors) {
 
 - (void)setGlowColor:(UIColor *)color { [self setGlowColor:color animated:NO]; }
 
-// A placeholder first, then the real color crossfading in over 0.2s; the only animation the glow ever runs,
-// and an explicit one.
+// Invisible until it has the picture's color (nil: none yet), then faded in over 0.25s; a later change of picture
+// crossfades over 0.2s. The only animations the glow ever runs, and explicit ones.
 - (void)setGlowColor:(UIColor *)color animated:(BOOL)animated {
-    if ([color isEqual:_color]) return;
-    BOOL fade = animated && _color != nil;
+    if (color == _color || [color isEqual:_color]) return;
+    BOOL hadColor = _color != nil;
     NSArray *oldColors = _glow.colors;
     id oldStroke = (__bridge id)_ring.strokeColor, oldShadow = (__bridge id)_ring.shadowColor;
     _color = color;
-    UIColor *c = color ?: UIColor.whiteColor;
+    void (^animate)(CALayer *, NSString *, id, id, CFTimeInterval) = ^(CALayer *layer, NSString *key, id from, id to, CFTimeInterval d) {
+        CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:key];
+        a.fromValue = from;
+        a.toValue = to;
+        a.duration = d;
+        a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [layer addAnimation:a forKey:[@"mrg." stringByAppendingString:key]];
+    };
     [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (!color) {
+        _glow.opacity = 0;
+        _ring.opacity = 0;
+        [CATransaction commit];
+        return;
+    }
+    UIColor *c = color;
     _glow.colors = @[(id)[c colorWithAlphaComponent:0.95].CGColor, (id)[c colorWithAlphaComponent:0.7].CGColor,
                      (id)[c colorWithAlphaComponent:0.25].CGColor, (id)[c colorWithAlphaComponent:0].CGColor];
     _ring.strokeColor = [c colorWithAlphaComponent:0.9].CGColor;
     _ring.shadowColor = c.CGColor;
+    _glow.opacity = 1;
+    _ring.opacity = 1;
     [CATransaction commit];
-    if (!fade) return;
-    void (^crossfade)(CALayer *, NSString *, id, id) = ^(CALayer *layer, NSString *key, id from, id to) {
-        CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:key];
-        a.fromValue = from;
-        a.toValue = to;
-        a.duration = 0.2;
-        a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [layer addAnimation:a forKey:[@"mrg." stringByAppendingString:key]];
-    };
-    crossfade(_glow, @"colors", oldColors, _glow.colors);
-    crossfade(_ring, @"strokeColor", oldStroke, (__bridge id)_ring.strokeColor);
-    crossfade(_ring, @"shadowColor", oldShadow, (__bridge id)_ring.shadowColor);
+    if (!animated) return;
+    if (!hadColor) {
+        animate(_glow, @"opacity", @0, @1, 0.25);
+        animate(_ring, @"opacity", @0, @1, 0.25);
+        return;
+    }
+    animate(_glow, @"colors", oldColors, _glow.colors, 0.2);
+    animate(_ring, @"strokeColor", oldStroke, (__bridge id)_ring.strokeColor, 0.2);
+    animate(_ring, @"shadowColor", oldShadow, (__bridge id)_ring.shadowColor, 0.2);
 }
 
 - (void)didMoveToWindow {
@@ -457,17 +472,17 @@ static BOOL isFillShaped(UIView *v, CGFloat W) {
 
 #pragma mark - color and glow
 
+// The glow's color is the profile picture's own, only: not Spotify's header color (it loads in as one color and
+// changes), never a placeholder. Until the picture's color is known the glow stays invisible, then fades in.
 static UIColor *pageColor(UIView *page) {
-    // Spotify's own color first, then the picture's average; the placeholder until either is known.
-    return objc_getAssociatedObject(page, &kColorKey) ?: objc_getAssociatedObject(page, &kImageColorKey);
+    return objc_getAssociatedObject(page, &kImageColorKey);
 }
 
 static void updateGlowColor(UIView *page) {
     MRGGlowView *glow = objc_getAssociatedObject(page, &kGlowKey);
     if (!glow) return;
     UIColor *c = pageColor(page);
-    // The neutral placeholder: a soft white, so the glow is there from the first frame.
-    [glow setGlowColor:c ? glowColor(c) : [UIColor colorWithWhite:0.85 alpha:1] animated:YES];
+    [glow setGlowColor:c ? glowColor(c) : nil animated:YES];
 }
 
 static void noteSpotifyColor(UIView *page, NSArray *cgColors, UIColor *fill) {
@@ -478,9 +493,32 @@ static void noteSpotifyColor(UIView *page, NSArray *cgColors, UIColor *fill) {
     updateGlowColor(page);
 }
 
+// A loading placeholder rather than the picture: a symbol or template image (the person glyph), or a tiny one.
+static BOOL isPlaceholderImage(UIImage *image) {
+    if (image.isSymbolImage || image.renderingMode == UIImageRenderingModeAlwaysTemplate) return YES;
+    CGSize px = CGSizeMake(image.size.width * image.scale, image.size.height * image.scale);
+    return px.width < 40 || px.height < 40;
+}
+
+// Colors already read, by image (Spotify's image cache hands back the same UIImage on a revisit) and by the
+// picture's pixels' identity (the CGImage), so a revisit has its glow on the first frame.
+static UIColor *cachedImageColor(UIImage *image) {
+    static NSMapTable<UIImage *, UIColor *> *byImage;
+    static NSCache<NSString *, UIColor *> *byPixels;
+    if (!byImage) { byImage = [NSMapTable weakToStrongObjectsMapTable]; byPixels = [NSCache new]; byPixels.countLimit = 64; }
+    UIColor *c = [byImage objectForKey:image];
+    NSString *key = image.CGImage ? [NSString stringWithFormat:@"%p-%zux%zu", image.CGImage, CGImageGetWidth(image.CGImage), CGImageGetHeight(image.CGImage)] : nil;
+    if (!c && key) c = [byPixels objectForKey:key];
+    if (!c) c = averageColor(image);
+    if (!c) return nil;
+    [byImage setObject:c forKey:image];
+    if (key) [byPixels setObject:c forKey:key];
+    return c;
+}
+
 static void noteImageColor(UIView *page, UIImage *image) {
-    if (!image) return;
-    UIColor *c = averageColor(image);
+    if (!image || isPlaceholderImage(image)) return;
+    UIColor *c = cachedImageColor(image);
     if (!c) return;
     objc_setAssociatedObject(page, &kImageColorKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     updateGlowColor(page);
@@ -494,6 +532,7 @@ static void ensureGlow(UIView *page, UIImageView *picture) {
         weakSet(page, &kPictureKey, picture);
         weakSet(picture, &kPictureOfKey, page);
         objc_setAssociatedObject(page, &kImageColorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        updateGlowColor(page);
         if (picture.image) noteImageColor(page, picture.image);
     }
     CGFloat need = MAX(picture.bounds.size.width, picture.bounds.size.height) * 2;
@@ -509,7 +548,7 @@ static void ensureGlow(UIView *page, UIImageView *picture) {
         glow = [[MRGGlowView alloc] initWithFrame:CGRectZero];
         objc_setAssociatedObject(page, &kGlowKey, glow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIColor *c = pageColor(page);
-        [glow setGlowColor:c ? glowColor(c) : [UIColor colorWithWhite:0.85 alpha:1] animated:NO];
+        [glow setGlowColor:c ? glowColor(c) : nil animated:NO];
     }
     glow.picture = picture;
     if (glow.superview != container) [container insertSubview:glow belowSubview:below];
@@ -600,12 +639,12 @@ static BOOL isDarkish(UIColor *c) {
 // table: Profile_CommonImpl.ProfileListView) and, like the rows and its header, paints black, pure #000
 // included, on the view or on a plain layer of its own, so cells are walked into: every page-wide dark fill
 // in them is cleared and kept clear, nested lists are adopted, and plain dark layers as wide are taken over.
-static void pagePass(UIView *page) {
+static void clearWalk(UIView *page, NSArray<UIView *> *roots, BOOL topBar) {
     CGSize P = page.bounds.size;
     if (P.width < 1) return;
-    BOOL glowOn = MRGProfileGlow();
+    BOOL glowOn = topBar && MRGProfileGlow();
     UIView *header = findHeader(page);
-    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:page.subviews];
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:roots];
     NSUInteger seen = 0;
     while (stack.count && seen++ < 4000) {
         UIView *v = stack.lastObject; [stack removeLastObject];
@@ -640,9 +679,33 @@ static void pagePass(UIView *page) {
     }
 }
 
+static void pagePass(UIView *page) { clearWalk(page, page.subviews, YES); }
+
+// The profile pages being styled, for the creation-time hooks below.
+static NSHashTable<UIView *> *sg_pages;
+
+static UIView *styledPageAbove(UIView *view) {
+    if (!sg_pages.count) return nil;
+    for (UIView *v = view; v; v = v.superview) if ([sg_pages containsObject:v]) return v;
+    return nil;
+}
+
+// A section (a cell of the page's list, or the Playlists card's own list) on its layout passes, which come before
+// its first frame: its dark fills are cleared there and kept clear, so Spotify's stock card background never shows
+// (0.2.2 cleared it on the page's throttled passes, up to a second after the card appeared).
+static void sectionPass(UIView *section) {
+    UIView *page = styledPageAbove(section.superview);
+    if (!page || !objc_getAssociatedObject(page, &kProfileKey)) return;
+    if ([section isKindOfClass:UITableView.class] || [section isKindOfClass:UICollectionView.class]) MRGAdoptList((UIScrollView *)section);
+    else if (isDarkish(section.backgroundColor)) MRGClearDarkPersistently(section);
+    clearWalk(page, section.subviews, NO);
+}
+
 static void stylePage(UIView *page, BOOL full, CFTimeInterval interval) {
-    if (!profileWanted(page)) { releasePage(page, NO); return; }
+    if (!profileWanted(page)) { [sg_pages removeObject:page]; releasePage(page, NO); return; }
     objc_setAssociatedObject(page, &kProfileKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!sg_pages) sg_pages = [NSHashTable weakObjectsHashTable];
+    [sg_pages addObject:page];
     BOOL sameSettings = [objc_getAssociatedObject(page, &kEpochKey) unsignedIntegerValue] == sg_settingsEpoch;
     if (!sameSettings) {
         objc_setAssociatedObject(page, &kEpochKey, @(sg_settingsEpoch), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -742,6 +805,28 @@ static UIView *headerPageOf(CALayer *layer) {
 %end
 %end
 
+// Sections as they are laid out and put on screen, inside a styled profile page only (a cheap ancestor check
+// against the few pages being styled; nothing else in the app is touched).
+%group MRGProfileSections
+%hook UICollectionViewCell
+- (void)layoutSubviews { %orig; if (sg_pages.count) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sg_pages.count) sectionPass((UIView *)self); }
+%end
+%hook UITableViewCell
+- (void)layoutSubviews { %orig; if (sg_pages.count) sectionPass((UIView *)self); }
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sg_pages.count) sectionPass((UIView *)self); }
+%end
+%hook _TtC18Profile_CommonImpl15ProfileListView
+- (void)layoutSubviews {
+    %orig;
+    if (!sg_pages.count) return;
+    sectionPass((UIView *)self);
+    for (UIView *v in ((UIView *)self).subviews) if ([v isKindOfClass:UITableView.class]) sectionPass(v);
+}
+- (void)willMoveToWindow:(UIWindow *)w { %orig; if (w && sg_pages.count) sectionPass((UIView *)self); }
+%end
+%end
+
 // The picture's image arriving: its color is read right then, not on a later pass.
 %group MRGProfileImage
 %hook UIImageView
@@ -761,6 +846,7 @@ static UIView *headerPageOf(CALayer *layer) {
         if (!NSClassFromString(@"_TtC18Profile_CommonImpl27ProfileHeaderViewController")) return;
         %init(MRGProfile);
         %init(MRGProfileImage);
+        if (NSClassFromString(@"_TtC18Profile_CommonImpl15ProfileListView")) %init(MRGProfileSections);
         // A settings change lays every page out again (MRGBackgrounds.x relayoutAll); the next pass on a
         // profile page is then a full one, so the toggle takes effect at once.
         [NSNotificationCenter.defaultCenter addObserverForName:MRGSettingsChangedNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
