@@ -10,6 +10,9 @@
 - (void)reload;              // after the media or the blur changed
 - (void)viewAppeared:(id)view;
 - (void)viewDisappeared:(id)view;
+// The frame on screen now (or the last one seen), oriented and blurred like the video, for a background
+// view that has just been made to show until its own player layer has a frame: no dark flash.
+- (UIImage *)posterFrame;
 @end
 
 // The view itself fills (and clips to) its host's bounds; the picture inside it is drawn on a canvas the

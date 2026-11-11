@@ -593,6 +593,10 @@ void MRGAdoptList(UIScrollView *list) {
 // which are not in this view.
 %group MRGNowPlaying
 %hook _TtC21NowPlaying_ScrollImpl27NPVBackgroundViewController
+// Attached as soon as the view exists and again before each layout, so it is in place (showing the video's
+// current frame, MRGBackgroundView showPosterIfNeeded) before the sheet's present animation starts.
+- (void)viewDidLoad { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
+- (void)viewWillLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
 - (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
 - (void)viewWillAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
 - (void)viewDidAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }

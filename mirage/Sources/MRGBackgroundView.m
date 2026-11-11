@@ -12,6 +12,10 @@ static CGFloat blurRadius(void) { return MRGBlur() * 40.0; }
     NSURL *_loadedURL;
     double _loadedBlur;
     BOOL _active;
+    AVPlayerItemVideoOutput *_output;
+    __weak AVPlayerItem *_outputItem;
+    CGAffineTransform _posterTransform;
+    UIImage *_poster;
 }
 
 + (instancetype)shared {
@@ -33,6 +37,11 @@ static CGFloat blurRadius(void) { return MRGBlur() * 40.0; }
     _player.preventsDisplaySleepDuringVideoPlayback = NO;
     if (@available(iOS 15.0, *)) _player.audiovisualBackgroundPlaybackPolicy = AVPlayerAudiovisualBackgroundPlaybackPolicyPauses;
     _visible = [NSHashTable weakObjectsHashTable];
+    _posterTransform = CGAffineTransformIdentity;
+    _output = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:@{
+        (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)}];
+    // The looper swaps the queue's item every loop: the output follows the current one.
+    [_player addObserver:self forKeyPath:@"currentItem" options:NSKeyValueObservingOptionNew context:NULL];
     _active = UIApplication.sharedApplication.applicationState != UIApplicationStateBackground;
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     // queue:nil and a hop to main (Vitrine's AGENTS.md: never block a posting thread on main).
@@ -67,6 +76,54 @@ static AVPlayerItem *videoOnlyItem(NSURL *url, double blur) {
     return item;
 }
 
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    void (^move)(void) = ^{
+        AVPlayerItem *item = self->_player.currentItem;
+        if (item == self->_outputItem) return;
+        AVPlayerItem *old = self->_outputItem;
+        if (old && [old.outputs containsObject:self->_output]) {
+            // Keep a frame from the outgoing item before the output leaves it.
+            [self capturePoster];
+            [old removeOutput:self->_output];
+        }
+        if (item && ![item.outputs containsObject:self->_output]) [item addOutput:self->_output];
+        self->_outputItem = item;
+    };
+    if (NSThread.isMainThread) move(); else dispatch_async(dispatch_get_main_queue(), move);
+}
+
+static CIContext *posterContext(void) {
+    static CIContext *ctx;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ ctx = [CIContext contextWithOptions:nil]; });
+    return ctx;
+}
+
+- (void)capturePoster {
+    AVPlayerItem *item = _outputItem;
+    if (!item) return;
+    CMTime t = item.currentTime;
+    if (!CMTIME_IS_VALID(t)) return;
+    CVPixelBufferRef pb = [_output copyPixelBufferForItemTime:t itemTimeForDisplay:NULL];
+    if (!pb) return;
+    CIImage *ci = [CIImage imageWithCVPixelBuffer:pb];
+    CVPixelBufferRelease(pb);
+    if (!CGAffineTransformIsIdentity(_posterTransform)) {
+        ci = [ci imageByApplyingTransform:_posterTransform];
+        ci = [ci imageByApplyingTransform:CGAffineTransformMakeTranslation(-ci.extent.origin.x, -ci.extent.origin.y)];
+    }
+    CGImageRef cg = [posterContext() createCGImage:ci fromRect:ci.extent];
+    if (!cg) return;
+    _poster = [UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+}
+
+- (UIImage *)posterFrame {
+    if (!_loadedURL) return nil;
+    [self capturePoster];
+    return _poster;
+}
+
 - (void)reload {
     NSURL *url = MRGCurrentKind() == MRGMediaVideo ? MRGCurrentMediaURL() : nil;
     double blur = blurRadius();
@@ -77,7 +134,35 @@ static AVPlayerItem *videoOnlyItem(NSURL *url, double blur) {
     [_player removeAllItems];
     _loadedURL = url;
     _loadedBlur = blur;
+    _poster = nil;
+    _outputItem = nil;
+    _posterTransform = CGAffineTransformIdentity;
     AVPlayerItem *item = url ? videoOnlyItem(url, blur) : nil;
+    // Frames out of the output are the track's own; with no video composition the player layer applies the
+    // track's preferred transform at display, so the poster gets it too (the blur's composition renders
+    // frames already transformed).
+    if (item && !item.videoComposition) {
+        AVAssetTrack *track = [item.asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+        if (track) _posterTransform = track.preferredTransform;
+    }
+    if (url) {
+        // A first poster before anything has played: the frame at the start, through the same pipeline.
+        AVAssetImageGenerator *gen = [AVAssetImageGenerator assetImageGeneratorWithAsset:item.asset];
+        gen.appliesPreferredTrackTransform = YES;
+        gen.videoComposition = item.videoComposition;
+        gen.maximumSize = CGSizeMake(1280, 1280);
+        __weak MRGVideoEngine *weakSelf = self;
+        NSURL *forURL = url;
+        [gen generateCGImagesAsynchronouslyForTimes:@[[NSValue valueWithCMTime:kCMTimeZero]]
+                                  completionHandler:^(CMTime req, CGImageRef image, CMTime actual, AVAssetImageGeneratorResult result, NSError *error) {
+            if (result != AVAssetImageGeneratorSucceeded || !image) return;
+            UIImage *poster = [UIImage imageWithCGImage:image];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                MRGVideoEngine *me = weakSelf;
+                if (me && [me->_loadedURL isEqual:forURL] && !me->_poster) me->_poster = poster;
+            });
+        }];
+    }
     if (item) _looper = [AVPlayerLooper playerLooperWithPlayer:_player templateItem:item];
     [self update];
 }
@@ -89,7 +174,11 @@ static AVPlayerItem *videoOnlyItem(NSURL *url, double blur) {
 }
 
 - (void)viewAppeared:(id)view { [_visible addObject:view]; [self update]; }
-- (void)viewDisappeared:(id)view { [_visible removeObject:view]; [self update]; }
+- (void)viewDisappeared:(id)view {
+    [_visible removeObject:view];
+    if (!_visible.count) [self capturePoster];   // the frame the next background to appear starts on
+    [self update];
+}
 
 @end
 
@@ -119,6 +208,7 @@ CGRect MRGWindowRectInView(UIView *view) {
     UIImageView *_imageView;
     AVPlayerLayer *_playerLayer;
     UIView *_dim;
+    BOOL _posterUp;     // the image view shows the engine's poster until the player layer has a frame
 }
 
 static UIImage *sg_still;
@@ -185,7 +275,7 @@ static NSString *sg_stillKey;
         _imageView.hidden = NO;
         [_playerLayer removeFromSuperlayer];
         _playerLayer = nil;
-    } else {
+    } else if (!_posterUp) {
         _imageView.image = nil;
         _imageView.hidden = YES;
     }
@@ -194,6 +284,7 @@ static NSString *sg_stillKey;
         if (!_playerLayer) {
             _playerLayer = [AVPlayerLayer playerLayerWithPlayer:MRGVideoEngine.shared.player];
             [_canvas.layer insertSublayer:_playerLayer below:_dim.layer];
+            [self showPosterIfNeeded];
         }
         _playerLayer.videoGravity = scale == MRGScaleFit ? AVLayerVideoGravityResizeAspect
                                   : scale == MRGScaleStretch ? AVLayerVideoGravityResize : AVLayerVideoGravityResizeAspectFill;
@@ -201,6 +292,25 @@ static NSString *sg_stillKey;
         [MRGVideoEngine.shared reload];
     }
     [self setNeedsLayout];
+}
+
+// A new player layer draws nothing until the player hands it a frame, a beat after it is on screen: the
+// now playing sheet slid up dark gray and the picture popped in. The shared player is already running (or
+// paused on a frame), so the engine's latest frame goes up at once, under the player layer, and comes down
+// once that layer is ready.
+- (void)showPosterIfNeeded {
+    if (!_playerLayer || _playerLayer.isReadyForDisplay) { [self dropPoster]; return; }
+    UIImage *poster = [MRGVideoEngine.shared posterFrame];
+    if (!poster) return;
+    _imageView.image = poster;
+    _imageView.hidden = NO;
+    _posterUp = YES;
+}
+
+- (void)dropPoster {
+    if (!_posterUp) return;
+    _posterUp = NO;
+    if (MRGCurrentKind() != MRGMediaImage) { _imageView.image = nil; _imageView.hidden = YES; }
 }
 
 - (void)pinCanvas {
@@ -239,7 +349,10 @@ static NSString *sg_stillKey;
 // transition), and a canvas left where the window was a moment ago showed whatever was behind it: the page's
 // black. While in a window the canvas is re-pinned once per frame; pinCanvas costs a walk up a few superviews
 // and does nothing when nothing moved.
-- (void)tick:(CADisplayLink *)link { [self pinCanvas]; }
+- (void)tick:(CADisplayLink *)link {
+    [self pinCanvas];
+    if (_posterUp && _playerLayer.isReadyForDisplay) [self dropPoster];
+}
 
 - (void)didMoveToWindow {
     [super didMoveToWindow];
@@ -250,6 +363,7 @@ static NSString *sg_stillKey;
         [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     }
     if (self.window) [self pinCanvas];
+    if (self.window && !_playerLayer.isReadyForDisplay) [self showPosterIfNeeded];
     if (self.window && !self.hidden) [MRGVideoEngine.shared viewAppeared:self];
     else [MRGVideoEngine.shared viewDisappeared:self];
 }
