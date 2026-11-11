@@ -5,9 +5,10 @@
 # misses the app changes the redesign needs, so people build the full IPA (README). No IPA is built here.
 name: Release
 
+# Mirage: turned off in this fork. Nothing runs on pushes to main (no release-please PRs, no Vitrine build
+# that needs the SG_FLAG_LIST secret); it can still be started by hand from the Actions tab.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
