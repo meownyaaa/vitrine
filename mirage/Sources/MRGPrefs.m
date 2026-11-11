@@ -29,6 +29,7 @@ BOOL MRGWantsScreen(MRGScreen s) {
     if (!MRGBackgroundEnabled() || MRGCurrentKind() == MRGMediaNone) return NO;
     MRGScreen on = MRGScreens();
     if (s == MRGScreenEverywhere) return (on & MRGScreenEverywhere) != 0;
+    if (s == MRGScreenDrawer) return (on & MRGScreenDrawer) != 0;
     // "Everywhere" already puts one background behind every page, Home and Library included,
     // so their own hooks stand down rather than stack a second one. Now playing is not a page.
     if ((s == MRGScreenHome || s == MRGScreenLibrary) && (on & MRGScreenEverywhere)) return NO;

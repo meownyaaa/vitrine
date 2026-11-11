@@ -281,7 +281,8 @@ static char kScreenKey;
 static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!host) return;
     if (!onTop) objc_setAssociatedObject(host, &kScreenKey, @(screen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (!onTop && (!isPageSized(host) || isExcludedHost(host))) { detach(host); return; }
+    BOOL drawer = screen == MRGScreenDrawer;
+    if (!onTop && !drawer && (!isPageSized(host) || isExcludedHost(host))) { detach(host); return; }
     if (!MRGWantsScreen(screen) || (!onTop && ancestorHasBackground(host))) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
     if (!bg) {
@@ -290,6 +291,7 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
         if (!onTop) detachDescendants(host);
     }
     if (bg.hidden) bg.hidden = NO;
+    if (bg.extraDim != (drawer ? 0.2 : 0)) bg.extraDim = drawer ? 0.2 : 0;
     if (bg.superview != host) [host insertSubview:bg atIndex:0];
     if (onTop) { if (host.subviews.lastObject != bg) [host bringSubviewToFront:bg]; }
     else if (host.subviews.firstObject != bg) [host sendSubviewToBack:bg];
@@ -584,6 +586,26 @@ static void rerunHostOf(UIView *list) {
 %end
 %end
 
+// The side drawer, with "Show in side drawer" on. The list's controller view sits inside the drawer's own
+// containers (SideDrawer_ECMKit.SideDrawerContainer and the like), which carry the drawer's gray, so the
+// background goes on the outermost of them a few levels up. Mirage's and Vitrine's rows have no fill of
+// their own and the row hooks (MRGDrawerRow.x) only touch the list's inset, so neither is affected.
+static UIView *drawerHost(UIView *listPage) {
+    UIView *host = listPage;
+    int depth = 0;
+    for (UIView *v = listPage.superview; v && depth < 6; v = v.superview, depth++)
+        if ([NSStringFromClass(v.class) containsString:@"SideDrawer"]) host = v;
+    return host;
+}
+
+%group MRGDrawer
+%hook _TtC23SideDrawer_ListPageImpl18ListViewController
+- (void)viewDidLayoutSubviews { %orig; attach(drawerHost(((UIViewController *)self).view), MRGScreenDrawer, NO); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attach(drawerHost(((UIViewController *)self).view), MRGScreenDrawer, NO); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attach(drawerHost(((UIViewController *)self).view), MRGScreenDrawer, NO); }
+%end
+%end
+
 #pragma mark - live updates
 
 
@@ -611,6 +633,7 @@ static void relayoutAll(void) {
         if (NSClassFromString(@"_TtC28YourLibrary_YourLibraryXImpl25YourLibraryViewController")) %init(MRGLibrary);
         if (NSClassFromString(@"_TtC21NowPlaying_ScrollImpl27NPVBackgroundViewController")) %init(MRGNowPlaying);
         if (NSClassFromString(@"_TtC33Navigation_PageAPIIntegrationImpl33MusicAppPageHostingViewController")) %init(MRGEverywhere);
+        if (NSClassFromString(@"_TtC23SideDrawer_ListPageImpl18ListViewController")) %init(MRGDrawer);
         [NSNotificationCenter.defaultCenter addObserverForName:MRGSettingsChangedNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
             dispatch_async(dispatch_get_main_queue(), ^{ relayoutAll(); });
         }];

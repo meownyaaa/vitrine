@@ -177,7 +177,7 @@ static NSString *sg_stillKey;
 - (void)refresh {
     MRGMediaKind kind = MRGCurrentKind();
     MRGScaleMode scale = MRGScale();
-    _dim.alpha = MRGDim();
+    _dim.alpha = MIN(0.95, MRGDim() + _extraDim);
     _imageView.contentMode = scale == MRGScaleFit ? UIViewContentModeScaleAspectFit
                            : scale == MRGScaleStretch ? UIViewContentModeScaleToFill : UIViewContentModeScaleAspectFill;
     if (kind == MRGMediaImage) {
@@ -212,6 +212,12 @@ static NSString *sg_stillKey;
     [UIView performWithoutAnimation:^{ self->_canvas.frame = target; }];
     _playerLayer.frame = _canvas.bounds;
     [CATransaction commit];
+}
+
+- (void)setExtraDim:(CGFloat)extraDim {
+    if (extraDim == _extraDim) return;
+    _extraDim = extraDim;
+    _dim.alpha = MIN(0.95, MRGDim() + _extraDim);
 }
 
 - (void)setFitsBounds:(BOOL)fits {

@@ -6,6 +6,7 @@ typedef NS_OPTIONS(NSUInteger, MRGScreen) {
     MRGScreenNowPlaying = 1 << 1,
     MRGScreenLibrary    = 1 << 2,
     MRGScreenEverywhere = 1 << 3,
+    MRGScreenDrawer     = 1 << 4,   // the side drawer, opted in on its own (Everywhere skips it)
 };
 
 typedef NS_ENUM(NSInteger, MRGScaleMode) {
