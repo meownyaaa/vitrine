@@ -16,6 +16,7 @@
 #import "MRGPrefs.h"
 #import "MRGBackgroundView.h"
 #import "MRGClearing.h"
+#import "MRGDJLog.h"
 #import <objc/runtime.h>
 
 static char kBackgroundKey, kClearedKey, kOriginalColorKey, kDarkOnlyKey;
@@ -307,6 +308,20 @@ static void attachWith(UIView *host, MRGScreen screen, BOOL onTop, BOOL forced, 
     }
     if (bg.hidden) bg.hidden = NO;
     if (bg.extraDim != extraDim) bg.extraDim = extraDim;
+    if (screen == MRGScreenNowPlaying && !bg.followView) {
+        // The player's card: the nearest ancestor about the window's size (not a scroll view). Pulling the player
+        // down moves it, and the picture now moves along instead of staying on the window (0.5.1's glitch).
+        CGSize win = host.window ? host.window.bounds.size : UIScreen.mainScreen.bounds.size;
+        for (UIView *p = host.superview; p && p != host.window; p = p.superview) {
+            CGSize z = p.bounds.size;
+            if ([p isKindOfClass:UIScrollView.class]) continue;
+            if (fabs(z.width - win.width) < win.width * 0.1 && fabs(z.height - win.height) < win.height * 0.12) {
+                bg.followView = p;
+                MRGDJLog(@"background: now playing follows %@ (%.0fx%.0f)", NSStringFromClass(p.class), z.width, z.height);
+                break;
+            }
+        }
+    }
     if (bg.superview != host) [host insertSubview:bg atIndex:0];
     if (onTop) { if (host.subviews.lastObject != bg) [host bringSubviewToFront:bg]; }
     else if (host.subviews.firstObject != bg) [host sendSubviewToBack:bg];

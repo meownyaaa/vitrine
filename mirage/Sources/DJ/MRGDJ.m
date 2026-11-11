@@ -50,10 +50,10 @@ static NSArray<NSArray *> *personas(void) {
               @"a warm, relaxed late-night radio host: smooth, unhurried, friendly, a little poetic about the mood, never loud. Plain sentences, no slang overload, no emojis.", @(MRGDJTalkEvery), @20],
             @[@"Hype", @"High energy, short, loud.",
               @"a high-energy hype host: short, exciting, punchy bursts, gets the listener going, big energy but never cringe or corny. No emojis, no hashtags.", @(MRGDJTalkEvery), @12],
-            @[@"Underground curator", @"Knows the deep cuts; drops a fact.",
-              @"an underground music curator and crate digger: knowledgeable, understated, drops one real, specific detail (the label, the scene, the year, a sample, who produced it) only when you are sure it is true. Never hype, never generic.", @(MRGDJTalkFew), @24],
-            @[@"Storyteller", @"Short stories behind the songs.",
-              @"a storyteller: tells a short, true story or piece of context behind the song or artist (how it was made, what it meant, where it came from), only facts you are sure of, vivid but brief.", @(MRGDJTalkFew), @40],
+            @[@"Underground curator", @"Knows the deep cuts; talks sound and scene.",
+              @"an underground music curator and crate digger: understated, talks about the sound, the texture and the scene it fits; no invented trivia. Never hype, never generic.", @(MRGDJTalkFew), @24],
+            @[@"Storyteller", @"Paints the mood of each song.",
+              @"a storyteller: paints the mood and the picture the song puts in your head, vivid but brief, as feeling, never as invented facts about how it was made.", @(MRGDJTalkFew), @40],
             @[@"Minimal", @"Barely talks: names and nothing else.",
               @"a minimal host: almost silent, just the song and artist or a two-word mood, nothing more.", @(MRGDJTalkSwitches), @8],
             @[@"Soft & soothing", @"Gentle, warm and calm, close to the mic.",
@@ -292,6 +292,27 @@ static NSString *listOf(NSArray<NSDictionary *> *tracks, NSUInteger max) {
 }
 
 // The system prompt: who the DJ is (persona), how to curate, the JSON shape, and the listener's own instructions.
+// 0.5.2: a line that still reads like invented trivia ("sent this beat over dm at 4 am", "recorded live with a local
+// brass crew") is dropped; the DJ says nothing over that song rather than something false.
+static NSString *factCheckedLine(NSString *line) {
+    if (![line isKindOfClass:NSString.class] || !line.length) return nil;
+    static NSRegularExpression *re;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        re = [NSRegularExpression regularExpressionWithPattern:
+              @"\\b(dm'?d?|dms|recorded|produced( by)?|producer|in the studio|studio session|sampl(e|ed|es|ing)|sent (him|her|them|this|the|over)|"
+              @"signed|label|went viral|charted|chart|billboard|platinum|gold record|grammy|tour(ed|ing)?|freestyl(e|ed) (it|this)|"
+              @"wrote (it|this)|written (in|on|after)|made (it|this) (in|on|after|at)|cooked up|first take|one take|"
+              @"at \\d{1,2} ?(am|pm|a\\.m\\.|p\\.m\\.)|in (19|20)\\d\\d|back in (19|20)\\d\\d|\\d+ (million|thousand|k) (streams|plays|views))\\b"
+              options:NSRegularExpressionCaseInsensitive error:nil];
+    });
+    if ([re numberOfMatchesInString:line options:0 range:NSMakeRange(0, line.length)]) {
+        MRGDJLog(@"lines: dropped a line that states an unverified fact: \"%@\"", line.length > 90 ? [[line substringToIndex:90] stringByAppendingString:@"…"] : line);
+        return nil;
+    }
+    return line;
+}
+
 static NSString *systemPrompt(void) {
     // 0.5.0: about half the words of 0.4.x (Groq's free tier ran out of daily tokens), same rules.
     NSMutableString *p = [NSMutableString string];
@@ -302,8 +323,9 @@ static NSString *systemPrompt(void) {
         @"3) No obvious hits or filler; for underground requests pick small artists and deep cuts. "
         @"4) Max 2 songs per artist, nothing just played, no duplicates, ordered to flow. "
         @"5) Only real released songs with exact Spotify titles and primary artists; never invent.\n"
+        @"6) NO MADE-UP FACTS: a line may only say how the song sounds or feels, why it fits the listener or the request, or how it flows from the last one. Never claim a fact you weren't given: no stories, who produced it, where or how it was recorded, DMs, studio sessions, samples, labels, dates, places, chart numbers or collaborations. If you're not handed a fact, talk about the vibe.\n"
         @"Reply with JSON only: {\"plan\": string, \"intro\": string, \"tracks\": [{\"artist\", \"title\", \"line\", \"why\"}]}\n"];
-    [p appendFormat:@"plan: 1-2 sentences on the direction. Exactly 12 tracks. line: what you say before the track, at most %ld words, a true detail about the song or artist, each different. why: 1-4 lowercase words (\"deep cut\", \"same scene\"). intro: at most 20 words.", (long)personaWords()];
+    [p appendFormat:@"plan: 1-2 sentences on the direction. Exactly 12 tracks. line: what you say before the track, at most %ld words, about its sound, mood or why it fits (rule 6), each different. why: 1-4 lowercase words (\"deep cut\", \"same scene\"). intro: at most 20 words, rule 6 applies.", (long)personaWords()];
     NSString *style = MRGDJStyleInstructions();
     if (style) [p appendFormat:@"\n\nFor line and intro: %@", style];
     NSString *custom = MRGDJCustomPrompt();
@@ -502,7 +524,7 @@ static NSString *firstArtist(NSString *a) {
         NSDictionary *json = parseJSON(text);
         NSArray *items = [json[@"tracks"] isKindOfClass:NSArray.class] ? json[@"tracks"] : nil;
         if (!items.count) { done(nil, nil, [NSString stringWithFormat:@"%@ didn't send a playlist I could read. Try again.", MRGProviderName(MRGAIProvider())]); return; }
-        NSString *intro = [json[@"intro"] isKindOfClass:NSString.class] ? json[@"intro"] : nil;
+        NSString *intro = factCheckedLine(json[@"intro"]);
         NSString *plan = [json[@"plan"] isKindOfClass:NSString.class] ? json[@"plan"] : nil;
         if (plan.length) { self->_plan = [plan copy]; MRGDJLog(@"plan: %@", plan); }
         [self resolve:items cap:cap generation:gen done:^(NSArray<MRGDJTrack *> *found, NSArray<MRGDJTrack *> *dropped, NSString *resolveError) {
@@ -560,7 +582,7 @@ static NSString *firstArtist(NSString *a) {
         MRGDJTrack *t = [MRGDJTrack new];
         t.title = title;
         t.artist = [artist isKindOfClass:NSString.class] ? artist : @"";
-        t.line = [line isKindOfClass:NSString.class] ? line : nil;
+        t.line = factCheckedLine(line);
         t.why = [why isKindOfClass:NSString.class] && why.length && why.length <= 32 ? why : nil;
         [slots addObject:t];
         if (slots.count >= 18) break;
@@ -857,17 +879,17 @@ static const NSInteger kCatalogMax = 80;
     NSString *style = MRGDJStyleInstructions();
     if (style) [system appendFormat:@"\n\n%@", style];
     NSString *user = [NSString stringWithFormat:@"You're about to play everything you can find by %@ (%lu songs), then artists like them. It starts with:\n%@\n"
-                      @"Answer JSON only: {\"intro\": string (opens the run, at most 20 words), \"lines\": [{\"title\": string, \"line\": string (at most %ld words, about that song or artist, only true facts)}] for those songs}.",
+                      @"Answer JSON only: {\"intro\": string (opens the run, at most 20 words), \"lines\": [{\"title\": string, \"line\": string (at most %ld words, about how that song sounds or feels; no made-up facts, no stories about how it was made)}] for those songs}.",
                       who, (unsigned long)set.count, list, (long)personaWords()];
     MRGAIChat(system, user, YES, ^(NSString *text, NSString *error) {
         if (gen != self->_generation) return;
         NSDictionary *j = text ? parseJSON(text) : nil;
         for (NSDictionary *l in [j[@"lines"] isKindOfClass:NSArray.class] ? j[@"lines"] : @[]) {
             if (![l isKindOfClass:NSDictionary.class] || ![l[@"line"] isKindOfClass:NSString.class] || ![l[@"title"] isKindOfClass:NSString.class]) continue;
-            for (MRGDJTrack *t in set) if (!t.line && MRGNamesMatch(t.title, l[@"title"])) { t.line = l[@"line"]; break; }
+            for (MRGDJTrack *t in set) if (!t.line && MRGNamesMatch(t.title, l[@"title"])) { t.line = factCheckedLine(l[@"line"]); break; }
         }
         if (error) MRGDJLog(@"catalog: no lines (%@)", error);
-        once([j[@"intro"] isKindOfClass:NSString.class] ? j[@"intro"] : nil);
+        once(factCheckedLine(j[@"intro"]));
     });
 }
 

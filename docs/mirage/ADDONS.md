@@ -1,24 +1,24 @@
-# Mirage addons
+# Mirage add-ons
 
-The Addon Shop (Settings → Mirage → Shop) lists addons from
+The Add-on Shop (Settings → Mirage → Shop) lists add-ons from
 [`addons/index.json`](../../addons/index.json), fetched from
 `https://raw.githubusercontent.com/x4nzz/Mirage/main/addons/index.json`. A copy of that list is built into Mirage,
 so the shop works offline and on first launch; pull down in the shop to fetch it again.
 
-**Addons are features that ship inside Mirage.** The shop never downloads and runs code (an iOS app can't do that
-safely). Installing an addon flips its switch (`mirage.addon.<id>` in Spotify's preferences); removing it puts Spotify
-back the way it was. An addon listed in the index that this build doesn't carry shows "Update Mirage".
+**Add-ons are features that ship inside Mirage.** The shop never downloads and runs code (an iOS app can't do that
+safely). Installing an add-on flips its switch (`mirage.addon.<id>` in Spotify's preferences); removing it puts Spotify
+back the way it was. An add-on listed in the index that this build doesn't carry shows "Update Mirage".
 
 ## Vinyl (Now Playing)
 
 The cover shrinks and moves to one side, and a record peeks out from behind it. The record spins while a song
 plays and stops when you pause; its label is the album art, and the grooves and light are drawn in code.
-Settings: spin speed (Chill, 33⅓, 45) and which side the record is on. If Spotify's player changes and the
+Settings: spin speed (Slow, 33⅓ RPM, 45 RPM) and which side the record is on. If Spotify's player changes and the
 cover can't be found, Now Playing stays stock and the DJ log says `vinyl: player cover not found`.
 
 Code: `mirage/Sources/MRGVinyl.x`.
 
-## Adding an addon
+## Adding an add-on
 
 1. Write the feature in `mirage/Sources/` and gate every hook on `MRGAddonInstalled(@"<id>")`. Check each class with
    `NSClassFromString`, use `respondsToSelector:` before every message to Spotify, wrap the work in `@try`, and

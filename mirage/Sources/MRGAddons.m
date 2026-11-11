@@ -7,7 +7,7 @@ static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
 static NSString *const kIndexURL = @"https://raw.githubusercontent.com/x4nzz/Mirage/main/addons/index.json";
 
 // The same as addons/index.json in the repo, for a first launch offline or a GitHub that doesn't answer.
-static NSString *const kBundledIndex = @"{\"format\":1,\"addons\":[{\"id\":\"vinyl\",\"name\":\"Vinyl\",\"description\":\"Turns the Now Playing cover into a record sleeve: the album art moves to one side and a vinyl record peeks out from behind it, spinning while the song plays and stopping when you pause. The record's label is the album art. Choose the spin speed and which side the record sits on.\",\"preview\":\"https://raw.githubusercontent.com/x4nzz/Mirage/main/addons/previews/vinyl.png\",\"version\":\"1.0\",\"type\":\"Now Playing\",\"author\":\"Mirage\",\"min_mirage\":\"0.5.0\"}]}";
+static NSString *const kBundledIndex = @"{\"format\":1,\"addons\":[{\"id\":\"vinyl\",\"name\":\"Vinyl\",\"description\":\"Turns the Now Playing cover into a record sleeve. The cover slides to one side and a vinyl record peeks out from behind it. The record spins while music plays, stops when you pause, and its label shows the album art. You can pick the spin speed and the side the record sits on.\",\"preview\":\"https://raw.githubusercontent.com/x4nzz/Mirage/main/addons/previews/vinyl.png\",\"version\":\"1.1\",\"type\":\"Now Playing\",\"author\":\"Mirage\",\"min_mirage\":\"0.5.0\"}]}";
 
 BOOL MRGAddonBuiltIn(NSString *addonID) { return [@[@"vinyl"] containsObject:addonID ?: @""]; }
 BOOL MRGAddonInstalled(NSString *addonID) { return addonID.length && MRGAddonBuiltIn(addonID) && [D() boolForKey:[@"mirage.addon." stringByAppendingString:addonID]]; }
@@ -143,11 +143,11 @@ static UIImage *placeholderArt(CGSize size) {
     _name.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
     _name.textColor = UIColor.whiteColor;
     _meta = [UILabel new];
-    _meta.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-    _meta.textColor = MRGAccent();
+    _meta.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    _meta.textColor = [UIColor colorWithWhite:0.7 alpha:1];   // the accent can be dark (deep purple on black was unreadable)
     _desc = [UILabel new];
-    _desc.font = [UIFont systemFontOfSize:14];
-    _desc.textColor = [UIColor colorWithWhite:0.72 alpha:1];
+    _desc.font = [UIFont systemFontOfSize:15];
+    _desc.textColor = [UIColor colorWithWhite:0.80 alpha:1];
     _desc.numberOfLines = 0;
     _button = [UIButton buttonWithType:UIButtonTypeSystem];
     _button.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
@@ -182,8 +182,8 @@ static UIImage *placeholderArt(CGSize size) {
     _addon = [a copy];
     _name.text = a[@"name"];
     NSMutableArray *meta = [NSMutableArray array];
-    if (a[@"type"]) [meta addObject:[a[@"type"] uppercaseString]];
-    if (a[@"version"]) [meta addObject:[@"v" stringByAppendingString:a[@"version"]]];
+    if (a[@"type"]) [meta addObject:a[@"type"]];
+    if (a[@"version"]) [meta addObject:[@"Version " stringByAppendingString:a[@"version"]]];
     if (a[@"author"]) [meta addObject:[@"by " stringByAppendingString:a[@"author"]]];
     _meta.text = [meta componentsJoinedByString:@"  ·  "];
     _desc.text = a[@"description"];
@@ -227,7 +227,7 @@ static UIImage *placeholderArt(CGSize size) {
         UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         c.backgroundColor = [UIColor colorWithWhite:0.11 alpha:0.9];
         c.selectionStyle = UITableViewCellSelectionStyleNone;
-        NSArray *items = ip.section == 0 ? @[@"Chill", @"33⅓", @"45"] : @[@"Left", @"Right"];
+        NSArray *items = ip.section == 0 ? @[@"Slow", @"33⅓ RPM", @"45 RPM"] : @[@"Left", @"Right"];
         UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:items];
         seg.selectedSegmentTintColor = MRGAccent();
         [seg setTitleTextAttributes:@{NSForegroundColorAttributeName: MRGOnAccent()} forState:UIControlStateSelected];
@@ -260,6 +260,7 @@ static UIImage *placeholderArt(CGSize size) {
 @end
 
 @implementation MRGAddonShop {
+    UILabel *_titleLabel, *_subLabel;
     NSArray<NSDictionary *> *_addons;
     NSString *_note;
 }
@@ -268,7 +269,7 @@ static UIImage *placeholderArt(CGSize size) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Addon Shop";
+    self.title = @"Add-on Shop";
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.tableView.backgroundColor = UIColor.blackColor;
     self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
@@ -284,21 +285,36 @@ static UIImage *placeholderArt(CGSize size) {
 }
 
 - (UIView *)header {
-    UIView *h = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 96)];
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 14, 280, 34)];
-    title.text = @"Make Spotify yours";
-    title.font = [UIFont systemFontOfSize:28 weight:UIFontWeightHeavy];
-    title.textColor = UIColor.whiteColor;
-    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 50, 280, 40)];
-    sub.text = @"Addons are built into Mirage and switched on here. Nothing gets downloaded and run.";
-    sub.numberOfLines = 2;
-    sub.font = [UIFont systemFontOfSize:13];
-    sub.textColor = UIColor.grayColor;
-    sub.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [h addSubview:title];
-    [h addSubview:sub];
+    UIView *h = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 100)];
+    _titleLabel = [UILabel new];
+    _titleLabel.text = @"Make Spotify yours";
+    _titleLabel.font = [UIFont systemFontOfSize:28 weight:UIFontWeightHeavy];
+    _titleLabel.textColor = UIColor.whiteColor;
+    _titleLabel.adjustsFontSizeToFitWidth = YES;
+    _titleLabel.minimumScaleFactor = 0.7;
+    _subLabel = [UILabel new];
+    _subLabel.text = @"Add-ons are built into Mirage and switched on here. Nothing is downloaded or run from the internet.";
+    _subLabel.numberOfLines = 0;
+    _subLabel.font = [UIFont systemFontOfSize:14];
+    _subLabel.textColor = [UIColor colorWithWhite:0.68 alpha:1];
+    [h addSubview:_titleLabel];
+    [h addSubview:_subLabel];
     return h;
+}
+
+// The header is sized to the table's width every layout, so its text wraps instead of running off the right edge.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    UIView *h = self.tableView.tableHeaderView;
+    if (!h || !_subLabel) return;
+    CGFloat w = self.tableView.bounds.size.width;
+    UIEdgeInsets safe = self.tableView.safeAreaInsets;
+    CGFloat x = 20 + safe.left, tw = MAX(100, w - x - 20 - safe.right);
+    _titleLabel.frame = CGRectMake(x, 12, tw, 34);
+    CGFloat sh = ceil([_subLabel sizeThatFits:CGSizeMake(tw, CGFLOAT_MAX)].height);
+    _subLabel.frame = CGRectMake(x, 50, tw, sh);
+    CGRect f = CGRectMake(0, 0, w, 50 + sh + 14);
+    if (!CGRectEqualToRect(h.frame, f)) { h.frame = f; self.tableView.tableHeaderView = h; }
 }
 
 - (void)reload {
@@ -319,7 +335,7 @@ static UIImage *placeholderArt(CGSize size) {
     });
 }
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
-    return s == (NSInteger)_addons.count - 1 || !_addons.count ? (_note ?: @"Pull down to check for new addons.") : nil;
+    return s == (NSInteger)_addons.count - 1 || !_addons.count ? (_note ?: @"Pull down to check for new add-ons.") : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -332,7 +348,7 @@ static UIImage *placeholderArt(CGSize size) {
             c.textLabel.textColor = UIColor.whiteColor;
             c.imageView.image = [UIImage systemImageNamed:@"slider.horizontal.3"];
             c.imageView.tintColor = MRGAccent();
-            c.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@", MRGVinylSecondsPerTurn() > 2.5 ? @"Chill" : MRGVinylSecondsPerTurn() > 1.5 ? @"33⅓" : @"45", MRGVinylOnLeft() ? @"left" : @"right"];
+            c.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@", MRGVinylSecondsPerTurn() > 2.5 ? @"Slow" : MRGVinylSecondsPerTurn() > 1.5 ? @"33⅓ RPM" : @"45 RPM", MRGVinylOnLeft() ? @"Left" : @"Right"];
             c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             return c;
         }

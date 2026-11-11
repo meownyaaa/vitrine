@@ -315,6 +315,12 @@ static NSString *sg_stillKey;
 
 - (void)pinCanvas {
     CGRect target = (self.window && !_fitsBounds) ? MRGWindowRectInView(self) : self.bounds;
+    UIView *follow = self.followView;
+    if (self.window && !_fitsBounds && follow.window == self.window) {
+        CGRect f = MRGWindowRectInView(follow);   // its origin is minus the card's own place on the window
+        target.origin.x -= f.origin.x;
+        target.origin.y -= f.origin.y;
+    }
     if (CGRectEqualToRect(_canvas.frame, target) && CGRectEqualToRect(_playerLayer.frame, _canvas.bounds)) return;
     // No implicit animation: a frame that animates lags the page it sits in, which reads as a jump.
     [CATransaction begin];

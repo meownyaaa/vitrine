@@ -108,7 +108,7 @@ static const CGFloat kBottomChrome = 150;
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
     if (self.djOnly) return s < (NSInteger)djGroupTitles().count ? djGroupTitles()[s] : nil;
-    return @[@"Backgrounds", @"Media", @"Look", @"Show on", @"Addon Shop", @"AI DJ", @"About"][s];
+    return @[@"Backgrounds", @"Media", @"Look", @"Show on", @"Add-on Shop", @"AI DJ", @"About"][s];
 }
 
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
@@ -447,7 +447,7 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
             return [self switchCell:titles[ip.row] on:(screens & (1 << ip.row)) != 0 tag:100 + ip.row symbol:symbols[ip.row]];
         }
         case MRGSecShop: {
-            UITableViewCell *c = [self actionCell:@"Addon Shop" symbol:@"bag.fill" destructive:NO enabled:YES];
+            UITableViewCell *c = [self actionCell:@"Add-on Shop" symbol:@"bag.fill" destructive:NO enabled:YES];
             NSUInteger n = MRGAddonsInstalledCount();
             c.detailTextLabel.text = n ? [NSString stringWithFormat:@"%lu installed", (unsigned long)n] : @"Browse";
             c.detailTextLabel.textColor = UIColor.grayColor;

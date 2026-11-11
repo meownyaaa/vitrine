@@ -2,6 +2,23 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.5.2 (crash fix, no made-up facts, smoother Vinyl)
+
+- **Vinyl crash fixed.** 0.5.1 kept an unretained pointer to the cover view on its cell; when Spotify rebuilt the cover
+  (reopening the player, a new song) the next layout pass touched freed memory and Spotify closed. The record is now
+  stored on the cover view itself and only holds it weakly.
+- **Vinyl moves with the cover.** The record is inside the cover's own view, under the art, so it slides, fades and
+  shrinks with it in every transition. When the art itself shrinks (Vitrine's paused size), the record copies the same
+  transform and the same animation, so it never lags behind and then jumps. Bigger peek, the label shows, a light rim.
+- **No made-up facts.** Lines and intros may only talk about how a song sounds or feels and why it fits; no stories,
+  producers, recording sessions, DMs, labels, dates or numbers unless a tool returned them. Lower temperature (0.6,
+  chat 0.4). A line that still states that kind of claim is dropped (logged as `lines: dropped a line…`). The chat says
+  when it doesn't know.
+- **Pulling the player down** moves the Mirage background and the DJ bar with the player's card instead of leaving
+  them pinned to the screen.
+- **Add-on Shop** cleaned up: "add-on" spelling, readable details line, header text wraps, clearer description and
+  settings (Slow / 33⅓ RPM / 45 RPM, Left / Right), new preview.
+
 ## What's new in 0.5.1 (free voices fixed, Vinyl stays, DJ bar out of the way)
 
 - **Free voices fixed.** 0.5.0 sent its messages before the websocket had opened and read any error as a refusal

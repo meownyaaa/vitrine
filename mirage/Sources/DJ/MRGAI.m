@@ -497,7 +497,7 @@ static NSDictionary *openAIBody(MRGProvider p, NSString *model, NSString *system
                                                                 @{@"role": @"user", @"content": user}]} mutableCopy];
     if (!extras) return b;
     BOOL reasoning = (p == MRGProviderOpenAI && isReasoningOpenAI(model)) || [model containsString:@"gpt-oss"];
-    if (!reasoning) b[@"temperature"] = @0.9;
+    if (!reasoning) b[@"temperature"] = @0.6;   // 0.5.2: was 0.9; lower = fewer made-up details in the lines
     if (reasoning) b[@"reasoning_effort"] = @"low";
     if (p == MRGProviderXAI && [model hasPrefix:@"grok-4.3"]) b[@"reasoning_effort"] = @"none";
     if (json) b[@"response_format"] = @{@"type": @"json_object"};
@@ -556,7 +556,7 @@ static void chatOnce(NSString *system, NSString *user, BOOL json, void (^done)(N
     };
     switch (p) {
         case MRGProviderGemini: {
-            NSMutableDictionary *config = [@{@"temperature": @0.9} mutableCopy];
+            NSMutableDictionary *config = [@{@"temperature": @0.6} mutableCopy];
             if (json) config[@"responseMimeType"] = @"application/json";
             NSDictionary *body = @{@"systemInstruction": @{@"parts": @[@{@"text": system}]},
                                    @"contents": @[@{@"role": @"user", @"parts": @[@{@"text": user}]}],
@@ -566,7 +566,7 @@ static void chatOnce(NSString *system, NSString *user, BOOL json, void (^done)(N
             return;
         }
         case MRGProviderAnthropic: {
-            NSDictionary *body = @{@"model": model, @"max_tokens": @1500, @"system": system, @"temperature": @0.9,
+            NSDictionary *body = @{@"model": model, @"max_tokens": @1500, @"system": system, @"temperature": @0.6,
                                    @"messages": @[@{@"role": @"user", @"content": user}]};
             send(p, request(p, key, @"/messages", body), ^(id j, NSData *d, NSInteger s, NSString *e) { finish(textFromAnthropic(j), e); });
             return;
@@ -904,7 +904,7 @@ static NSDictionary *openAIToolBody(MRGProvider p, NSString *model, NSString *sy
     if (fns.count) b[@"tools"] = fns;
     if (extras) {
         BOOL reasoning = (p == MRGProviderOpenAI && isReasoningOpenAI(model)) || [model containsString:@"gpt-oss"];
-        if (reasoning) b[@"reasoning_effort"] = @"low"; else b[@"temperature"] = @0.7;
+        if (reasoning) b[@"reasoning_effort"] = @"low"; else b[@"temperature"] = @0.4;
         if (p == MRGProviderXAI && [model hasPrefix:@"grok-4.3"]) b[@"reasoning_effort"] = @"none";
     }
     return b;
@@ -1003,7 +1003,7 @@ static NSDictionary *geminiToolBody(NSString *system, NSArray *messages, NSArray
     NSMutableArray *decls = [NSMutableArray array];
     for (NSDictionary *t in tools) [decls addObject:@{@"name": t[@"name"], @"description": t[@"description"], @"parameters": t[@"parameters"]}];
     NSMutableDictionary *b = [@{@"systemInstruction": @{@"parts": @[@{@"text": system}]}, @"contents": contents,
-                                @"generationConfig": @{@"temperature": @0.7}} mutableCopy];
+                                @"generationConfig": @{@"temperature": @0.4}} mutableCopy];
     if (decls.count) b[@"tools"] = @[@{@"functionDeclarations": decls}];
     return b;
 }

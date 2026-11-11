@@ -156,6 +156,7 @@ static NSArray<NSDictionary *> *tools(void) {
         @"Rules:\n"
         @"- You can play anything: tracks, artists, playlists, albums, Liked Songs. NEVER tell the listener to tap, open or play something in Spotify themselves; do it with a tool, and if it fails say what failed.\n"
         @"- Use the function-calling tools to act. NEVER write a tool call, a function name, JSON or a spotify: URI in your reply text; the listener only sees your words and the cards.\n"
+        @"- Never state a music fact (who produced a song, how or where it was made, dates, labels, samples, collaborations) unless a tool returned it. Unknown? Say you don't know.\n"
         @"- For any fact about their listening (first plays, counts, top artists, dates) call a tool; never invent numbers or dates. The listening history on this phone covers: %@. If it doesn't cover what they ask, say so and tell them they can import their Spotify data in Settings → Mirage → AI DJ → Listening history.\n"
         @"- Before playing, queueing or adding specific songs, get real URIs with search.\n"
         @"- delete_playlist only shows a Delete button; it's deleted only if they tap it. Never claim it is deleted.\n"

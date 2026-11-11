@@ -1081,10 +1081,19 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 
 // The lyrics opened over the player: a visible Lyrics view taller than half of it.
 static BOOL lyricsOpen(UIView *root) {
+    // Walked at most twice a second (it runs on the header's layout passes).
+    static CFTimeInterval at;
+    static BOOL last;
+    static __weak UIView *lastRoot;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (lastRoot == root && now - at < 0.5) return last;
+    at = now;
+    lastRoot = root;
     UIView *l = findView(root, ^BOOL(UIView *v) {
         return classNamed(v, @"Lyrics") && v.bounds.size.height > root.bounds.size.height * 0.5 && visibleOnScreen(v);
     });
-    return l != nil;
+    last = l != nil;
+    return last;
 }
 
 @implementation MRGDJNowBar {
@@ -1343,6 +1352,18 @@ static UIView *playerRoot(UIView *v) {
     return root;
 }
 
+// 0.5.2: the bar goes in the player's card (the nearest ancestor about the window's size), which moves when the player
+// is pulled down; 0.5.1 put it in a container above the card, so it floated over the header while the card slid.
+static UIView *playerCard(UIView *v) {
+    CGSize win = v.window ? v.window.bounds.size : UIScreen.mainScreen.bounds.size;
+    for (UIView *p = v; p && p != v.window; p = p.superview) {
+        if ([p isKindOfClass:UIScrollView.class]) continue;
+        CGSize z = p.bounds.size;
+        if (fabs(z.width - win.width) < win.width * 0.1 && fabs(z.height - win.height) < win.height * 0.12) return p;
+    }
+    return nil;
+}
+
 static UIStackView *headerRow(UIView *host) {
     return (UIStackView *)findView(host, ^BOOL(UIView *v) {
         if (![v isKindOfClass:UIStackView.class]) return NO;
@@ -1401,7 +1422,7 @@ void MRGDJPlacePlayerButton(UIViewController *unit) {
     [button matchGlass:moreGlass];
     button.hidden = more.hidden || more.alpha < 0.01;
 
-    UIView *root = playerRoot(host);
+    UIView *root = playerCard(host) ?: playerRoot(host);
     if (!bar) {
         bar = [MRGDJNowBar new];
         objc_setAssociatedObject(unit, &kNowBarKey, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
