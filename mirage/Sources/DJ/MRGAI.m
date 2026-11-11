@@ -1,3 +1,4 @@
+#import <QuartzCore/QuartzCore.h>
 #import "MRGAI.h"
 #import "MRGDJLog.h"
 #import "MRGKeychain.h"
@@ -173,7 +174,28 @@ static NSString *const kRecommendedKey = @"mirage.dj.recommended";
 static NSString *const kOverrideKey = @"mirage.dj.model";
 static NSString *const kGeminiQueryKey = @"mirage.dj.geminiKeyInQuery";
 
+// The backup key (optional): when the main key answers 429 (out of tokens or rate-limited), the DJ uses the backup's
+// provider and model for 30 minutes.
+static NSString *const kBackupKey = @"ai-key-backup";
+static CFTimeInterval sg_backupUntil;
+MRGProvider MRGAIBackupProvider(void) {
+    if (!MRGKeychainGet(kBackupKey).length) return MRGProviderNone;
+    NSInteger p = [D() integerForKey:@"mirage.dj.backupProvider"];
+    return [MRGAllProviders() containsObject:@(p)] ? p : MRGProviderNone;
+}
+NSString *MRGAIBackupModel(void) { return [D() stringForKey:@"mirage.dj.backupModel"]; }
+static BOOL backupActive(void) { return sg_backupUntil > CACurrentMediaTime() && MRGAIBackupProvider() != MRGProviderNone && MRGAIBackupModel().length; }
+BOOL MRGAIUsingBackup(void) { return backupActive(); }
+static NSString *activeKey(void) { return backupActive() ? MRGKeychainGet(kBackupKey) : MRGKeychainAPIKey(); }
+void MRGAIForgetBackup(void) {
+    MRGKeychainSet(kBackupKey, nil);
+    [D() removeObjectForKey:@"mirage.dj.backupProvider"];
+    [D() removeObjectForKey:@"mirage.dj.backupModel"];
+    sg_backupUntil = 0;
+}
+
 MRGProvider MRGAIProvider(void) {
+    if (backupActive()) return MRGAIBackupProvider();
     if (!MRGKeychainAPIKey()) return MRGProviderNone;
     NSInteger p = [D() integerForKey:kProviderKey];
     return [MRGAllProviders() containsObject:@(p)] ? p : MRGProviderNone;
@@ -184,7 +206,7 @@ NSArray<NSString *> *MRGAIModels(void) {
     for (id m in [D() arrayForKey:kModelsKey]) if ([m isKindOfClass:NSString.class]) [a addObject:m];
     return a;
 }
-NSString *MRGAIModel(void) { return [D() stringForKey:kOverrideKey] ?: MRGAIRecommendedModel(); }
+NSString *MRGAIModel(void) { return backupActive() ? MRGAIBackupModel() : ([D() stringForKey:kOverrideKey] ?: MRGAIRecommendedModel()); }
 BOOL MRGAIHasOverride(void) { return [D() stringForKey:kOverrideKey] != nil; }
 void MRGAISetModelOverride(NSString *model) {
     if (model.length && ![model isEqualToString:MRGAIRecommendedModel()]) [D() setObject:model forKey:kOverrideKey];
@@ -407,6 +429,22 @@ void MRGAISetupKeyAs(NSString *raw, MRGProvider chosen, void (^done)(BOOL, NSStr
     validate(NO);
 }
 
+void MRGAISetupBackupKey(NSString *raw, void (^done)(BOOL, NSString *)) {
+    NSString *key = [[raw ?: @"" componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsJoinedByString:@""];
+    if (!key.length) { MRGAIForgetBackup(); done(YES, @"Backup key removed."); return; }
+    MRGProvider p = MRGDetectProvider(key);
+    if (p == MRGProviderNone) { done(NO, @"Mirage can't tell the provider from this key's format. Use a key with a prefix (gsk_, AIza…, sk-or-, csk-…)."); return; }
+    send(p, requestWith(p, key, modelsPath(p), nil, NO), ^(id json, NSData *data, NSInteger status, NSString *error) {
+        if (error) { done(NO, error); return; }
+        NSString *pick = MRGAIPickModel(p, modelIDs(p, json));
+        if (!pick) { done(NO, [NSString stringWithFormat:@"%@ accepted the key but listed no chat model Mirage can use.", MRGProviderName(p)]); return; }
+        if (!MRGKeychainSet(kBackupKey, key)) { done(NO, @"Couldn't save the key on this phone."); return; }
+        [D() setInteger:p forKey:@"mirage.dj.backupProvider"];
+        [D() setObject:pick forKey:@"mirage.dj.backupModel"];
+        done(YES, [NSString stringWithFormat:@"Backup saved: %@ (%@). When the main key runs out (HTTP 429), Mirage uses this one for 30 minutes.", MRGProviderName(p), pick]);
+    });
+}
+
 #pragma mark - chat
 
 static BOOL isReasoningOpenAI(NSString *m) {
@@ -470,7 +508,7 @@ static NSDictionary *openAIBody(MRGProvider p, NSString *model, NSString *system
 // groundingMetadata.groundingChunks[].web). Other providers answer done(nil, nil, nil) right away (nothing grounded).
 void MRGAIGrounded(NSString *question, void (^done)(NSString *text, NSArray<NSDictionary *> *sources, NSString *error)) {
     MRGProvider p = MRGAIProvider();
-    NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();
+    NSString *key = activeKey(), *model = MRGAIModel();
     if (p != MRGProviderGemini || !key || !model) { done(nil, nil, nil); return; }
     NSDictionary *body = @{@"contents": @[@{@"role": @"user", @"parts": @[@{@"text": question}]}],
                            @"tools": @[@{@"google_search": @{}}],
@@ -493,9 +531,24 @@ void MRGAIGrounded(NSString *question, void (^done)(NSString *text, NSArray<NSDi
     });
 }
 
+static void chatOnce(NSString *system, NSString *user, BOOL json, void (^done)(NSString *, NSString *));
+// A 429 from the main key with a backup saved: the backup takes over for 30 minutes and the call is sent again.
+static BOOL switchToBackup(NSString *error) {
+    if (![error containsString:@"HTTP 429"] || backupActive() || MRGAIBackupProvider() == MRGProviderNone || !MRGAIBackupModel().length) return NO;
+    MRGProvider main = MRGAIProvider();
+    sg_backupUntil = CACurrentMediaTime() + 30 * 60;
+    MRGDJLog(@"ai: %@ is out of quota or rate-limited (429); using the backup key (%@, %@) for 30 minutes", MRGProviderName(main), MRGProviderName(MRGAIBackupProvider()), MRGAIBackupModel());
+    return YES;
+}
 void MRGAIChat(NSString *system, NSString *user, BOOL json, void (^done)(NSString *, NSString *)) {
+    chatOnce(system, user, json, ^(NSString *text, NSString *error) {
+        if (error && switchToBackup(error)) { chatOnce(system, user, json, done); return; }
+        done(text, error);
+    });
+}
+static void chatOnce(NSString *system, NSString *user, BOOL json, void (^done)(NSString *, NSString *)) {
     MRGProvider p = MRGAIProvider();
-    NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();
+    NSString *key = activeKey(), *model = MRGAIModel();
     if (p == MRGProviderNone || !key || !model) { done(nil, @"Add an API key in Mirage settings first."); return; }
     void (^finish)(NSString *, NSString *) = ^(NSString *text, NSString *error) {
         if (!error && !text.length) error = [NSString stringWithFormat:@"%@ sent an empty answer. Try again.", MRGProviderName(p)];
@@ -601,7 +654,7 @@ static NSString *defaultVoice(MRGProvider p) {
 
 void MRGAIProviderVoices(void (^done)(NSArray<NSDictionary *> *)) {
     MRGProvider p = MRGAIProvider();
-    NSString *key = MRGKeychainAPIKey();
+    NSString *key = activeKey();
     NSMutableArray *out = [NSMutableArray array];
     for (NSString *v in docVoices(p)) [out addObject:@{@"id": v, @"name": v.capitalizedString}];
     if (p != MRGProviderXAI || !key) { done(out); return; }
@@ -620,7 +673,7 @@ void MRGAIProviderVoices(void (^done)(NSArray<NSDictionary *> *)) {
 
 void MRGAISpeech(NSString *text, NSString *voice, double speed, NSString *instructions, void (^done)(NSData *, NSString *)) {
     MRGProvider p = MRGAIProvider();
-    NSString *key = MRGKeychainAPIKey();
+    NSString *key = activeKey();
     if (!key || !MRGProviderHasTTS(p)) { done(nil, @"This provider has no voice; using the phone's."); return; }
     NSString *v = voice.length ? voice : defaultVoice(p);
     if (speed <= 0) speed = 1;
@@ -973,10 +1026,18 @@ static NSDictionary *geminiToolAnswer(id json) {
     return @{@"role": @"assistant", @"content": text, @"tool_calls": calls, @"raw": parts};
 }
 
+static void chatToolsOnce(NSString *system, NSArray<NSDictionary *> *messages, NSArray<NSDictionary *> *tools, void (^done)(NSDictionary *, NSString *));
 void MRGAIChatTools(NSString *system, NSArray<NSDictionary *> *messages, NSArray<NSDictionary *> *tools,
                     void (^done)(NSDictionary *, NSString *)) {
+    chatToolsOnce(system, messages, tools, ^(NSDictionary *a, NSString *error) {
+        if (error && switchToBackup(error)) { chatToolsOnce(system, messages, tools, done); return; }
+        done(a, error);
+    });
+}
+static void chatToolsOnce(NSString *system, NSArray<NSDictionary *> *messages, NSArray<NSDictionary *> *tools,
+                    void (^done)(NSDictionary *, NSString *)) {
     MRGProvider p = MRGAIProvider();
-    NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();
+    NSString *key = activeKey(), *model = MRGAIModel();
     if (p == MRGProviderNone || !key || !model) { done(nil, @"Add an API key in Mirage settings first."); return; }
     NSMutableSet *names = [NSMutableSet set];
     for (NSDictionary *t in tools) if ([t[@"name"] isKindOfClass:NSString.class]) [names addObject:t[@"name"]];

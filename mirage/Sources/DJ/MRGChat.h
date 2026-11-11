@@ -29,4 +29,6 @@ extern NSString *const MRGChatChangedNotification;   // main queue
 - (void)cancelDelete:(MRGChatItem *)card;
 - (void)playTrack:(NSDictionary *)track;      // from a card's play button
 - (void)reset;
+// Runs one of the chat's tools directly (the DJ sheet uses play_context for playlists and albums). Main queue.
+- (void)runTool:(NSString *)name args:(NSDictionary *)args done:(void (^)(id result))done;
 @end

@@ -11,6 +11,7 @@
 #import "MRGVoice.h"
 #import "MRGKeychain.h"
 #import "MRGChatView.h"
+#import "MRGAddons.h"
 #import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
@@ -28,7 +29,7 @@ typedef NS_ENUM(NSInteger, MRGSection) { MRGSecPreview, MRGSecMedia, MRGSecLook,
 
 // The AI DJ page's groups, as rows of the old DJ section (djCell: row numbers; 12 is Talk like me).
 static NSArray<NSArray<NSNumber *> *> *djGroups(void) {
-    return @[@[@0, @1, @2], @[@3, @4, @12], @[@6], @[@7, @8, @9], @[@10, @5, @11]];
+    return @[@[@0, @1, @2, @13], @[@3, @4, @12], @[@6], @[@7, @8, @9], @[@10, @5, @11]];
 }
 static NSArray<NSString *> *djGroupTitles(void) { return @[@"AI provider", @"Voice & personality", @"Your listening", @"On screen", @"Mirage DJ"]; }
 
@@ -117,7 +118,7 @@ static const CGFloat kBottomChrome = 150;
 - (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
     if (self.djOnly) {
         switch (s) {
-            case 0: return @"Bring your own key: OpenAI, Gemini (Google AI Studio keys, AQ.… or AIza…), Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together, DeepSeek or Mistral. The key stays in this phone's keychain.";
+            case 0: return @"Bring your own key: OpenAI, Gemini (Google AI Studio keys, AQ.… or AIza…), Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together, DeepSeek or Mistral. Keys stay in this phone's keychain.\nFree tiers run out: on Groq pick llama-3.1-8b-instant or llama-3.3-70b-versatile (more tokens a day than gpt-oss-120b), on Gemini gemini-2.5-flash-lite; Cerebras and OpenRouter's :free models are free too. A backup key (another provider or account) takes over for 30 minutes when the main one answers 429.";
             case 1: return @"Talk like me: the DJ mirrors how you write to it in the chat (your last messages, kept on this phone, go to your provider with each request). Turn it off to keep only the persona.";
             case 2: return @"The DJ picks and talks from what you actually play: on repeat lately, your top artists and throwbacks, from Mirage's own recording and any Spotify data you import.";
             case 4: return @"Privacy: only track and artist names (what's playing, your history summary, the queue), what you type, and answers a chat question needs are sent to your provider. On Spotify Free, Spotify may shuffle the set and its skip limit still applies.";
@@ -248,6 +249,14 @@ static UITableViewCell *baseCell(void) {
             c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             return c;
         }
+        case 13: {
+            UITableViewCell *c = [self actionCell:@"Backup key" symbol:@"arrow.triangle.2.circlepath" destructive:NO enabled:YES];
+            MRGProvider b = MRGAIBackupProvider();
+            c.detailTextLabel.text = b == MRGProviderNone ? @"Optional" : [NSString stringWithFormat:@"%@%@", MRGProviderName(b), MRGAIUsingBackup() ? @" · in use" : @""];
+            c.detailTextLabel.textColor = UIColor.grayColor;
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
         case 5: return [self actionCell:@"Chat with your DJ" symbol:@"bubble.left.and.text.bubble.right.fill" destructive:NO enabled:hasKey];
         case 7: return [self switchCell:@"Lower music while talking" on:MRGDJDucks() tag:20 symbol:@"speaker.badge.exclamationmark.fill"];
         case 8: return [self switchCell:@"DJ chip on Home" on:MRGDJShowsPill() tag:21 symbol:@"capsule.fill"];
@@ -299,6 +308,31 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
 }
 
 - (void)editKey { [self editKeyAs:MRGProviderNone]; }
+
+- (void)editBackupKey {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Backup key" message:@"A second key (another provider, or another free account). When the main key answers 429 (rate limit or daily tokens used up), the DJ uses this one for 30 minutes." preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f) {
+        f.placeholder = @"gsk_… / AIza… / sk-or-… / csk-…";
+        f.secureTextEntry = YES;
+        f.autocorrectionType = UITextAutocorrectionTypeNo;
+        f.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    }];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    if (MRGAIBackupProvider() != MRGProviderNone) [a addAction:[UIAlertAction actionWithTitle:@"Remove backup" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) { MRGAIForgetBackup(); [self reloadDJ]; }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        NSString *key = a.textFields.firstObject.text;
+        if (!key.length) return;
+        [self->_spinner startAnimating];
+        MRGAISetupBackupKey(key, ^(BOOL ok, NSString *message) {
+            [self->_spinner stopAnimating];
+            [self reloadDJ];
+            UIAlertController *r = [UIAlertController alertControllerWithTitle:ok ? @"Ready" : @"Couldn't use that key" message:message preferredStyle:UIAlertControllerStyleAlert];
+            [r addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:r animated:YES completion:nil];
+        });
+    }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
 
 - (void)reloadDJ { [self.tableView reloadData]; }
 
@@ -412,7 +446,14 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
             NSArray *symbols = @[@"house.fill", @"play.circle.fill", @"books.vertical.fill", @"square.stack.3d.up.fill", @"sidebar.left"];
             return [self switchCell:titles[ip.row] on:(screens & (1 << ip.row)) != 0 tag:100 + ip.row symbol:symbols[ip.row]];
         }
-        case MRGSecShop: return [self comingSoon:@"Addon Shop" symbol:@"bag.fill"];
+        case MRGSecShop: {
+            UITableViewCell *c = [self actionCell:@"Addon Shop" symbol:@"bag.fill" destructive:NO enabled:YES];
+            NSUInteger n = MRGAddonsInstalledCount();
+            c.detailTextLabel.text = n ? [NSString stringWithFormat:@"%lu installed", (unsigned long)n] : @"Browse";
+            c.detailTextLabel.textColor = UIColor.grayColor;
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
         case MRGSecDJ: {
             UITableViewCell *c = [self actionCell:@"AI DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
             MRGProvider provider = MRGAIProvider();
@@ -447,9 +488,11 @@ static NSString *ip3(NSInteger row) { return row == 3 ? @"Voice" : row == 4 ? @"
         else if (row == 6) MRGPushPage(self, MRGHistoryPage());
         else if (row == 10) MRGShowDJ(self);
         else if (row == 11) MRGPushPage(self, MRGDJLogPage());
+        else if (row == 13) [self editBackupKey];
         return;
     }
     if (ip.section == MRGSecDJ) { MRGShowDJSettings(self); return; }
+    if (ip.section == MRGSecShop) { MRGPushPage(self, MRGAddonShopPage()); return; }
     if (ip.section != MRGSecMedia) return;
     if (ip.row == 0) [self pickFromPhotos];
     else if (ip.row == 1) [self pickFromFiles];

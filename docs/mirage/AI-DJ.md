@@ -2,6 +2,36 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.5.0 (song requests, free voices, Addon Shop)
+
+- **Song requests.** "play orula by victor mendivil" (or "play orula") finds that exact track with a Spotify search
+  (`track:` / `artist:`), plays it first, then queues recommendations seeded from it: similar songs and artists, not
+  the artist's whole catalog. Only "play <artist>" alone plays from the artist. "play the ... playlist" / "... album"
+  opens it (your own library playlists are checked first). The log says which one it picked: `focus: [track]`,
+  `[artist]`, `[playlist]`, `[album]` or `[vibe]`.
+- **No more overlap.** A new request cancels the set being planned (refills from the old one are dropped), and only
+  one voice line plays at a time: a line that was cut off no longer ends the new one early.
+- **Free voices.** The default engine is now **Free (Microsoft Edge voices, unofficial)**: the read-aloud voices from
+  Microsoft Edge, no key, no account. It is unofficial: Microsoft can change or block it at any time, it has no
+  whisper or emotion styles, and if it fails the DJ says so and uses the iPhone voice.
+- **Qwen TTS** (Alibaba Cloud Model Studio, international/Singapore) with your own DashScope key. New accounts get a
+  free quota (10,000 characters for 90 days at the time of writing); after that it is about $0.10 per 10,000
+  characters and **it bills automatically unless you turn on "Free quota only"** in the Model Studio console. Mirage
+  uses the instruct model (style control) when the key allows it, else qwen3-tts-flash.
+- **Presets** (Soft & Soothing, Soft & Close, Classic Whisper, Playful Spark, Hype, Late Night, Narrator, Classic)
+  each have an Edge voice and a Qwen voice. Picking one uses Qwen when a key is saved, else Free. An engine you
+  picked yourself (ElevenLabs, Provider) is kept, and when a paid engine fails the error is shown; nothing swaps silently.
+- **Nothing in the cloud is unlimited.** Edge is free but unofficial; Qwen's free quota runs out; ElevenLabs' free plan
+  can't use library voices through the API (HTTP 402); Groq's Orpheus voices need their terms accepted in the Groq
+  console first; Gemini TTS has a small daily free tier. The iPhone voices are the only unlimited, offline option.
+- **Fewer AI tokens.** Shorter instructions, less history and taste context per request, and fewer "ask for more"
+  calls. Settings lists free-tier-friendly models (Groq llama-3.1-8b-instant, Gemini 2.5 Flash-Lite, Cerebras,
+  OpenRouter `:free`).
+- **Backup key.** Settings → AI DJ → Backup key: a second provider/key that takes over for 30 minutes when the main one
+  answers HTTP 429 (rate limit or daily quota). The log says `ai: ... using the backup key`.
+- **Addon Shop.** See [ADDONS.md](ADDONS.md). The first addon, **Vinyl**, turns Now Playing into a record sleeve with a
+  spinning record peeking out.
+
 ## What's new in 0.4.4 (ElevenLabs presets)
 
 - **Why Arabella sounded like Samantha**: picking a preset wrote the ElevenLabs voice but never switched the engine to

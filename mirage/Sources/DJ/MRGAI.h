@@ -42,6 +42,12 @@ void MRGAISetupKey(NSString *key, void (^done)(BOOL ok, NSString *message));
 // and its own message.
 void MRGAISetupKeyAs(NSString *key, MRGProvider provider, void (^done)(BOOL ok, NSString *message));
 void MRGAIForgetKey(void);
+// An optional backup key (another provider, or another account): used for 30 minutes when the main key answers 429.
+void MRGAISetupBackupKey(NSString *key, void (^done)(BOOL ok, NSString *message));   // nil or empty removes it
+MRGProvider MRGAIBackupProvider(void);
+NSString *MRGAIBackupModel(void);
+BOOL MRGAIUsingBackup(void);
+void MRGAIForgetBackup(void);
 
 // One chat turn. json: ask for a JSON object back (each provider's JSON mode, where it has one).
 void MRGAIChat(NSString *system, NSString *user, BOOL json, void (^done)(NSString *text, NSString *error));

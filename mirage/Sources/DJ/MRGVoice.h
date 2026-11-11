@@ -8,10 +8,14 @@ typedef NS_ENUM(NSInteger, MRGVoiceEngine) {
     MRGVoiceEngineProvider = 1,   // the AI provider's speech (OpenAI, Gemini, xAI, Groq)
     MRGVoiceEngineEleven = 2,     // ElevenLabs, with its own key
     MRGVoiceEngineOff = 3,
+    MRGVoiceEngineQwen = 4,       // Qwen3-TTS (Alibaba Cloud Model Studio), with the listener's DashScope key
+    MRGVoiceEngineFree = 5,       // Microsoft Edge's read-aloud voices: free, no key, unofficial (the default)
 };
+NSString *MRGVoiceEngineName(MRGVoiceEngine e);
 
 MRGVoiceEngine MRGVoiceGetEngine(void);
 void MRGVoiceSetEngine(MRGVoiceEngine e);
+void MRGVoiceChooseEngine(MRGVoiceEngine e);   // the listener's own pick in Who speaks: presets keep it
 double MRGVoiceSpeed(void);            // 0.6 … 1.5, 1 = normal
 void MRGVoiceSetSpeed(double s);
 double MRGVoicePitch(void);            // 0.75 … 1.5 (iPhone voices; a "lower/higher register" instruction for styled engines)

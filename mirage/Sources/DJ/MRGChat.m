@@ -366,6 +366,11 @@ static BOOL meansLiked(NSString *t) {
     }];
 }
 
+- (void)runTool:(NSString *)name args:(NSDictionary *)args done:(void (^)(id))done {
+    @try { [self run:name args:args ?: @{} answer:^(id result) { dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(result); }); }]; }
+    @catch (NSException *e) { if (done) done(@{@"error": e.reason ?: @"failed"}); }
+}
+
 - (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(id))answer {
     if ([name isEqualToString:@"artist_info"]) {
         NSString *artist = str(args[@"artist"]), *track = str(args[@"track"]);
