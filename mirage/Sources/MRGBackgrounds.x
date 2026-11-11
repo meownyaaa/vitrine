@@ -189,8 +189,29 @@ static void detachDescendants(UIView *host) {
     }
 }
 
+// The side drawer is never given a background (nor has its fills cleared): it is a sheet over the app,
+// and its list carries Vitrine's and Mirage's own rows. Looked up once per host.
+static char kDrawerHostKey;
+static BOOL isDrawerHost(UIView *host) {
+    NSNumber *known = objc_getAssociatedObject(host, &kDrawerHostKey);
+    if (known) return known.boolValue;
+    if (!host.subviews.count) return NO;   // not built yet: ask again next pass
+    BOOL drawer = NO;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:host.subviews];
+    NSUInteger seen = 0;
+    while (stack.count && seen++ < 2000 && !drawer) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:UICollectionViewCell.class]) continue;
+        if ([NSStringFromClass(v.class) containsString:@"SideDrawer"]) drawer = YES;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    objc_setAssociatedObject(host, &kDrawerHostKey, @(drawer), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return drawer;
+}
+
 static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!host) return;
+    if (screen == MRGScreenEverywhere && isDrawerHost(host)) { detach(host); return; }
     if (!MRGWantsScreen(screen) || (!onTop && ancestorHasBackground(host))) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
     if (!bg) {

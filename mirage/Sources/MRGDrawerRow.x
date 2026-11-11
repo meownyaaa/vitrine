@@ -25,8 +25,11 @@ static char kRowKey;
 // so they compare a class pointer before they look anything up.
 static Class sg_drawerClass;
 
+// Every hook below touches nothing but the drawer list instances Mirage put its row into: the exact
+// drawer class, and the row tag on that instance. Spotify's settings list, Vitrine's settings-list row
+// and every other collection view go through untouched.
 static inline BOOL hasRow(UIView *v) {
-    return sg_drawerClass && object_getClass(v) == sg_drawerClass && objc_getAssociatedObject(v, &kRowKey);
+    return sg_drawerClass && object_getClass(v) == sg_drawerClass && objc_getAssociatedObject(v, &kRowKey) != nil;
 }
 
 @interface MRGDrawerRow : UIControl
@@ -200,7 +203,9 @@ static void attachRow(UICollectionView *list) {
 %hook SGModSettingsRow
 - (void)setFrame:(CGRect)frame {
     UIView *list = ((UIView *)self).superview;
-    if (list && hasRow(list) && frame.origin.y < 0 && frame.origin.y > -2 * kRowHeight + 0.5)
+    id me = (id)self;
+    BOOL drawerRow = [me respondsToSelector:@selector(drawer)] && ((BOOL (*)(id, SEL))objc_msgSend)(me, @selector(drawer));
+    if (drawerRow && list && hasRow(list) && frame.origin.y < 0 && frame.origin.y > -2 * kRowHeight + 0.5)
         frame.origin.y = -2 * kRowHeight;
     %orig(frame);
 }
