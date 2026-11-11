@@ -70,14 +70,39 @@ static void detach(UIView *host) {
     forEachFullSizeView(host, host.bounds.size, 0, ^(UIView *v) { restoreView(v); });
 }
 
+// One background per stack of hosts: Home's Funkis page holds the Evo page, every page sits in a
+// MusicAppPageHostingViewController, and page hosts can nest. The outermost host that wants one keeps
+// it; an inner host whose ancestor already has one stands down, and a new outer one takes over from any
+// inner ones. The now playing plane (onTop) is its own stack.
+static BOOL ancestorHasBackground(UIView *host) {
+    for (UIView *v = host.superview; v; v = v.superview) {
+        MRGBackgroundView *bg = objc_getAssociatedObject(v, &kBackgroundKey);
+        if (bg && bg.superview == v && !bg.hidden) return YES;
+    }
+    return NO;
+}
+
+static void detachDescendants(UIView *host) {
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:host.subviews];
+    NSUInteger seen = 0;
+    while (stack.count && seen++ < 5000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:MRGBackgroundView.class]) continue;
+        if (objc_getAssociatedObject(v, &kBackgroundKey)) detach(v);
+        [stack addObjectsFromArray:v.subviews];
+    }
+}
+
 static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!host) return;
-    if (!MRGWantsScreen(screen)) { detach(host); return; }
+    if (!MRGWantsScreen(screen) || (!onTop && ancestorHasBackground(host))) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
     if (!bg) {
         bg = [[MRGBackgroundView alloc] initWithFrame:host.bounds];
         objc_setAssociatedObject(host, &kBackgroundKey, bg, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!onTop) detachDescendants(host);
     }
+    if (bg.hidden) bg.hidden = NO;
     if (bg.superview != host) [host insertSubview:bg atIndex:0];
     if (onTop) { if (host.subviews.lastObject != bg) [host bringSubviewToFront:bg]; }
     else if (host.subviews.firstObject != bg) [host sendSubviewToBack:bg];
@@ -94,6 +119,13 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
         clearView(host);
         forEachFullSizeView(host, host.bounds.size, 0, ^(UIView *v) { clearView(v); });
     }
+}
+
+// Off screen but still in the window (a page covered by the one pushed over it): the same instance stays
+// on the host, hidden, so the video engine stops counting it and nothing is re-added on the way back.
+static void hostDisappeared(UIView *host) {
+    MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
+    if (bg && !bg.hidden) bg.hidden = YES;
 }
 
 #pragma mark - keeping cleared views clear
@@ -114,18 +146,27 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
 %group MRGHome
 %hook _TtC19Home_FunkisPageImpl20FunkisViewController
 - (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; hostDisappeared(((UIViewController *)self).view); }
 %end
 %end
 
 %group MRGHomeEvo
 %hook _TtC16Home_EvoPageImpl33EvoLoadableResourceViewController
 - (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenHome, NO); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; hostDisappeared(((UIViewController *)self).view); }
 %end
 %end
 
 %group MRGLibrary
 %hook _TtC28YourLibrary_YourLibraryXImpl25YourLibraryViewController
 - (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenLibrary, NO); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenLibrary, NO); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenLibrary, NO); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; hostDisappeared(((UIViewController *)self).view); }
 %end
 %end
 
@@ -136,12 +177,18 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
 %group MRGNowPlaying
 %hook _TtC21NowPlaying_ScrollImpl27NPVBackgroundViewController
 - (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenNowPlaying, YES); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; hostDisappeared(((UIViewController *)self).view); }
 %end
 %end
 
 %group MRGEverywhere
 %hook _TtC33Navigation_PageAPIIntegrationImpl33MusicAppPageHostingViewController
 - (void)viewDidLayoutSubviews { %orig; attach(((UIViewController *)self).view, MRGScreenEverywhere, NO); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenEverywhere, NO); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attach(((UIViewController *)self).view, MRGScreenEverywhere, NO); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; hostDisappeared(((UIViewController *)self).view); }
 %end
 %end
 
