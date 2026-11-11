@@ -19,6 +19,8 @@
 
 static char kBackgroundKey, kClearedKey, kOriginalColorKey, kDarkOnlyKey;
 
+static void restoreTopFade(UIView *host);
+
 static BOOL isCleared(UIView *v) { return objc_getAssociatedObject(v, &kClearedKey) != nil; }
 
 static BOOL isVisibleColor(UIColor *c) { return c && CGColorGetAlpha(c.CGColor) > 0.01; }
@@ -113,7 +115,13 @@ static void clearCells(UIScrollView *list) {
 // as the page, at most 120pt tall, filled opaque near-black. Only that fill goes, like a cell's.
 static void clearPageBar(UIView *v, CGSize page) {
     CGSize s = v.bounds.size;
-    if (s.width < page.width * 0.9 || s.height > 120 || s.height < 1) return;
+    if (s.width < page.width * 0.9 || s.height < 1) return;
+    if (s.height <= 120) { clearDarkFill(v); return; }
+    // Taller ones only at the top of the page: the header block behind the status bar and a search field
+    // (Search with its field active is one, 160-250pt, painted black as the keyboard comes up).
+    if (s.height > 260 || !isDarkFill(v.backgroundColor)) return;
+    UIView *host = v.window ? (UIView *)v.window : nil;
+    if (!host || [v convertRect:v.bounds toView:host].origin.y > 1) return;
     clearDarkFill(v);
 }
 
@@ -185,6 +193,7 @@ static void detach(UIView *host) {
     if (!bg) return;
     [bg removeFromSuperview];
     objc_setAssociatedObject(host, &kBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    restoreTopFade(host);
     // Everything Mirage cleared under this host: page fills, list fills and cell fills.
     NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:host];
     NSUInteger seen = 0;
@@ -278,12 +287,16 @@ static BOOL isPageSized(UIView *host) {
     return page.width >= screen.width * 0.85 && page.height >= screen.height * 0.5;
 }
 
-static char kScreenKey;
-static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
+static char kScreenKey, kForcedKey;
+static void applyTopFade(UIView *host);
+
+// forced: a host picked by its own hook, not a page (the side drawer's panel, the Create sheet): neither
+// the page-size nor the excluded-host test applies, and extraDim darkens the picture under its text.
+static void attachWith(UIView *host, MRGScreen screen, BOOL onTop, BOOL forced, CGFloat extraDim) {
     if (!host) return;
     if (!onTop) objc_setAssociatedObject(host, &kScreenKey, @(screen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    BOOL drawer = screen == MRGScreenDrawer;
-    if (!onTop && !drawer && (!isPageSized(host) || isExcludedHost(host))) { detach(host); return; }
+    if (forced) objc_setAssociatedObject(host, &kForcedKey, @(extraDim), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!onTop && !forced && (!isPageSized(host) || isExcludedHost(host))) { detach(host); return; }
     if (!MRGWantsScreen(screen) || (!onTop && ancestorHasBackground(host))) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
     if (!bg) {
@@ -292,7 +305,7 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
         if (!onTop) detachDescendants(host);
     }
     if (bg.hidden) bg.hidden = NO;
-    if (bg.extraDim != (drawer ? 0.2 : 0)) bg.extraDim = drawer ? 0.2 : 0;
+    if (bg.extraDim != extraDim) bg.extraDim = extraDim;
     if (bg.superview != host) [host insertSubview:bg atIndex:0];
     if (onTop) { if (host.subviews.lastObject != bg) [host bringSubviewToFront:bg]; }
     else if (host.subviews.firstObject != bg) [host sendSubviewToBack:bg];
@@ -310,6 +323,60 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
         forEachFullSizeView(host, host.bounds.size, 0, ^(UIView *v) { clearView(v); });
         tagPageLists(host);
     }
+    if (!onTop && !forced) applyTopFade(host);
+}
+
+static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
+    NSNumber *forced = objc_getAssociatedObject(host, &kForcedKey);
+    attachWith(host, screen, onTop, forced != nil, forced.doubleValue);
+}
+
+#pragma mark - top fade
+
+// Spotify's scrim behind the status bar and the header (Home: a LiquidGlass.GradientView in a 402x112 wrapper
+// over the page, trees in tweak/Sources/Native/Home/HomeGradient.x; other pages have the same kind) fades
+// the top of the picture to black. "Top fade": Soft keeps a third of it, Off none, Full Spotify's own. Only
+// gradient views at the top of the page, as wide as it and at most 300pt tall; lists are not walked into.
+static char kFadeAlphaKey;
+static void fadeScrim(UIView *v, MRGTopFadeMode mode) {
+    NSNumber *saved = objc_getAssociatedObject(v, &kFadeAlphaKey);
+    if (mode == MRGTopFadeFull) {
+        if (saved) { v.alpha = saved.doubleValue; objc_setAssociatedObject(v, &kFadeAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        return;
+    }
+    CGFloat want = mode == MRGTopFadeOff ? 0 : 0.33;
+    if (!saved) {
+        // Spotify (or Vitrine, which hides it with its own Home gradient on) may already have it at 0.
+        if (v.alpha < 0.01 || v.hidden) return;
+        objc_setAssociatedObject(v, &kFadeAlphaKey, @(v.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (fabs(v.alpha - want) > 0.005) v.alpha = want;
+}
+
+static void forEachTopScrim(UIView *host, void (^block)(UIView *)) {
+    CGFloat width = host.bounds.size.width;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:host.subviews];
+    NSUInteger seen = 0;
+    while (stack.count && seen++ < 1500) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:UIScrollView.class] || [v isKindOfClass:MRGBackgroundView.class] ||
+            [v isKindOfClass:UIVisualEffectView.class]) continue;
+        CGSize s = v.bounds.size;
+        if ([NSStringFromClass(v.class) containsString:@"GradientView"] && s.width >= width * 0.9 && s.height <= 300 && s.height > 1) {
+            if ([v convertRect:v.bounds toView:host].origin.y <= 1) block(v);
+            continue;
+        }
+        if (s.width >= width * 0.9) [stack addObjectsFromArray:v.subviews];
+    }
+}
+
+static void applyTopFade(UIView *host) {
+    MRGTopFadeMode mode = MRGTopFade();
+    forEachTopScrim(host, ^(UIView *v) { fadeScrim(v, mode); });
+}
+
+static void restoreTopFade(UIView *host) {
+    forEachTopScrim(host, ^(UIView *v) { fadeScrim(v, MRGTopFadeFull); });
 }
 
 // A page that disappears keeps its background as it is. Hiding it here (0.1.1) went stale: Spotify calls
@@ -613,23 +680,114 @@ void MRGAdoptList(UIScrollView *list) {
 %end
 %end
 
-// The side drawer, with "Show in side drawer" on. The list's controller view sits inside the drawer's own
-// containers (SideDrawer_ECMKit.SideDrawerContainer and the like), which carry the drawer's gray, so the
-// background goes on the outermost of them a few levels up. Mirage's and Vitrine's rows have no fill of
-// their own and the row hooks (MRGDrawerRow.x) only touch the list's inset, so neither is affected.
-static UIView *drawerHost(UIView *listPage) {
-    UIView *host = listPage;
-    int depth = 0;
-    for (UIView *v = listPage.superview; v && depth < 6; v = v.superview, depth++)
-        if ([NSStringFromClass(v.class) containsString:@"SideDrawer"]) host = v;
+// The side drawer, with "Show in side drawer" on. 0.1.3 put the background on the outermost view named
+// SideDrawer a few levels up, and the drawer stayed gray: the gray is on the panel's own containers, which
+// are not all named so (the presented controller's view, plain wrappers). Now the host is the outermost
+// ancestor still the panel's width, stopping at the presentation's container (a transition view, the
+// window, the root controller's view) and at a view holding other full-size views beside the panel (a
+// shared container, the app itself). Every full-size view under it is cleared as on a page, so the gray
+// goes wherever it sits. Mirage's and Vitrine's rows have no fill of their own and the row hooks
+// (MRGDrawerRow.x) only touch the list's inset, so neither is affected.
+static BOOL holdsOtherFullSizeView(UIView *container, UIView *child) {
+    CGSize c = child.bounds.size;
+    for (UIView *sub in container.subviews) {
+        if (sub == child || sub.hidden || sub.alpha < 0.01 || [sub isKindOfClass:MRGBackgroundView.class]) continue;
+        if (sub.bounds.size.width >= c.width * 0.9 && sub.bounds.size.height >= c.height * 0.6) return YES;
+    }
+    return NO;
+}
+
+static UIView *panelHost(UIView *start) {
+    UIView *host = start;
+    CGFloat width = start.bounds.size.width;
+    if (width < 1) return start;
+    UIView *root = start.window.rootViewController.viewIfLoaded;
+    for (UIView *v = start.superview; v; v = v.superview) {
+        if ([v isKindOfClass:UIWindow.class] || v == root) break;
+        NSString *name = NSStringFromClass(v.class);
+        if ([name containsString:@"TransitionView"] || [name containsString:@"DimmingView"]) break;
+        if (v.bounds.size.width > width + 1) break;
+        if (holdsOtherFullSizeView(v, host)) break;
+        host = v;
+    }
     return host;
+}
+
+static void attachDrawer(UIView *listPage) {
+    if (!listPage.window) return;
+    attachWith(panelHost(listPage), MRGScreenDrawer, NO, YES, 0.2);
 }
 
 %group MRGDrawer
 %hook _TtC23SideDrawer_ListPageImpl18ListViewController
-- (void)viewDidLayoutSubviews { %orig; attach(drawerHost(((UIViewController *)self).view), MRGScreenDrawer, NO); }
-- (void)viewWillAppear:(BOOL)animated { %orig; attach(drawerHost(((UIViewController *)self).view), MRGScreenDrawer, NO); }
-- (void)viewDidAppear:(BOOL)animated { %orig; attach(drawerHost(((UIViewController *)self).view), MRGScreenDrawer, NO); }
+- (void)viewDidLayoutSubviews { %orig; attachDrawer(((UIViewController *)self).view); }
+- (void)viewWillAppear:(BOOL)animated { %orig; attachDrawer(((UIViewController *)self).view); }
+- (void)viewDidAppear:(BOOL)animated { %orig; attachDrawer(((UIViewController *)self).view); }
+%end
+%end
+
+// The Create (+) sheet, with Everywhere on: the sheet is a presented controller holding the menu's element
+// view; its view (and the presentation's own wrappers around it, panelHost) carries the opaque gray. The
+// background goes on that, a little dimmer for the menu's text.
+static UIViewController *presentedOwner(UIView *view) {
+    for (UIResponder *r = view.nextResponder; r; r = r.nextResponder) {
+        if (![r isKindOfClass:UIViewController.class]) continue;
+        UIViewController *vc = (UIViewController *)r;
+        while (vc.parentViewController) vc = vc.parentViewController;
+        return vc.presentingViewController ? vc : nil;
+    }
+    return nil;
+}
+
+static void attachSheet(UIView *menu) {
+    if (!menu.window) return;
+    UIViewController *owner = presentedOwner(menu);
+    UIView *sheet = owner.viewIfLoaded;
+    if (!sheet || sheet.bounds.size.height < 80) return;
+    attachWith(panelHost(sheet), MRGScreenEverywhere, NO, YES, 0.15);
+}
+
+%group MRGCreateSheet
+%hook _TtC23CreateMenu_PlatformImpl21CreateMenuElementView
+- (void)didMoveToWindow { %orig; attachSheet((UIView *)self); }
+- (void)layoutSubviews { %orig; attachSheet((UIView *)self); }
+%end
+%end
+
+%group MRGCreateSheetSectioned
+%hook _TtC23CreateMenu_PlatformImpl30SectionedCreateMenuElementView
+- (void)didMoveToWindow { %orig; attachSheet((UIView *)self); }
+- (void)layoutSubviews { %orig; attachSheet((UIView *)self); }
+%end
+%end
+
+// Search with its field active (Search_FeatureImpl: SearchUIContainerViewControllerImpl around
+// HeaderViewController and the recents / results pages): the header block behind and above the field is
+// painted solid black as the keyboard comes up. Its full-width containers lose their near-black fill and
+// keep it off (the CALayer hook drops a repaint); the field itself (a text field, or anything rounded) and
+// everything smaller than the header's width are left alone.
+static void clearSearchHeader(UIView *root, int depth) {
+    if (!root || depth > 4) return;
+    if ([root isKindOfClass:UITextField.class] || [root isKindOfClass:UIScrollView.class] ||
+        [root isKindOfClass:MRGBackgroundView.class] || [root isKindOfClass:UIVisualEffectView.class]) return;
+    if (root.layer.cornerRadius < 1) MRGClearDarkPersistently(root);
+    CGFloat width = root.bounds.size.width;
+    for (UIView *sub in root.subviews)
+        if (sub.bounds.size.width >= width * 0.98) clearSearchHeader(sub, depth + 1);
+}
+
+static BOOL searchWanted(void) {
+    return MRGClearPages() && MRGWantsScreen(MRGScreenEverywhere);
+}
+
+%group MRGSearch
+%hook _TtC18Search_FeatureImpl20HeaderViewController
+- (void)viewWillAppear:(BOOL)animated { %orig; if (searchWanted()) clearSearchHeader(((UIViewController *)self).view, 0); }
+- (void)viewDidLayoutSubviews { %orig; if (searchWanted()) clearSearchHeader(((UIViewController *)self).view, 0); }
+%end
+%hook _TtC18Search_FeatureImpl35SearchUIContainerViewControllerImpl
+- (void)viewWillAppear:(BOOL)animated { %orig; if (searchWanted()) clearSearchHeader(((UIViewController *)self).view, 0); }
+- (void)viewDidLayoutSubviews { %orig; if (searchWanted()) clearSearchHeader(((UIViewController *)self).view, 0); }
 %end
 %end
 
@@ -661,6 +819,10 @@ static void relayoutAll(void) {
         if (NSClassFromString(@"_TtC21NowPlaying_ScrollImpl27NPVBackgroundViewController")) %init(MRGNowPlaying);
         if (NSClassFromString(@"_TtC33Navigation_PageAPIIntegrationImpl33MusicAppPageHostingViewController")) %init(MRGEverywhere);
         if (NSClassFromString(@"_TtC23SideDrawer_ListPageImpl18ListViewController")) %init(MRGDrawer);
+        if (NSClassFromString(@"_TtC23CreateMenu_PlatformImpl21CreateMenuElementView")) %init(MRGCreateSheet);
+        if (NSClassFromString(@"_TtC23CreateMenu_PlatformImpl30SectionedCreateMenuElementView")) %init(MRGCreateSheetSectioned);
+        if (NSClassFromString(@"_TtC18Search_FeatureImpl20HeaderViewController") &&
+            NSClassFromString(@"_TtC18Search_FeatureImpl35SearchUIContainerViewControllerImpl")) %init(MRGSearch);
         [NSNotificationCenter.defaultCenter addObserverForName:MRGSettingsChangedNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
             dispatch_async(dispatch_get_main_queue(), ^{ relayoutAll(); });
         }];
