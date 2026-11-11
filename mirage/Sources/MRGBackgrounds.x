@@ -191,29 +191,68 @@ static void detachDescendants(UIView *host) {
     }
 }
 
-// The side drawer is never given a background (nor has its fills cleared): it is a sheet over the app,
-// and its list carries Vitrine's and Mirage's own rows. Looked up once per host.
-static char kDrawerHostKey;
-static BOOL isDrawerHost(UIView *host) {
-    NSNumber *known = objc_getAssociatedObject(host, &kDrawerHostKey);
-    if (known) return known.boolValue;
+// Hosts that are never given a background, nor have their fills cleared:
+//  - the side drawer: a sheet over the app whose list carries Vitrine's and Mirage's own rows;
+//  - the now playing bar's page (NowPlaying_BarPageImpl, a TouchPassthroughView as wide as the screen)
+//    and anything holding the bar or the tab bar. In the minimized tab bar Vitrine moves the bar's
+//    container into the row by a transform (Redesigned/NowPlayingBar/NowPlayingBar.x placeInline) while
+//    the page around it keeps the old full-width frame, so a background there was a full-width slab of
+//    the picture left behind and sliding around with the pill;
+//  - the full player's own pages (it has its own background, onTop).
+// A host is also too small to be a page if it is not most of the window (a bar, a card, a sheet's grabber).
+static char kExcludedKey;
+static NSArray<NSString *> *excludedMarkers(void) {
+    static NSArray *markers;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ markers = @[@"SideDrawer", @"NowPlaying_Bar", @"NowPlaying_View", @"MainUI_TabBar"]; });
+    return markers;
+}
+
+static BOOL isExcludedClass(Class cls) {
+    if ([cls isSubclassOfClass:UITabBar.class]) return YES;
+    NSString *name = NSStringFromClass(cls);
+    for (NSString *m in excludedMarkers()) if ([name containsString:m]) return YES;
+    return NO;
+}
+
+static BOOL isExcludedHost(UIView *host) {
     if (!host.subviews.count) return NO;   // not built yet: ask again next pass
-    BOOL drawer = NO;
+    // A yes stays yes; a no is checked again now and then, since the bar's page can be added later.
+    NSArray *known = objc_getAssociatedObject(host, &kExcludedKey);
+    CFTimeInterval now = CACurrentMediaTime();
+    if (known && ([known[0] boolValue] || now - [known[1] doubleValue] < 2)) return [known[0] boolValue];
+    BOOL excluded = NO;
+    // Above the host only the bar's and the drawer's own containers count: every page sits under the tab
+    // bar controller's views, whose names can hold "TabBar" too.
+    for (UIView *v = host.superview; v && !excluded; v = v.superview) {
+        NSString *name = NSStringFromClass(v.class);
+        excluded = [name containsString:@"NowPlaying_Bar"] || [name containsString:@"SideDrawer"];
+    }
+    for (UIResponder *r = host.nextResponder; r && !excluded && ![r isKindOfClass:UIView.class]; r = r.nextResponder)
+        excluded = isExcludedClass(r.class);
     NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:host.subviews];
     NSUInteger seen = 0;
-    while (stack.count && seen++ < 2000 && !drawer) {
+    while (stack.count && seen++ < 2500 && !excluded) {
         UIView *v = stack.lastObject; [stack removeLastObject];
-        if ([v isKindOfClass:UICollectionViewCell.class]) continue;
-        if ([NSStringFromClass(v.class) containsString:@"SideDrawer"]) drawer = YES;
+        if ([v isKindOfClass:UICollectionViewCell.class] || [v isKindOfClass:UITableViewCell.class] ||
+            [v isKindOfClass:MRGBackgroundView.class]) continue;
+        if (isExcludedClass(v.class)) excluded = YES;
         [stack addObjectsFromArray:v.subviews];
     }
-    objc_setAssociatedObject(host, &kDrawerHostKey, @(drawer), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    return drawer;
+    objc_setAssociatedObject(host, &kExcludedKey, @[@(excluded), @(now)], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return excluded;
+}
+
+static BOOL isPageSized(UIView *host) {
+    UIWindow *w = host.window;
+    if (!w) return YES;   // laid out before it is on screen: judged again once it is
+    CGSize page = host.bounds.size, screen = w.bounds.size;
+    return page.width >= screen.width * 0.85 && page.height >= screen.height * 0.5;
 }
 
 static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!host) return;
-    if (screen == MRGScreenEverywhere && isDrawerHost(host)) { detach(host); return; }
+    if (!onTop && (!isPageSized(host) || isExcludedHost(host))) { detach(host); return; }
     if (!MRGWantsScreen(screen) || (!onTop && ancestorHasBackground(host))) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
     if (!bg) {
