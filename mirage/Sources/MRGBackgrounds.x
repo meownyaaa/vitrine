@@ -277,8 +277,10 @@ static BOOL isPageSized(UIView *host) {
     return page.width >= screen.width * 0.85 && page.height >= screen.height * 0.5;
 }
 
+static char kScreenKey;
 static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     if (!host) return;
+    if (!onTop) objc_setAssociatedObject(host, &kScreenKey, @(screen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!onTop && (!isPageSized(host) || isExcludedHost(host))) { detach(host); return; }
     if (!MRGWantsScreen(screen) || (!onTop && ancestorHasBackground(host))) { detach(host); return; }
     MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
@@ -307,11 +309,13 @@ static void attach(UIView *host, MRGScreen screen, BOOL onTop) {
     }
 }
 
-// Off screen but still in the window (a page covered by the one pushed over it): the same instance stays
-// on the host, hidden, so the video engine stops counting it and nothing is re-added on the way back.
+// A page that disappears keeps its background as it is. Hiding it here (0.1.1) went stale: Spotify calls
+// viewDidDisappear on a page that is still on screen (Library's grid/list switch, a tab's own child pages),
+// and the page stayed black, its background hidden, until the next layout pass, which a scroll or the side
+// drawer's peek brought. Visibility is the window's business now: the background view leaves the video
+// engine when it leaves the window (MRGBackgroundView didMoveToWindow), and is shown on every appear and pass.
 static void hostDisappeared(UIView *host) {
-    MRGBackgroundView *bg = objc_getAssociatedObject(host, &kBackgroundKey);
-    if (bg && !bg.hidden) bg.hidden = YES;
+    (void)host;
 }
 
 // Switching Library between grid and list (setCollectionViewLayout:animated:), a reload or batch updates
@@ -455,6 +459,18 @@ static BOOL dropsPaint(CALayer *layer, CGColorRef color) {
     return YES;
 }
 
+// The whole page pass again for the page a list is in (background shown and re-pinned, containers cleared,
+// lists tagged), now and on the next run loop turn, once the new layout is in.
+static void rerunHostOf(UIView *list) {
+    UIView *host = nil;
+    for (UIView *v = list.superview; v && !host; v = v.superview) if (objc_getAssociatedObject(v, &kBackgroundKey)) host = v;
+    NSNumber *screen = objc_getAssociatedObject(host, &kScreenKey);
+    if (!host || !screen) return;
+    attach(host, screen.unsignedIntegerValue, NO);
+    __weak UIView *weakHost = host;
+    dispatch_async(dispatch_get_main_queue(), ^{ if (weakHost) attach(weakHost, screen.unsignedIntegerValue, NO); });
+}
+
 %group MRGLists
 %hook CALayer
 - (void)setBackgroundColor:(CGColorRef)color {
@@ -484,6 +500,7 @@ static BOOL dropsPaint(CALayer *layer, CGColorRef color) {
 - (void)reloadData { %orig; scheduleListClear(self, NO); }
 - (void)setCollectionViewLayout:(UICollectionViewLayout *)layout animated:(BOOL)animated {
     %orig;
+    rerunHostOf(self);
     scheduleListClear(self, YES);
 }
 - (void)setCollectionViewLayout:(UICollectionViewLayout *)layout animated:(BOOL)animated completion:(void (^)(BOOL))completion {
@@ -491,8 +508,9 @@ static BOOL dropsPaint(CALayer *layer, CGColorRef color) {
     %orig(layout, animated, ^(BOOL finished) {
         if (completion) completion(finished);
         UICollectionView *list = weakSelf;
-        if (list) clearListNow(list);
+        if (list) { clearListNow(list); rerunHostOf(list); }
     });
+    rerunHostOf(self);
     scheduleListClear(self, YES);
 }
 - (void)performBatchUpdates:(void (^)(void))updates completion:(void (^)(BOOL))completion {

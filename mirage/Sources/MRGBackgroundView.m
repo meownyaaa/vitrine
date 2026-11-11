@@ -114,6 +114,7 @@ CGRect MRGWindowRectInView(UIView *view) {
 }
 
 @implementation MRGBackgroundView {
+    CADisplayLink *_link;
     UIView *_canvas;
     UIImageView *_imageView;
     AVPlayerLayer *_playerLayer;
@@ -168,6 +169,7 @@ static NSString *sg_stillKey;
 }
 
 - (void)dealloc {
+    [_link invalidate];
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [MRGVideoEngine.shared viewDisappeared:self];
 }
@@ -227,8 +229,20 @@ static NSString *sg_stillKey;
     [self setNeedsLayout];
 }
 
+// The host can move without laying out (a scroll, the side drawer's peek, Library's grid/list switch, a page
+// transition), and a canvas left where the window was a moment ago showed whatever was behind it: the page's
+// black. While in a window the canvas is re-pinned once per frame; pinCanvas costs a walk up a few superviews
+// and does nothing when nothing moved.
+- (void)tick:(CADisplayLink *)link { [self pinCanvas]; }
+
 - (void)didMoveToWindow {
     [super didMoveToWindow];
+    [_link invalidate];
+    _link = nil;
+    if (self.window && !self.fitsBounds) {
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
+        [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
     if (self.window) [self pinCanvas];
     if (self.window && !self.hidden) [MRGVideoEngine.shared viewAppeared:self];
     else [MRGVideoEngine.shared viewDisappeared:self];
