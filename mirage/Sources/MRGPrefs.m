@@ -22,6 +22,8 @@ MRGScreen MRGScreens(void) { return [V(@"mirage.bg.screens", @(MRGScreenHome | M
 void MRGSetScreens(MRGScreen s) { [D() setObject:@(s) forKey:@"mirage.bg.screens"]; MRGPostChange(); }
 BOOL MRGClearPages(void) { return [V(@"mirage.bg.clearPages", @YES) boolValue]; }
 void MRGSetClearPages(BOOL on) { [D() setBool:on forKey:@"mirage.bg.clearPages"]; MRGPostChange(); }
+BOOL MRGProfileGlow(void) { return [V(@"mirage.profile.glow", @YES) boolValue]; }
+void MRGSetProfileGlow(BOOL on) { [D() setBool:on forKey:@"mirage.profile.glow"]; MRGPostChange(); }
 
 BOOL MRGWantsScreen(MRGScreen s) {
     if (!MRGBackgroundEnabled() || MRGCurrentKind() == MRGMediaNone) return NO;
