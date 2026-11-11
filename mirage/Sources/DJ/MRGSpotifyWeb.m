@@ -88,31 +88,62 @@ static NSString *norm(NSString *s) {
     return out;
 }
 
-static NSString *bestMatch(id json, NSString *title, NSString *artist) {
+NSString *MRGImageURL(NSString *image) {
+    if (![image isKindOfClass:NSString.class] || !image.length) return nil;
+    if ([image hasPrefix:@"https://"]) return image;
+    if ([image hasPrefix:@"spotify:image:"]) return [@"https://i.scdn.co/image/" stringByAppendingString:[image substringFromIndex:14]];
+    return nil;
+}
+
+// The album cover closest to 300px wide (Spotify sends 640, 300 and 64).
+static NSString *coverOf(NSDictionary *track) {
+    NSDictionary *album = [track isKindOfClass:NSDictionary.class] ? track[@"album"] : nil;
+    NSArray *images = [album isKindOfClass:NSDictionary.class] ? album[@"images"] : nil;
+    if (![images isKindOfClass:NSArray.class]) return nil;
+    NSString *best = nil;
+    double bestScore = DBL_MAX;
+    for (NSDictionary *im in images) {
+        if (![im isKindOfClass:NSDictionary.class] || ![im[@"url"] isKindOfClass:NSString.class]) continue;
+        double w = [im[@"width"] respondsToSelector:@selector(doubleValue)] ? [im[@"width"] doubleValue] : 300;
+        double score = fabs(w - 300);
+        if (score < bestScore) { bestScore = score; best = im[@"url"]; }
+    }
+    return best;
+}
+
+static NSDictionary *resolved(NSDictionary *track) {
+    if (!track) return nil;
+    NSMutableDictionary *d = [@{@"uri": track[@"uri"]} mutableCopy];
+    NSString *cover = coverOf(track);
+    if (cover) d[@"image"] = cover;
+    return d;
+}
+
+static NSDictionary *bestMatch(id json, NSString *title, NSString *artist) {
     NSArray *items = [json isKindOfClass:NSDictionary.class] ? [json[@"tracks"] valueForKey:@"items"] : nil;
     if (![items isKindOfClass:NSArray.class]) return nil;
     NSString *t = norm(title), *a = norm(artist);
-    NSString *fallback = nil;
+    NSDictionary *fallback = nil;
     for (NSDictionary *track in items) {
         if (![track isKindOfClass:NSDictionary.class] || ![track[@"uri"] isKindOfClass:NSString.class]) continue;
-        if (!fallback) fallback = track[@"uri"];
+        if (!fallback) fallback = track;
         BOOL titleOK = [norm(track[@"name"] ?: @"") isEqualToString:t] || [norm(track[@"name"] ?: @"") hasPrefix:t];
         BOOL artistOK = !a.length;
         for (NSDictionary *ar in [track[@"artists"] isKindOfClass:NSArray.class] ? track[@"artists"] : nil) {
             NSString *n = norm([ar isKindOfClass:NSDictionary.class] ? ar[@"name"] ?: @"" : @"");
             if (n.length && ([n isEqualToString:a] || [n containsString:a] || [a containsString:n])) { artistOK = YES; break; }
         }
-        if (titleOK && artistOK) return track[@"uri"];
+        if (titleOK && artistOK) return resolved(track);
     }
-    return fallback;
+    return resolved(fallback);
 }
 
-void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSString *, NSString *)) {
+void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSDictionary *, NSString *)) {
     NSString *strict = [NSString stringWithFormat:@"track:\"%@\" artist:\"%@\"", title, artist];
     NSString *path = [NSString stringWithFormat:@"/search?type=track&limit=5&q=%@", enc(strict)];
     call(@"GET", path, nil, ^(id j, NSInteger s, NSString *e) {
-        NSString *uri = e ? nil : bestMatch(j, title, artist);
-        if (uri) { done(uri, nil); return; }
+        NSDictionary *match = e ? nil : bestMatch(j, title, artist);
+        if (match) { done(match, nil); return; }
         if (e && s != 0 && s != 400 && s != 404) { done(nil, e); return; }
         NSString *loose = [NSString stringWithFormat:@"/search?type=track&limit=5&q=%@", enc([NSString stringWithFormat:@"%@ %@", title, artist])];
         call(@"GET", loose, nil, ^(id j2, NSInteger s2, NSString *e2) { done(e2 ? nil : bestMatch(j2, title, artist), e2); });
@@ -140,5 +171,18 @@ void MRGWebFillDJPlaylist(NSArray<NSString *> *uris, void (^done)(NSString *, NS
         if (![pid isKindOfClass:NSString.class]) { done(nil, e ?: @"Couldn't make the Mirage DJ playlist."); return; }
         [d setObject:pid forKey:@"mirage.dj.playlist"];
         fill(pid);
+    });
+}
+
+void MRGWebTrackImage(NSString *uri, void (^done)(NSString *)) {
+    static NSMutableDictionary<NSString *, NSString *> *cache;
+    if (!cache) cache = [NSMutableDictionary dictionary];
+    if (![uri hasPrefix:@"spotify:track:"]) { done(nil); return; }
+    NSString *hit = cache[uri];
+    if (hit) { done(hit.length ? hit : nil); return; }
+    call(@"GET", [@"/tracks/" stringByAppendingString:[uri substringFromIndex:14]], nil, ^(id j, NSInteger s, NSString *e) {
+        NSString *cover = e ? nil : coverOf(j);
+        if (cover || (s >= 400 && s < 500 && s != 401 && s != 429)) cache[uri] = cover ?: @"";
+        done(cover);
     });
 }

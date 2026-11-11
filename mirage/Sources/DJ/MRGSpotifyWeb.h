@@ -6,7 +6,11 @@
 
 // Names only: title, artist. Empty when the token is not there yet or the API refuses it.
 void MRGWebTaste(void (^done)(NSArray<NSDictionary *> *topTracks, NSArray<NSString *> *topArtists, NSArray<NSDictionary *> *liked));
-// spotify:track:… for the best match, or nil.
-void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSString *uri, NSString *error));
+// The best match: uri (spotify:track:…), image (an https cover URL, about 300px, when Spotify has one), or nil.
+void MRGWebResolve(NSString *title, NSString *artist, void (^done)(NSDictionary *track, NSString *error));
+// The cover of a track by its URI (GET /tracks/{id}), cached for the session; nil when there is none.
+void MRGWebTrackImage(NSString *uri, void (^done)(NSString *imageURL));
+// https://i.scdn.co/image/… for a spotify:image:… id or an https URL; nil otherwise.
+NSString *MRGImageURL(NSString *spotifyImage);
 // Fills the private "Mirage DJ" playlist with the URIs (made the first time) and hands back its URI.
 void MRGWebFillDJPlaylist(NSArray<NSString *> *uris, void (^done)(NSString *playlistURI, NSString *error));

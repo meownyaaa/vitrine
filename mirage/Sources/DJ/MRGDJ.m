@@ -7,6 +7,7 @@
 #import <UIKit/UIKit.h>
 
 NSString *const MRGDJChangedNotification = @"MirageDJChanged";
+NSString *const MRGDJSpeakingNotification = @"MirageDJSpeaking";
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
 static id V(NSString *k, id def) { return [D() objectForKey:k] ?: def; }
@@ -15,6 +16,8 @@ MRGDJVoiceMode MRGDJVoice(void) { NSInteger m = [V(@"mirage.dj.voice", @0) integ
 void MRGDJSetVoice(MRGDJVoiceMode m) { [D() setInteger:m forKey:@"mirage.dj.voice"]; }
 BOOL MRGDJShowsPill(void) { return [V(@"mirage.dj.pill", @YES) boolValue]; }
 void MRGDJSetShowsPill(BOOL on) { [D() setBool:on forKey:@"mirage.dj.pill"]; MRGPostChange(); }
+BOOL MRGDJShowsPlayerButton(void) { return [V(@"mirage.dj.playerButton", @YES) boolValue]; }
+void MRGDJSetShowsPlayerButton(BOOL on) { [D() setBool:on forKey:@"mirage.dj.playerButton"]; MRGPostChange(); }
 BOOL MRGDJDucks(void) { return [V(@"mirage.dj.duck", @YES) boolValue]; }
 void MRGDJSetDucks(BOOL on) { [D() setBool:on forKey:@"mirage.dj.duck"]; }
 
@@ -45,6 +48,7 @@ NSString *MRGDJDeviceVoiceName(void) {
 }
 
 @interface MRGDJ () <AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate>
+- (void)setSpeaking:(BOOL)speaking line:(NSString *)line;
 @end
 
 @implementation MRGDJ {
@@ -99,6 +103,7 @@ NSString *MRGDJDeviceVoiceName(void) {
     [_synth stopSpeakingAtBoundary:AVSpeechBoundaryWord];
     [_audio stop];
     MRGDuckMusic(NO);
+    [self setSpeaking:NO line:nil];
     [self changed];
 }
 
@@ -120,10 +125,10 @@ static NSString *const kSystem =
     @"no corporate tone, never cringe.\n"
     @"Pick music this listener will love from their taste: mostly songs that fit what they play, plus a few fresh finds in the same lane. "
     @"Order the set so it flows.\n"
-    @"Return ONLY a JSON object, no prose: {\"intro\": string, \"tracks\": [{\"artist\": string, \"title\": string, \"line\": string}]}\n"
+    @"Return ONLY a JSON object, no prose: {\"intro\": string, \"tracks\": [{\"artist\": string, \"title\": string, \"line\": string, \"why\": string}]}\n"
     @"Rules: 8 to 10 tracks. Real released songs that are on Spotify, with the official title and the primary artist. No duplicates, "
     @"nothing from 'just played'. 'line' is what you say right before that track starts: at most 18 words, mentions the song or the "
-    @"artist naturally, every line different. 'intro' opens the set in at most 20 words. If there is a request, follow it.";
+    @"artist naturally, every line different. 'why' is 1 to 4 lowercase words on why it's in the set (like \"fresh find\", \"you loved this\", \"same vibe\", \"throwback\"). 'intro' opens the set in at most 20 words. If there is a request, follow it.";
 
 - (NSString *)promptWithTaste:(NSArray *)top artists:(NSArray *)artists liked:(NSArray *)liked request:(NSString *)request {
     NSDictionary *now = MRGNowPlaying();
@@ -178,12 +183,13 @@ static NSDictionary *parseJSON(NSString *text) {
     NSMutableArray *slots = [NSMutableArray array];
     for (id item in items) {
         if (![item isKindOfClass:NSDictionary.class]) continue;
-        NSString *title = item[@"title"], *artist = item[@"artist"], *line = item[@"line"];
+        NSString *title = item[@"title"], *artist = item[@"artist"], *line = item[@"line"], *why = item[@"why"];
         if (![title isKindOfClass:NSString.class] || !title.length) continue;
         MRGDJTrack *t = [MRGDJTrack new];
         t.title = title;
         t.artist = [artist isKindOfClass:NSString.class] ? artist : @"";
         t.line = [line isKindOfClass:NSString.class] ? line : nil;
+        t.why = [why isKindOfClass:NSString.class] && why.length && why.length <= 32 ? why : nil;
         [slots addObject:t];
         if (slots.count >= 12) break;
     }
@@ -191,8 +197,9 @@ static NSDictionary *parseJSON(NSString *text) {
     dispatch_group_t g = dispatch_group_create();
     for (MRGDJTrack *t in slots) {
         dispatch_group_enter(g);
-        MRGWebResolve(t.title, t.artist, ^(NSString *uri, NSString *error) {
-            t.uri = uri;
+        MRGWebResolve(t.title, t.artist, ^(NSDictionary *track, NSString *error) {
+            t.uri = track[@"uri"];
+            t.image = track[@"image"];
             if (error) lastError = error;
             dispatch_group_leave(g);
         });
@@ -253,6 +260,22 @@ static NSDictionary *parseJSON(NSString *text) {
     });
 }
 
+- (void)playFromIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)_set.count || _state != MRGDJPlaying) return;
+    if (index == _currentIndex) return;
+    NSArray *uris = [[_set subarrayWithRange:NSMakeRange(index, _set.count - index)] valueForKey:@"uri"];
+    NSUInteger gen = _generation;
+    _error = nil;
+    [self setStatusText:@"Skipping ahead…"];
+    MRGPlayURIs(uris, ^(BOOL ok, NSString *how, NSString *error) {
+        if (gen != self->_generation) return;
+        self->_status = nil;
+        if (!ok) { [self fail:@"Spotify wouldn't jump to that song (Spotify Free can't pick songs on demand)."]; return; }
+        self->_playbackMode = how;
+        [self changed];
+    });
+}
+
 #pragma mark - following the player
 
 - (void)trackChanged:(NSNotification *)n {
@@ -305,9 +328,25 @@ static NSDictionary *parseJSON(NSString *text) {
 
 #pragma mark - speaking
 
+- (void)setSpeaking:(BOOL)speaking line:(NSString *)line {
+    if (speaking == _speaking && !speaking) return;
+    _speaking = speaking;
+    [NSNotificationCenter.defaultCenter postNotificationName:MRGDJSpeakingNotification object:self
+        userInfo:@{@"speaking": @(speaking), @"line": line ?: _currentLine ?: @""}];
+}
+
 - (void)speak:(NSString *)line {
     MRGDJVoiceMode mode = MRGDJVoice();
-    if (mode == MRGDJVoiceOff) return;
+    [self setSpeaking:YES line:line];
+    if (mode == MRGDJVoiceOff) {
+        // No voice: the caption stays up for about as long as reading it takes.
+        NSUInteger words = [line componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet].count;
+        NSUInteger gen = _generation;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(3.5, words * 0.35) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (gen == self->_generation && [self->_currentLine isEqualToString:line]) [self setSpeaking:NO line:line];
+        });
+        return;
+    }
     if (MRGDJDucks()) MRGDuckMusic(YES);
     if (mode == MRGDJVoiceProvider && MRGProviderHasTTS(MRGAIProvider())) {
         MRGAISpeech(line, ^(NSData *audio, NSString *error) {
@@ -334,7 +373,7 @@ static NSDictionary *parseJSON(NSString *text) {
 - (void)finishedSpeaking {
     // Back up after a short tail, so the last word is not stepped on.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!self->_synth.isSpeaking && !self->_audio.isPlaying) MRGDuckMusic(NO);
+        if (!self->_synth.isSpeaking && !self->_audio.isPlaying) { MRGDuckMusic(NO); [self setSpeaking:NO line:nil]; }
     });
 }
 

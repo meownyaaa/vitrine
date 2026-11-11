@@ -7,7 +7,7 @@
 extern NSString *const MRGPlayerTrackChangedNotification;   // main queue; userInfo: uri, title, artist, ad
 
 id MRGPlayerInstance(void);
-NSDictionary *MRGNowPlaying(void);                 // uri, title, artist, or nil
+NSDictionary *MRGNowPlaying(void);                 // uri, title, artist, image (https, when the player has one), or nil
 NSArray<NSDictionary *> *MRGRecentHistory(void);   // newest first: title, artist (Mirage's own log, max 40)
 NSArray<NSDictionary *> *MRGQueueAround(void);     // the player's past and coming tracks: title, artist
 BOOL MRGPlayerIsAd(void);

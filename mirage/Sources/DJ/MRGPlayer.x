@@ -1,4 +1,5 @@
 #import "MRGPlayer.h"
+#import "MRGSpotifyWeb.h"
 #import <UIKit/UIKit.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <objc/runtime.h>
@@ -66,6 +67,10 @@ static NSDictionary *infoOf(id track) {
     NSMutableDictionary *d = [@{@"uri": uri} mutableCopy];
     if (title.length) d[@"title"] = title;
     if (artist.length) d[@"artist"] = artist;
+    for (NSString *k in @[@"image_url", @"image_large_url", @"image_small_url", @"image_xlarge_url"]) {
+        NSString *image = MRGImageURL(meta[k]);
+        if (image) { d[@"image"] = image; break; }
+    }
     NSString *provider = [t respondsToSelector:@selector(provider)] ? t.provider : nil;
     BOOL ad = [uri hasPrefix:@"spotify:ad:"] || [provider isEqualToString:@"ad"] || [meta[@"is_advertisement"] isEqual:@"true"];
     d[@"ad"] = @(ad);

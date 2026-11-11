@@ -6,7 +6,17 @@ Mirage DJ, added in 0.2.0, picks 8–10 tracks that suit what you've been listen
 
 1. Go to **Mirage settings → AI DJ → API key** and paste a key. Mirage works out the provider from the key, reads that provider's model list, picks a fast, cheap chat model (marked ✦) and checks that the key works.
 2. If you want a different model, choose it under **Model**.
-3. To start a set, tap the **DJ** pill on Home or **Open Mirage DJ**. Use **Switch it up** for a new set, or type a request ("90s r&b for a rainy night") and send it.
+3. Open the DJ from any of these places:
+   - **Home:** the **✦ DJ** chip at the end of Home's filter chips (All, Music, Podcasts…). With Vitrine's redesign, which swaps the chips for a title, the chip sits in the title row just before the glass pill. If the chips are hidden by Vitrine's setting, it sits where they would start.
+   - **Now Playing:** the **✦** button in the top bar, just before the ⋯.
+   - **Settings:** **Open Mirage DJ**.
+
+   The chip and the button turn green while a set is on. On Now Playing, the line also shows in a small glass "DJ" caption under the top bar while the DJ talks.
+
+   In the sheet:
+   - Use **Switch it up** for a new set, or type a request ("90s r&b for a rainy night") and send it.
+   - The set is listed with covers. Tap a song to jump to it; Spotify Free may refuse.
+   - **DJ chip on Home** and **DJ button on Now Playing** in settings turn each one off.
 4. Under **Voice** you can pick:
    - **Phone**: the best voice installed on the device, which is offline and free. Premium and Enhanced voices sound much better; add them in iOS Settings → Accessibility → Spoken Content → Voices.
    - **Provider**: OpenAI or Gemini speech, with Phone as the fallback.

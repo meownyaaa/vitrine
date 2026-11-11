@@ -74,7 +74,7 @@ static const CGFloat kBottomChrome = 150;
         case MRGSecLook: return 6;                 // blur, dim, scale, top fade, clear pages, profile glow
         case MRGSecScreens: return 5;
         case MRGSecShop: return 1;
-        case MRGSecDJ: return 6;                   // key, model, voice, duck, pill, open
+        case MRGSecDJ: return 7;                   // key, model, voice, duck, Home chip, player button, open
         case MRGSecAbout: return 2;
     }
     return 0;
@@ -210,7 +210,8 @@ static UITableViewCell *baseCell(void) {
             return c;
         }
         case 3: return [self switchCell:@"Lower music while talking" on:MRGDJDucks() tag:20 symbol:@"speaker.badge.exclamationmark.fill"];
-        case 4: return [self switchCell:@"DJ button on Home" on:MRGDJShowsPill() tag:21 symbol:@"capsule.fill"];
+        case 4: return [self switchCell:@"DJ chip on Home" on:MRGDJShowsPill() tag:21 symbol:@"capsule.fill"];
+        case 5: return [self switchCell:@"DJ button on Now Playing" on:MRGDJShowsPlayerButton() tag:22 symbol:@"play.circle.fill"];
         default: return [self actionCell:@"Open Mirage DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
     }
 }
@@ -347,7 +348,7 @@ static UITableViewCell *baseCell(void) {
     if (ip.section == MRGSecDJ) {
         if (ip.row == 0) [self editKey];
         else if (ip.row == 1 && MRGAIProvider() != MRGProviderNone) [self pickModel:[t cellForRowAtIndexPath:ip]];
-        else if (ip.row == 5) MRGShowDJ(self);
+        else if (ip.row == 6) MRGShowDJ(self);
         return;
     }
     if (ip.section != MRGSecMedia) return;
@@ -372,6 +373,7 @@ static UITableViewCell *baseCell(void) {
     else if (sw.tag == 3) MRGSetProfileGlow(sw.on);
     else if (sw.tag == 20) MRGDJSetDucks(sw.on);
     else if (sw.tag == 21) MRGDJSetShowsPill(sw.on);
+    else if (sw.tag == 22) MRGDJSetShowsPlayerButton(sw.on);
     else if (sw.tag >= 100) {
         MRGScreen bit = 1 << (sw.tag - 100);
         MRGSetScreens(sw.on ? (MRGScreens() | bit) : (MRGScreens() & ~bit));
