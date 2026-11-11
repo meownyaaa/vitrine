@@ -2,6 +2,9 @@
 #import "MRGPrefs.h"
 #import "MRGImporter.h"
 #import "MRGBackgroundView.h"
+#import "MRGAI.h"
+#import "MRGDJ.h"
+#import "MRGDJView.h"
 #import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
@@ -70,7 +73,8 @@ static const CGFloat kBottomChrome = 150;
         case MRGSecMedia: return 3;                // photos, files, remove
         case MRGSecLook: return 6;                 // blur, dim, scale, top fade, clear pages, profile glow
         case MRGSecScreens: return 5;
-        case MRGSecShop: case MRGSecDJ: return 1;
+        case MRGSecShop: return 1;
+        case MRGSecDJ: return 6;                   // key, model, voice, duck, pill, open
         case MRGSecAbout: return 2;
     }
     return 0;
@@ -85,6 +89,10 @@ static const CGFloat kBottomChrome = 150;
         case MRGSecMedia: return @"Images (PNG, JPG, HEIC), GIFs (converted to a looping MP4 when you pick them) and videos (MP4, MOV). Videos play muted, never touch Spotify's audio, and pause when Spotify is in the background.";
         case MRGSecLook: return @"Top fade is the dark shade Spotify lays behind the status bar and the header: Soft keeps a third of it, Off removes it. Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are. Profile picture glow replaces the profile page's color gradient with a soft glow of that color around your picture.";
         case MRGSecScreens: return @"Everywhere puts the background behind every page, Home and Library included. The side drawer has its own switch, a little dimmer so its text stays readable.";
+        case MRGSecDJ: {
+            NSString *voice = MRGProviderHasTTS(MRGAIProvider()) ? @"Voice: Phone uses the best voice installed (add Premium voices in iOS Settings → Accessibility → Spoken Content); Provider uses your provider's own speech." : [NSString stringWithFormat:@"Voice: the best voice installed on this phone (%@); add Premium voices in iOS Settings → Accessibility → Spoken Content.", MRGDJDeviceVoiceName()];
+            return [NSString stringWithFormat:@"Bring your own key: OpenAI, Gemini, Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together or DeepSeek. The key stays in this phone's keychain. Privacy: only track and artist names (what's playing, what you played, your top and liked tracks) and the requests you type are sent to your provider, nothing else. %@ On Spotify Free, Spotify may shuffle the set and its skip limit still applies.", voice];
+        }
         case MRGSecAbout: return @"Mirage is free software under the GPL-3.0, built on Vitrine (github.com/meownyaaa/vitrine), itself a fork of Chroma by skopevoj (spoti.pw, up to v0.21.1).";
     }
     return nil;
@@ -166,6 +174,108 @@ static UITableViewCell *baseCell(void) {
     return c;
 }
 
+- (UITableViewCell *)djCell:(NSInteger)row {
+    MRGProvider provider = MRGAIProvider();
+    BOOL hasKey = provider != MRGProviderNone;
+    switch (row) {
+        case 0: {
+            UITableViewCell *c = [self actionCell:@"API key" symbol:@"key.fill" destructive:NO enabled:YES];
+            c.detailTextLabel.text = hasKey ? MRGProviderName(provider) : @"Add";
+            c.detailTextLabel.textColor = UIColor.grayColor;
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
+        case 1: {
+            UITableViewCell *c = [self actionCell:@"Model" symbol:@"cpu" destructive:NO enabled:hasKey];
+            NSString *model = MRGAIModel();
+            c.detailTextLabel.text = hasKey ? [NSString stringWithFormat:@"%@%@", model ?: @"-", MRGAIHasOverride() ? @"" : @" ✦"] : @"-";
+            c.detailTextLabel.textColor = UIColor.grayColor;
+            c.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+            c.detailTextLabel.minimumScaleFactor = 0.6;
+            return c;
+        }
+        case 2: {
+            UITableViewCell *c = baseCell();
+            c.textLabel.text = @"Voice";
+            c.imageView.image = [UIImage systemImageNamed:@"speaker.wave.2.fill"];
+            c.imageView.tintColor = UIColor.whiteColor;
+            UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"Phone", @"Provider", @"Off"]];
+            [seg setEnabled:MRGProviderHasTTS(provider) forSegmentAtIndex:1];
+            MRGDJVoiceMode m = MRGDJVoice();
+            if (m == MRGDJVoiceProvider && !MRGProviderHasTTS(provider)) m = MRGDJVoiceDevice;
+            seg.selectedSegmentIndex = m;
+            [seg addTarget:self action:@selector(voiced:) forControlEvents:UIControlEventValueChanged];
+            c.accessoryView = seg;
+            [seg sizeToFit];
+            return c;
+        }
+        case 3: return [self switchCell:@"Lower music while talking" on:MRGDJDucks() tag:20 symbol:@"speaker.badge.exclamationmark.fill"];
+        case 4: return [self switchCell:@"DJ button on Home" on:MRGDJShowsPill() tag:21 symbol:@"capsule.fill"];
+        default: return [self actionCell:@"Open Mirage DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
+    }
+}
+
+- (void)voiced:(UISegmentedControl *)seg { MRGDJSetVoice(seg.selectedSegmentIndex); }
+
+- (void)reloadDJ { [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:MRGSecDJ] withRowAnimation:UITableViewRowAnimationNone]; }
+
+- (void)editKey {
+    BOOL hasKey = MRGAIProvider() != MRGProviderNone;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"AI provider key"
+        message:@"Paste an API key from OpenAI, Gemini, Anthropic, OpenRouter, Groq, xAI, Perplexity, Cerebras, Fireworks, Together or DeepSeek. Mirage tells the provider from the key."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f) {
+        f.placeholder = @"sk-… / AIza… / gsk_… / xai-…";
+        f.secureTextEntry = YES;
+        f.autocorrectionType = UITextAutocorrectionTypeNo;
+        f.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    }];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    if (hasKey) {
+        [a addAction:[UIAlertAction actionWithTitle:@"Remove key" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) {
+            [MRGDJ.shared stop];
+            MRGAIForgetKey();
+            [self reloadDJ];
+        }]];
+    }
+    [a addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        NSString *key = a.textFields.firstObject.text;
+        if (!key.length) return;
+        [self->_spinner startAnimating];
+        MRGAISetupKey(key, ^(BOOL ok, NSString *message) {
+            [self->_spinner stopAnimating];
+            [self reloadDJ];
+            UIAlertController *r = [UIAlertController alertControllerWithTitle:ok ? @"Ready" : @"Couldn't use that key" message:message preferredStyle:UIAlertControllerStyleAlert];
+            [r addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:r animated:YES completion:nil];
+        });
+    }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+- (void)pickModel:(UIView *)source {
+    NSString *recommended = MRGAIRecommendedModel();
+    NSMutableArray *models = [MRGAIModels() mutableCopy];
+    if (recommended) { [models removeObject:recommended]; [models insertObject:recommended atIndex:0]; }
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Model"
+        message:[NSString stringWithFormat:@"✦ is the recommended one for %@: fast and cheap. Any chat model works.", MRGProviderName(MRGAIProvider())]
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    NSUInteger shown = 0;
+    for (NSString *m in models) {
+        NSString *title = [m isEqualToString:recommended] ? [m stringByAppendingString:@" ✦"] : m;
+        if ([m isEqualToString:MRGAIModel()]) title = [@"✓ " stringByAppendingString:title];
+        [a addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+            MRGAISetModelOverride(m);
+            [self reloadDJ];
+        }]];
+        if (++shown >= 40) break;
+    }
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    a.popoverPresentationController.sourceView = source;
+    a.popoverPresentationController.sourceRect = source.bounds;
+    [self presentViewController:a animated:YES completion:nil];
+}
+
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
     MRGScreen screens = MRGScreens();
     BOOL hasMedia = MRGCurrentKind() != MRGMediaNone;
@@ -220,7 +330,7 @@ static UITableViewCell *baseCell(void) {
             return [self switchCell:titles[ip.row] on:(screens & (1 << ip.row)) != 0 tag:100 + ip.row symbol:symbols[ip.row]];
         }
         case MRGSecShop: return [self comingSoon:@"Addon Shop" symbol:@"bag.fill"];
-        case MRGSecDJ: return [self comingSoon:@"AI DJ (your own API key)" symbol:@"waveform.and.mic"];
+        case MRGSecDJ: return [self djCell:ip.row];
         case MRGSecAbout: {
             UITableViewCell *c = baseCell();
             c.textLabel.text = ip.row == 0 ? @"Version" : @"Vitrine";
@@ -234,6 +344,12 @@ static UITableViewCell *baseCell(void) {
 
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [t deselectRowAtIndexPath:ip animated:YES];
+    if (ip.section == MRGSecDJ) {
+        if (ip.row == 0) [self editKey];
+        else if (ip.row == 1 && MRGAIProvider() != MRGProviderNone) [self pickModel:[t cellForRowAtIndexPath:ip]];
+        else if (ip.row == 5) MRGShowDJ(self);
+        return;
+    }
     if (ip.section != MRGSecMedia) return;
     if (ip.row == 0) [self pickFromPhotos];
     else if (ip.row == 1) [self pickFromFiles];
@@ -254,6 +370,8 @@ static UITableViewCell *baseCell(void) {
     if (sw.tag == 1) MRGSetBackgroundEnabled(sw.on);
     else if (sw.tag == 2) MRGSetClearPages(sw.on);
     else if (sw.tag == 3) MRGSetProfileGlow(sw.on);
+    else if (sw.tag == 20) MRGDJSetDucks(sw.on);
+    else if (sw.tag == 21) MRGDJSetShowsPill(sw.on);
     else if (sw.tag >= 100) {
         MRGScreen bit = 1 << (sw.tag - 100);
         MRGSetScreens(sw.on ? (MRGScreens() | bit) : (MRGScreens() & ~bit));
