@@ -25,6 +25,9 @@ void MRGSetClearPages(BOOL on) { [D() setBool:on forKey:@"mirage.bg.clearPages"]
 BOOL MRGProfileGlow(void) { return [V(@"mirage.profile.glow", @YES) boolValue]; }
 void MRGSetProfileGlow(BOOL on) { [D() setBool:on forKey:@"mirage.profile.glow"]; MRGPostChange(); }
 
+MRGTopFadeMode MRGTopFade(void) { NSInteger m = [V(@"mirage.bg.topFade", @1) integerValue]; return (m >= 0 && m <= 2) ? m : MRGTopFadeSoft; }
+void MRGSetTopFade(MRGTopFadeMode m) { [D() setInteger:m forKey:@"mirage.bg.topFade"]; MRGPostChange(); }
+
 BOOL MRGWantsScreen(MRGScreen s) {
     if (!MRGBackgroundEnabled() || MRGCurrentKind() == MRGMediaNone) return NO;
     MRGScreen on = MRGScreens();

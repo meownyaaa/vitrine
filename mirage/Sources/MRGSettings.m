@@ -68,7 +68,7 @@ static const CGFloat kBottomChrome = 150;
     switch (s) {
         case MRGSecPreview: return 2;              // enabled, preview
         case MRGSecMedia: return 3;                // photos, files, remove
-        case MRGSecLook: return 5;                 // blur, dim, scale, clear pages, profile glow
+        case MRGSecLook: return 6;                 // blur, dim, scale, top fade, clear pages, profile glow
         case MRGSecScreens: return 5;
         case MRGSecShop: case MRGSecDJ: return 1;
         case MRGSecAbout: return 2;
@@ -83,7 +83,7 @@ static const CGFloat kBottomChrome = 150;
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     switch (s) {
         case MRGSecMedia: return @"Images (PNG, JPG, HEIC), GIFs (converted to a looping MP4 when you pick them) and videos (MP4, MOV). Videos play muted, never touch Spotify's audio, and pause when Spotify is in the background.";
-        case MRGSecLook: return @"Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are. Profile picture glow replaces the profile page's color gradient with a soft glow of that color around your picture.";
+        case MRGSecLook: return @"Top fade is the dark shade Spotify lays behind the status bar and the header: Soft keeps a third of it, Off removes it. Clear page backgrounds makes Spotify's own page fill transparent so the background shows through; cards and Vitrine's glass stay as they are. Profile picture glow replaces the profile page's color gradient with a soft glow of that color around your picture.";
         case MRGSecScreens: return @"Everywhere puts the background behind every page, Home and Library included. The side drawer has its own switch, a little dimmer so its text stays readable.";
         case MRGSecAbout: return @"Mirage is free software under the GPL-3.0, built on Vitrine (github.com/meownyaaa/vitrine), itself a fork of Chroma by skopevoj (spoti.pw, up to v0.21.1).";
     }
@@ -202,7 +202,17 @@ static UITableViewCell *baseCell(void) {
                 [seg sizeToFit];
                 return c;
             }
-            if (ip.row == 3) return [self switchCell:@"Clear page backgrounds" on:MRGClearPages() tag:2 symbol:nil];
+            if (ip.row == 3) {
+                UITableViewCell *c = baseCell();
+                c.textLabel.text = @"Top fade";
+                UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"Off", @"Soft", @"Full"]];
+                seg.selectedSegmentIndex = MRGTopFade();
+                [seg addTarget:self action:@selector(faded:) forControlEvents:UIControlEventValueChanged];
+                c.accessoryView = seg;
+                [seg sizeToFit];
+                return c;
+            }
+            if (ip.row == 4) return [self switchCell:@"Clear page backgrounds" on:MRGClearPages() tag:2 symbol:nil];
             return [self switchCell:@"Profile picture glow" on:MRGProfileGlow() tag:3 symbol:nil];
         case MRGSecScreens: {
             NSArray *titles = @[@"Home", @"Now Playing", @"Library", @"Everywhere", @"Show in side drawer"];
@@ -255,6 +265,8 @@ static UITableViewCell *baseCell(void) {
     else MRGSetDim(s.value);
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:MRGSecPreview] withRowAnimation:UITableViewRowAnimationNone];
 }
+
+- (void)faded:(UISegmentedControl *)seg { MRGSetTopFade(seg.selectedSegmentIndex); }
 
 - (void)scaled:(UISegmentedControl *)seg {
     MRGSetScale(seg.selectedSegmentIndex);

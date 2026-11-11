@@ -38,6 +38,13 @@ void MRGSetClearPages(BOOL on);
 BOOL MRGWantsScreen(MRGScreen s);
 BOOL MRGProfileGlow(void);     // profile page: the dominant color as a glow around the picture, not page-wide
 void MRGSetProfileGlow(BOOL on);
+typedef NS_ENUM(NSInteger, MRGTopFadeMode) {
+    MRGTopFadeOff = 0,    // Spotify's dark scrim behind the status bar and header gone
+    MRGTopFadeSoft = 1,   // a third of it (default)
+    MRGTopFadeFull = 2,   // Spotify's own, untouched
+};
+MRGTopFadeMode MRGTopFade(void);
+void MRGSetTopFade(MRGTopFadeMode m);
 
 // Media in Documents/Mirage/.
 MRGMediaKind MRGCurrentKind(void);
