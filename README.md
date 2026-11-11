@@ -1,3 +1,26 @@
+# Mirage
+
+**Mirage** is a fork of [Vitrine](https://github.com/meownyaaa/vitrine), which is itself the GPL-3.0 fork of
+[Chroma](https://github.com/skopevoj/spoti.pw) (up to v0.21.1). It adds a second tweak, `mirage/`, next to
+Vitrine's own:
+
+- **Custom backgrounds**: a picture (PNG/JPG/HEIC), a GIF (converted to a looping MP4) or a video
+  (MP4/MOV, muted, without touching Spotify's audio session), with blur, dim, scale mode and a choice of
+  Home / Now Playing / Library / Everywhere. It sits behind Vitrine's liquid glass.
+- A **Mirage** row in the side drawer, right below Vitrine's *Mod Settings*, that opens Mirage's settings.
+- Coming next: an **Addon Shop** and an **AI DJ** that uses your own API key.
+
+Vitrine's sources (`tweak/`) are kept as upstream ships them, so `git merge upstream/main` stays clean.
+
+- Build: [docs/mirage/BUILDING.md](docs/mirage/BUILDING.md). Linux works through `scripts/mirage-setup-linux.sh` and `scripts/mirage-build.sh`,
+  and macOS or GitHub Actions through `.github/workflows/mirage-ipa.yml`.
+- Install with Ksign: [docs/mirage/INSTALL.md](docs/mirage/INSTALL.md)
+
+Mirage is licensed GPL-3.0 like Vitrine and Chroma ≤ 0.21.1. Bring your own decrypted Spotify IPA. Neither this
+repo nor its workflows publish one.
+
+---
+
 <h1 align="center">Vitrine</h1>
 
 <p align="center">Spotify, in glass.</p>

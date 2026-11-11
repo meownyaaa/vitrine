@@ -27,3 +27,8 @@ notes/
 .zsign_cache/
 .phone.env
 .claude/worktrees/
+
+# Mirage
+mirage/.theos/
+mirage/packages/
+*.ipa
