@@ -1,7 +1,7 @@
 Package: com.x4nzz.mirage
 Name: Mirage
 Architecture: iphoneos-arm
-Description: Custom backgrounds (and soon an addon shop and a bring-your-own-key AI DJ) for Spotify iOS, on top of Vitrine
+Description: Custom backgrounds and a bring-your-own-key AI DJ for Spotify iOS, on top of Vitrine
 Maintainer: x4nzz
 Author: x4nzz
 Section: Tweaks
