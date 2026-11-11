@@ -22,5 +22,7 @@ void MRGWebArtistTracks(NSDictionary *artist, NSInteger limit, void (^done)(NSAr
 void MRGWebRelatedArtists(NSDictionary *artist, void (^done)(NSArray<NSDictionary *> *artists));
 void MRGWebArtist(NSString *uri, void (^done)(NSDictionary *artist));
 // Fuzzy name matching shared with the DJ.
+void MRGWebArtistCatalog(NSDictionary *artist, NSInteger max, void (^done)(NSArray<NSDictionary *> *tracks));
+void MRGWebLabelArtists(NSString *label, void (^done)(NSArray<NSDictionary *> *artists));
 BOOL MRGNamesMatch(NSString *a, NSString *b);
 NSInteger MRGEditDistance(NSString *a, NSString *b);

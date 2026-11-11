@@ -2,6 +2,7 @@
 #import "MRGAI.h"
 #import "MRGKeychain.h"
 #import "MRGDJLog.h"
+#import "MRGDJ.h"
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
 static NSString *const kEleven = @"elevenlabs-key";
@@ -16,10 +17,147 @@ MRGVoiceEngine MRGVoiceGetEngine(void) {
 }
 void MRGVoiceSetEngine(MRGVoiceEngine e) { [D() setInteger:e forKey:@"mirage.dj.voiceEngine"]; }
 
-double MRGVoiceSpeed(void) { id v = [D() objectForKey:@"mirage.dj.speed"]; double s = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.7, s)); }
+double MRGVoiceSpeed(void) { id v = [D() objectForKey:@"mirage.dj.speed"]; double s = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.6, s)); }
 void MRGVoiceSetSpeed(double s) { [D() setDouble:s forKey:@"mirage.dj.speed"]; }
 double MRGVoicePitch(void) { id v = [D() objectForKey:@"mirage.dj.pitch"]; double p = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : 1.0; return MIN(1.5, MAX(0.75, p)); }
 void MRGVoiceSetPitch(double p) { [D() setDouble:p forKey:@"mirage.dj.pitch"]; }
+
+static double num(NSString *k, double def, double lo, double hi) {
+    id v = [D() objectForKey:k];
+    double x = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : def;
+    return MIN(hi, MAX(lo, x));
+}
+double MRGVoiceWarmth(void) { return num(@"mirage.dj.voiceWarmth", 0.5, 0, 1); }
+void MRGVoiceSetWarmth(double v) { [D() setDouble:v forKey:@"mirage.dj.voiceWarmth"]; }
+double MRGVoiceBreathiness(void) { return num(@"mirage.dj.voiceBreath", 0, 0, 1); }
+void MRGVoiceSetBreathiness(double v) { [D() setDouble:v forKey:@"mirage.dj.voiceBreath"]; }
+double MRGVoicePause(void) { return num(@"mirage.dj.voicePause", 0.2, 0, 1.5); }
+void MRGVoiceSetPause(double v) { [D() setDouble:v forKey:@"mirage.dj.voicePause"]; }
+NSString *MRGVoiceStyleText(void) { NSString *t = [D() stringForKey:@"mirage.dj.voiceStyle"]; return t.length ? t : nil; }
+void MRGVoiceSetStyleText(NSString *t) {
+    NSString *x = [t stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (x.length) [D() setObject:[x substringToIndex:MIN(x.length, (NSUInteger)400)] forKey:@"mirage.dj.voiceStyle"];
+    else [D() removeObjectForKey:@"mirage.dj.voiceStyle"];
+}
+double MRGElevenStability(void) { return num(@"mirage.dj.elevenStability", 0.5, 0, 1); }
+void MRGElevenSetStability(double v) { [D() setDouble:v forKey:@"mirage.dj.elevenStability"]; }
+double MRGElevenSimilarity(void) { return num(@"mirage.dj.elevenSimilarity", 0.75, 0, 1); }
+void MRGElevenSetSimilarity(double v) { [D() setDouble:v forKey:@"mirage.dj.elevenSimilarity"]; }
+static double elevenStyle(void) { return num(@"mirage.dj.elevenStyle", 0, 0, 1); }
+
+NSString *MRGVoicePresetID(void) { return [D() stringForKey:@"mirage.dj.voicePreset"]; }
+void MRGVoiceMarkCustom(void) { [D() removeObjectForKey:@"mirage.dj.voicePreset"]; }
+
+// How to say the lines, for the engines that take a style (OpenAI's gpt-4o-mini-tts instructions, Gemini's prompt):
+// the listener's own Voice style text, then words for the sliders. nil when everything is at its default.
+NSString *MRGVoiceInstructions(void) {
+    NSMutableArray *parts = [NSMutableArray array];
+    NSString *custom = MRGVoiceStyleText();
+    if (custom) [parts addObject:custom];
+    double speed = MRGVoiceSpeed(), pitch = MRGVoicePitch(), warm = MRGVoiceWarmth(), breath = MRGVoiceBreathiness(), pause = MRGVoicePause();
+    if (speed <= 0.8) [parts addObject:@"Speak slowly and unhurried."];
+    else if (speed < 0.95) [parts addObject:@"Speak a little slower than normal, relaxed."];
+    else if (speed >= 1.2) [parts addObject:@"Speak at a fast, energetic pace."];
+    else if (speed > 1.05) [parts addObject:@"Speak at a brisk pace."];
+    if (pitch < 0.95) [parts addObject:@"Use a slightly lower, deeper register."];
+    else if (pitch > 1.08) [parts addObject:@"Use a slightly higher, brighter register."];
+    if (warm >= 0.75) [parts addObject:@"Very warm, gentle and intimate, like talking to one person you care about."];
+    else if (warm >= 0.45 && warm != 0.5) [parts addObject:@"Warm and friendly."];
+    else if (warm < 0.25) [parts addObject:@"Crisp and neutral."];
+    if (breath >= 0.6) [parts addObject:@"Soft and breathy, close to the mic, trailing off gently at the ends of sentences."];
+    else if (breath >= 0.3) [parts addObject:@"A little airy and soft."];
+    if (pause >= 0.6) [parts addObject:@"Leave calm, noticeable pauses between sentences."];
+    else if (pause >= 0.35) [parts addObject:@"Leave short, natural pauses between sentences."];
+    if (!parts.count) return nil;
+    NSString *joined = [parts componentsJoinedByString:@" "];
+    return joined.length > 700 ? [joined substringToIndex:700] : joined;
+}
+
+#pragma mark - presets
+
+// id, name, blurb, speed, pitch, warmth, breathiness, pause, style, persona, voices per engine (OpenAI, Gemini, Groq,
+// xAI), ElevenLabs names to look for in the account, the iPhone voice's gender, ElevenLabs stability / similarity / style.
+NSArray<NSDictionary *> *MRGVoicePresets(void) {
+    static NSArray *list;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        list = @[
+            @{@"id": @"soothing", @"name": @"Soft & Soothing", @"blurb": @"Slow, warm, soothing female voice, close and calm.",
+              @"speed": @0.85, @"pitch": @0.92, @"warmth": @0.95, @"breath": @0.55, @"pause": @0.6, @"persona": @6,
+              @"style": @"A soft, soothing, warm female voice: slow, gentle and intimate, close to the mic, calm and reassuring, with a hint of a smile. Never loud, never rushed.",
+              @"openai": @"shimmer", @"gemini": @"Achernar", @"groq": @"diana", @"xai": @"ara",
+              @"eleven": @[@"Sarah", @"Lily", @"Matilda", @"Alice", @"Jessica", @"Laura", @"Charlotte", @"Rachel"], @"gender": @"female",
+              @"stability": @0.7, @"similarity": @0.8, @"elStyle": @0.15},
+            @{@"id": @"hype", @"name": @"Hype Radio DJ", @"blurb": @"Loud, fast, big energy.",
+              @"speed": @1.15, @"pitch": @1.05, @"warmth": @0.4, @"breath": @0.0, @"pause": @0.15, @"persona": @2,
+              @"style": @"A high-energy radio DJ: punchy, excited and confident, big smile, hits the artist names hard, fast pace.",
+              @"openai": @"ash", @"gemini": @"Fenrir", @"groq": @"troy", @"xai": @"rex",
+              @"eleven": @[@"Liam", @"Charlie", @"Will", @"Chris", @"Josh", @"Adam"], @"gender": @"male",
+              @"stability": @0.3, @"similarity": @0.75, @"elStyle": @0.45},
+            @{@"id": @"latenight", @"name": @"Late Night", @"blurb": @"Low, smooth and slow, like 2 a.m. radio.",
+              @"speed": @0.9, @"pitch": @0.93, @"warmth": @0.85, @"breath": @0.35, @"pause": @0.5, @"persona": @1,
+              @"style": @"A late-night radio host: low, smooth, velvety and relaxed, like it's 2 a.m.; slow, intimate, quiet confidence.",
+              @"openai": @"onyx", @"gemini": @"Algieba", @"groq": @"daniel", @"xai": @"leo",
+              @"eleven": @[@"Brian", @"Daniel", @"George", @"Bill", @"Eric"], @"gender": @"male",
+              @"stability": @0.6, @"similarity": @0.8, @"elStyle": @0.2},
+            @{@"id": @"narrator", @"name": @"Chill Narrator", @"blurb": @"Calm, clear and easygoing.",
+              @"speed": @0.95, @"pitch": @1.0, @"warmth": @0.6, @"breath": @0.1, @"pause": @0.4, @"persona": @4,
+              @"style": @"A calm, clear, friendly narrator: easygoing and even, like a documentary voice-over by someone who loves music.",
+              @"openai": @"sage", @"gemini": @"Callirrhoe", @"groq": @"austin", @"xai": @"sal",
+              @"eleven": @[@"George", @"Alice", @"Matilda", @"Brian"], @"gender": @"",
+              @"stability": @0.6, @"similarity": @0.75, @"elStyle": @0.1},
+            @{@"id": @"classic", @"name": @"Classic Spotify DJ", @"blurb": @"Friendly, casual, like Spotify's own DJ.",
+              @"speed": @1.0, @"pitch": @1.0, @"warmth": @0.6, @"breath": @0.0, @"pause": @0.3, @"persona": @0,
+              @"style": @"A friendly, casual music host like Spotify's DJ: upbeat but relaxed, warm and genuine, conversational, like a friend who knows your taste.",
+              @"openai": @"ash", @"gemini": @"Puck", @"groq": @"troy", @"xai": @"eve",
+              @"eleven": @[@"Chris", @"Liam", @"Brian", @"Eric"], @"gender": @"male",
+              @"stability": @0.45, @"similarity": @0.75, @"elStyle": @0.25},
+        ];
+    });
+    return list;
+}
+
+// The best installed iPhone voice of a gender (personal, Premium, Enhanced first), or nil.
+static AVSpeechSynthesisVoice *bestPhoneVoice(NSString *gender) {
+    if (!gender.length) return nil;
+    AVSpeechSynthesisVoiceGender want = [gender isEqualToString:@"female"] ? AVSpeechSynthesisVoiceGenderFemale : AVSpeechSynthesisVoiceGenderMale;
+    for (AVSpeechSynthesisVoice *v in MRGVoicePhoneVoices()) {
+        if (![v.language hasPrefix:@"en"]) continue;
+        if ([v respondsToSelector:@selector(gender)] && v.gender == want) return v;
+    }
+    return nil;
+}
+
+NSString *MRGVoiceApplyPreset(NSString *pid) {
+    NSDictionary *p = nil;
+    for (NSDictionary *x in MRGVoicePresets()) if ([x[@"id"] isEqualToString:pid]) p = x;
+    if (!p) return nil;
+    MRGVoiceSetSpeed([p[@"speed"] doubleValue]);
+    MRGVoiceSetPitch([p[@"pitch"] doubleValue]);
+    MRGVoiceSetWarmth([p[@"warmth"] doubleValue]);
+    MRGVoiceSetBreathiness([p[@"breath"] doubleValue]);
+    MRGVoiceSetPause([p[@"pause"] doubleValue]);
+    MRGVoiceSetStyleText(p[@"style"]);
+    MRGElevenSetStability([p[@"stability"] doubleValue]);
+    MRGElevenSetSimilarity([p[@"similarity"] doubleValue]);
+    [D() setDouble:[p[@"elStyle"] doubleValue] forKey:@"mirage.dj.elevenStyle"];
+    NSInteger persona = [p[@"persona"] integerValue];
+    if (persona >= 0 && persona < (NSInteger)MRGDJPersonaNames().count) MRGDJSetPersona(persona);
+    NSMutableArray *what = [NSMutableArray array];
+    MRGProvider prov = MRGAIProvider();
+    NSString *key = prov == MRGProviderOpenAI ? @"openai" : prov == MRGProviderGemini ? @"gemini" : prov == MRGProviderGroq ? @"groq" : prov == MRGProviderXAI ? @"xai" : nil;
+    if (key && MRGProviderHasTTS(prov)) { MRGVoiceSetProviderVoice(p[key]); [what addObject:[NSString stringWithFormat:@"%@ voice %@", MRGProviderName(prov), p[key]]]; }
+    for (NSString *want in p[@"eleven"]) {
+        NSDictionary *hit = nil;
+        for (NSDictionary *v in MRGElevenVoices()) if ([[v[@"name"] lowercaseString] hasPrefix:want.lowercaseString]) { hit = v; break; }
+        if (hit) { MRGElevenSetVoice(hit[@"id"]); [what addObject:[@"ElevenLabs " stringByAppendingString:hit[@"name"]]]; break; }
+    }
+    AVSpeechSynthesisVoice *phone = bestPhoneVoice(p[@"gender"]);
+    if (phone) { MRGVoiceSetPhoneVoice(phone.identifier); [what addObject:[@"iPhone " stringByAppendingString:phone.name]]; }
+    [D() setObject:pid forKey:@"mirage.dj.voicePreset"];
+    MRGDJLog(@"voice: preset %@ (%@)", p[@"name"], what.count ? [what componentsJoinedByString:@", "] : @"settings only");
+    return what.count ? [what componentsJoinedByString:@" · "] : nil;
+}
 
 #pragma mark - phone voices
 
@@ -159,7 +297,9 @@ static void elevenSpeech(NSString *text, NSString *voice, double speed, void (^d
     if (!key.length || !voice.length) { done(nil, @"No ElevenLabs key or voice."); return; }
     NSString *path = [NSString stringWithFormat:@"/v1/text-to-speech/%@?output_format=mp3_44100_128", voice];
     void (^run)(NSString *, void (^)(NSData *, NSInteger, NSString *)) = ^(NSString *model, void (^cb)(NSData *, NSInteger, NSString *)) {
-        NSDictionary *body = @{@"text": text, @"model_id": model, @"voice_settings": @{@"speed": @(MIN(1.2, MAX(0.7, speed)))}};
+        NSDictionary *body = @{@"text": text, @"model_id": model,
+                               @"voice_settings": @{@"speed": @(MIN(1.2, MAX(0.7, speed))), @"stability": @(MRGElevenStability()),
+                                                    @"similarity_boost": @(MRGElevenSimilarity()), @"style": @(elevenStyle()), @"use_speaker_boost": @YES}};
         [[NSURLSession.sharedSession dataTaskWithRequest:elevenRequest(path, key, body) completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
             NSInteger status = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
             NSString *err = (error || status < 200 || status >= 300) ? elevenError(status, data, error) : nil;
@@ -172,7 +312,14 @@ static void elevenSpeech(NSString *text, NSString *voice, double speed, void (^d
     });
 }
 
+static NSString *engineSummary(void);
 NSString *MRGVoiceSummary(void) {
+    NSString *pid = MRGVoicePresetID(), *name = nil;
+    for (NSDictionary *p in MRGVoicePresets()) if ([p[@"id"] isEqualToString:pid]) name = p[@"name"];
+    NSString *e = engineSummary();
+    return name && MRGVoiceGetEngine() != MRGVoiceEngineOff ? [NSString stringWithFormat:@"%@ · %@", name, e] : e;
+}
+static NSString *engineSummary(void) {
     switch (MRGVoiceGetEngine()) {
         case MRGVoiceEngineOff: return @"Off";
         case MRGVoiceEngineProvider: {
@@ -194,6 +341,29 @@ NSString *MRGVoiceSummary(void) {
 
 #pragma mark - speaker
 
+static NSArray<NSString *> *sentences(NSString *text) {
+    NSMutableArray *out = [NSMutableArray array];
+    [text enumerateSubstringsInRange:NSMakeRange(0, text.length) options:NSStringEnumerationBySentences usingBlock:^(NSString *sub, NSRange r, NSRange er, BOOL *stop) {
+        NSString *t = [sub stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (t.length) [out addObject:t];
+    }];
+    return out.count ? out : @[text];
+}
+
+// The sentences joined with `mark` after each (an ellipsis, or an ElevenLabs <break/>).
+static NSString *withPauses(NSString *text, NSString *mark) {
+    NSArray<NSString *> *s = sentences(text);
+    if (s.count < 2) return text;
+    NSMutableString *out = [NSMutableString string];
+    for (NSUInteger i = 0; i < s.count; i++) {
+        NSString *x = s[i];
+        if (i + 1 == s.count) { [out appendString:x]; break; }
+        if ([mark isEqualToString:@"..."] && [x hasSuffix:@"."]) x = [x substringToIndex:x.length - 1];
+        [out appendFormat:@"%@%@ ", x, mark];
+    }
+    return out;
+}
+
 @interface MRGVoiceSpeaker () <AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate>
 @end
 
@@ -202,6 +372,8 @@ NSString *MRGVoiceSummary(void) {
     AVAudioPlayer *_audio;
     void (^_finished)(void);
     NSUInteger _token;
+    NSUInteger _pending;
+    AVSpeechUtterance *_lastUtterance;
 }
 
 + (instancetype)shared {
@@ -252,30 +424,48 @@ NSString *MRGVoiceSummary(void) {
         MRGDJLog(@"voice: %@ failed (%@), phone voice instead", what, error ?: @"unplayable audio");
         [self speakOnPhone:text voice:nil started:started];
     };
+    double pause = MRGVoicePause();
     if (engine == MRGVoiceEngineProvider && MRGProviderHasTTS(MRGAIProvider())) {
-        MRGAISpeech(text, voice ?: MRGVoiceProviderVoice(), speed, ^(NSData *audio, NSString *error) { play(audio, error, MRGProviderName(MRGAIProvider())); });
+        MRGProvider p = MRGAIProvider();
+        // Engines without a style prompt get their pauses as ellipses.
+        NSString *said = (p == MRGProviderGroq || p == MRGProviderXAI) && pause >= 0.5 ? withPauses(text, @"...") : text;
+        MRGAISpeech(said, voice ?: MRGVoiceProviderVoice(), speed, MRGVoiceInstructions(), ^(NSData *audio, NSString *error) { play(audio, error, MRGProviderName(MRGAIProvider())); });
         return;
     }
     if (engine == MRGVoiceEngineEleven && MRGElevenHasKey()) {
-        elevenSpeech(text, voice ?: MRGElevenVoice(), speed, ^(NSData *audio, NSString *error) { play(audio, error, @"ElevenLabs"); });
+        NSString *said = pause >= 0.3 ? withPauses(text, [NSString stringWithFormat:@" <break time=\"%.1fs\" />", MIN(1.5, pause)]) : text;
+        elevenSpeech(said, voice ?: MRGElevenVoice(), speed, ^(NSData *audio, NSString *error) { play(audio, error, @"ElevenLabs"); });
         return;
     }
     [self speakOnPhone:text voice:(engine == MRGVoiceEnginePhone ? voice : nil) started:started];
 }
 
+// Sentence by sentence, with the pause setting after each (the last one ends the line).
 - (void)speakOnPhone:(NSString *)text voice:(NSString *)identifier started:(void (^)(void))started {
-    AVSpeechUtterance *u = [AVSpeechUtterance speechUtteranceWithString:text];
-    u.voice = (identifier ? [AVSpeechSynthesisVoice voiceWithIdentifier:identifier] : nil) ?: MRGVoicePhoneVoice();
+    AVSpeechSynthesisVoice *voice = (identifier ? [AVSpeechSynthesisVoice voiceWithIdentifier:identifier] : nil) ?: MRGVoicePhoneVoice();
     float rate = AVSpeechUtteranceDefaultSpeechRate * (float)MRGVoiceSpeed();
-    u.rate = MIN(AVSpeechUtteranceMaximumSpeechRate, MAX(AVSpeechUtteranceMinimumSpeechRate, rate));
-    u.pitchMultiplier = (float)MRGVoicePitch();
-    u.volume = 1.0f;
-    u.preUtteranceDelay = 0.05;
-    [_synth speakUtterance:u];
+    double pause = MRGVoicePause();
+    NSArray *parts = pause >= 0.1 ? sentences(text) : @[text];
+    _pending = parts.count;
+    _lastUtterance = nil;
+    for (NSUInteger i = 0; i < parts.count; i++) {
+        AVSpeechUtterance *u = [AVSpeechUtterance speechUtteranceWithString:parts[i]];
+        u.voice = voice;
+        u.rate = MIN(AVSpeechUtteranceMaximumSpeechRate, MAX(AVSpeechUtteranceMinimumSpeechRate, rate));
+        u.pitchMultiplier = (float)MRGVoicePitch();
+        u.volume = 1.0f;
+        u.preUtteranceDelay = i == 0 ? 0.05 : 0;
+        if (i + 1 < parts.count) u.postUtteranceDelay = pause;
+        [_synth speakUtterance:u];
+        _lastUtterance = u;
+    }
     if (started) started();
 }
 
-- (void)speechSynthesizer:(AVSpeechSynthesizer *)s didFinishSpeechUtterance:(AVSpeechUtterance *)u { [self finish]; }
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)s didFinishSpeechUtterance:(AVSpeechUtterance *)u {
+    if (_lastUtterance && u != _lastUtterance) return;   // more sentences to come
+    [self finish];
+}
 - (void)speechSynthesizer:(AVSpeechSynthesizer *)s didCancelSpeechUtterance:(AVSpeechUtterance *)u { [self finish]; }
 - (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)p successfully:(BOOL)flag { [self finish]; }
 - (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)p error:(NSError *)error { [self finish]; }

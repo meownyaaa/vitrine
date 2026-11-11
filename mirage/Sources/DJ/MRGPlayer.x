@@ -36,6 +36,13 @@ NSString *const MRGPlayerTrackChangedNotification = @"MiragePlayerTrackChanged";
 @end
 @interface SPTPlayOptions : NSObject
 @property (copy, nonatomic) id skipTo;
+@property (copy, nonatomic) id playerOptionsOverride;
+@end
+@interface NSObject (MRGQueueEdit)
+- (id)fetchQueue;
+- (id)setQueue:(id)queue;
+- (NSArray *)nextTracks;
+- (void)setNextTracks:(NSArray *)tracks;
 @end
 @interface SPTSkipToTrack : NSObject
 - (id)initWithTrackURI:(id)uri;
@@ -478,7 +485,11 @@ static id runPlay(id player, id context, id options, id origin) {
 // Plays a context by URI (a track, an album, a playlist) the way Spotify's own Play buttons do: SPTPlayerContext
 // contextForURI:, SPTPlayOptions (skipTo the start track when given, sent again without it if refused) and the player's
 // own origin (playOriginWithViewURIOverride:externalReferrer:), through playContext:options:origin:.
-void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL, NSString *)) {
+void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL, NSString *)) { MRGPlayContext(uri, startTrack, nil, done); }
+
+// The same, with shuffle set for this play (SPTPlayOptions.playerOptionsOverride = SPTPlayerOptionOverrides with
+// shufflingContext) when `shuffle` is given; nil leaves the listener's shuffle setting alone.
+void MRGPlayContext(NSString *uri, NSString *startTrack, NSNumber *shuffle, void (^done)(BOOL, NSString *)) {
     @try {
         id player = playingPlayer();
         Class contextClass = objc_getClass("SPTPlayerContext");
@@ -493,8 +504,27 @@ void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL, N
         Class skipClass = objc_getClass("SPTSkipToTrack");
         BOOL skips = startTrack && [options respondsToSelector:@selector(setSkipTo:)] && [skipClass instancesRespondToSelector:@selector(initWithTrackURI:)];
         if (skips) [options setSkipTo:[[skipClass alloc] initWithTrackURI:[NSURL URLWithString:startTrack]]];
+        BOOL shuffled = NO;
+        if ([shuffle isKindOfClass:NSNumber.class]) {
+            Class overridesClass = objc_getClass("SPTPlayerOptionOverrides");
+            SEL setShuf = NSSelectorFromString(@"setShufflingContext:");
+            id overrides = [overridesClass instancesRespondToSelector:setShuf] ? [overridesClass new] : nil;
+            if (overrides && [options respondsToSelector:@selector(setPlayerOptionsOverride:)]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(overrides, setShuf, shuffle);   // an NSNumber property on the overrides
+                [options setPlayerOptionsOverride:overrides];
+                shuffled = YES;
+            } else MRGDJLog(@"play %@: shuffle override not available here", uri);
+        }
         id task = runPlay(player, context, options, origin);
-        MRGDJLog(@"play %@ (skipTo %@): task %@", uri, skips ? @"yes" : @"no", task ? NSStringFromClass([task class]) : @"nil");
+        MRGDJLog(@"play %@ (skipTo %@%@): task %@", uri, skips ? @"yes" : @"no", shuffled ? ([shuffle boolValue] ? @", shuffle on" : @", shuffle off") : @"", task ? NSStringFromClass([task class]) : @"nil");
+        if (task && [shuffle isKindOfClass:NSNumber.class] && [player respondsToSelector:NSSelectorFromString(@"setShufflingContext:")]) {
+            // Also as the player's own setting, once it has the new context (the override alone may only be a hint).
+            BOOL on = [shuffle boolValue];
+            id p2 = player;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                @try { ((id (*)(id, SEL, BOOL))objc_msgSend)(p2, NSSelectorFromString(@"setShufflingContext:"), on); MRGDJLog(@"play: shuffle %@ set on the player", on ? @"on" : @"off"); } @catch (NSException *e) {}
+            });
+        }
         if (!task) { done(NO, @"Spotify's player didn't take the request."); return; }
         watchTask(task, ^(BOOL ok, NSString *error) {
             MRGDJLog(@"play %@: %@", uri, ok ? @"taken" : [@"refused: " stringByAppendingString:error ?: @"?"]);
@@ -558,6 +588,62 @@ void MRGQueueTracks(NSArray<NSString *> *uris, void (^done)(BOOL ok, NSString *e
     };
     attempt = run;
     run();
+}
+
+// Empties Spotify's own queue (what "Add to queue" and the DJ queued; the context's own up-next stays, and a new context
+// replaces that anyway): the queue wrapper's fetchQueue (SPTPlayerQueueWrapperImpl, an SPTask whose result is the
+// SPTPlayerQueue), its nextTracks without the tracks whose provider is "queue", sent back with the player's own
+// setQueue: (SPTEsperantoPlayer, as Spotify's queue page does when tracks are removed). Answers within 4 seconds.
+void MRGClearQueue(void (^done)(NSUInteger removed, NSString *error)) {
+    __block BOOL answered = NO;
+    void (^finish)(NSUInteger, NSString *) = ^(NSUInteger n, NSString *e) {
+        if (answered) return;
+        answered = YES;
+        MRGDJLog(@"queue: clear %@", e ? [@"failed: " stringByAppendingString:e] : n ? [NSString stringWithFormat:@"done, %lu queued track(s) removed", (unsigned long)n] : @"done, nothing was queued");
+        if (done) done(n, e);
+    };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ finish(0, @"Spotify didn't answer in time"); });
+    @try {
+        id player = playingPlayer();
+        Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
+        if (!player) { finish(0, @"no player captured yet"); return; }
+        if (![player respondsToSelector:@selector(setQueue:)]) { missing(player, @"setQueue:"); finish(0, @"the player has no setQueue:"); return; }
+        if (![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] || ![wrapper instancesRespondToSelector:@selector(fetchQueue)]) { finish(0, @"the queue wrapper has no fetchQueue"); return; }
+        void (^edit)(id) = ^(id q) {
+            @try {
+                if (!q || ![q respondsToSelector:@selector(nextTracks)] || ![q respondsToSelector:@selector(copyWithZone:)]) {
+                    finish(0, [NSString stringWithFormat:@"the queue came back as %@", q ? NSStringFromClass([q class]) : @"nothing"]);
+                    return;
+                }
+                NSArray *next = [q nextTracks];
+                NSMutableArray *keep = [NSMutableArray array];
+                NSUInteger removed = 0;
+                for (id t in [next isKindOfClass:NSArray.class] ? next : @[]) {
+                    NSString *provider = [t respondsToSelector:@selector(provider)] ? sget(t, @"provider") : nil;
+                    if ([provider isKindOfClass:NSString.class] && [provider isEqualToString:@"queue"]) removed++;
+                    else [keep addObject:t];
+                }
+                if (!removed) { finish(0, nil); return; }
+                id copy = [q copy];
+                if (![copy respondsToSelector:@selector(setNextTracks:)]) { finish(0, @"the queue can't be edited"); return; }
+                [copy setNextTracks:keep];
+                id task = [player setQueue:copy];
+                MRGDJLog(@"queue: clear via setQueue: (%lu up next kept, %lu queued removed), task %@", (unsigned long)keep.count, (unsigned long)removed, task ? NSStringFromClass([task class]) : @"nil");
+                if (!task) { finish(removed, nil); return; }
+                watchTask(task, ^(BOOL ok, NSString *e) { finish(ok ? removed : 0, ok ? nil : (e ?: @"setQueue: refused")); });
+            } @catch (NSException *e) { finish(0, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]); }
+        };
+        id w = [[wrapper alloc] initWithPlayer:player];
+        id task = [w fetchQueue];
+        if (![task respondsToSelector:@selector(addCallback:on:)] || ![task respondsToSelector:@selector(addErrorCallback:on:)]) {
+            finish(0, [NSString stringWithFormat:@"fetchQueue gave %@", task ? NSStringFromClass([task class]) : @"nothing"]);
+            return;
+        }
+        [task addCallback:^(id result) { (void)w; edit(result); } on:dispatch_get_main_queue()];
+        [task addErrorCallback:^(NSError *e) { finish(0, e.localizedDescription ?: @"fetchQueue failed"); } on:dispatch_get_main_queue()];
+    } @catch (NSException *e) {
+        finish(0, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]);
+    }
 }
 
 BOOL MRGOpenSpotifyURI(NSString *uri) {

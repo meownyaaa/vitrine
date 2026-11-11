@@ -406,3 +406,147 @@ void MRGWebArtist(NSString *uri, void (^done)(NSDictionary *artist)) {
     if (!aid) { done(nil); return; }
     call(@"GET", [NSString stringWithFormat:@"/artists/%@", aid], nil, ^(id j, NSInteger s, NSString *e) { done(e ? nil : artistOut(j)); });
 }
+
+#pragma mark - an artist's catalog, a label's roster
+
+static NSDictionary *albumTrack(NSDictionary *tr, NSDictionary *album, NSString *cover) {
+    if (![tr isKindOfClass:NSDictionary.class] || ![tr[@"uri"] isKindOfClass:NSString.class] || ![tr[@"uri"] hasPrefix:@"spotify:track:"]) return nil;
+    NSDictionary *names = nameOf(tr);
+    if (!names) return nil;
+    NSMutableDictionary *d = [@{@"uri": tr[@"uri"]} mutableCopy];
+    [d addEntriesFromDictionary:names];
+    if (cover) d[@"image"] = cover;
+    if ([album[@"name"] isKindOfClass:NSString.class]) d[@"album"] = album[@"name"];
+    if ([album[@"release_date"] isKindOfClass:NSString.class]) d[@"released"] = album[@"release_date"];
+    return d;
+}
+
+// Everything of an artist's own Spotify can list, up to `max`, de-duplicated by title: their top tracks first, then
+// their albums and singles newest first (GET /artists/{id}/albums, then /albums/{id}/tracks for each), and when those
+// endpoints are closed to the app's token, pages of an artist:"Name" track search. done on the main queue.
+void MRGWebArtistCatalog(NSDictionary *artist, NSInteger max, void (^done)(NSArray<NSDictionary *> *tracks)) {
+    NSString *aid = artistIDOf(artist[@"uri"]);
+    NSString *name = [artist[@"name"] isKindOfClass:NSString.class] ? artist[@"name"] : nil;
+    if (!aid || !name.length) { done(@[]); return; }
+    max = MAX(10, MIN(max, 200));
+    NSMutableArray *out = [NSMutableArray array];
+    NSMutableSet *seenURI = [NSMutableSet set], *seenTitle = [NSMutableSet set];
+    BOOL (^byThem)(NSDictionary *) = ^BOOL(NSDictionary *tr) {
+        for (NSDictionary *ar in [tr[@"artists"] isKindOfClass:NSArray.class] ? tr[@"artists"] : @[])
+            if ([ar isKindOfClass:NSDictionary.class] && ([ar[@"uri"] isEqual:artist[@"uri"]] || MRGNamesMatch(ar[@"name"], name))) return YES;
+        return NO;
+    };
+    void (^add)(NSDictionary *) = ^(NSDictionary *d) {
+        if (!d[@"uri"] || out.count >= (NSUInteger)max) return;
+        NSString *t = norm(d[@"title"]);
+        if ([seenURI containsObject:d[@"uri"]] || (t.length && [seenTitle containsObject:t])) return;
+        [seenURI addObject:d[@"uri"]];
+        if (t.length) [seenTitle addObject:t];
+        [out addObject:d];
+    };
+    __block NSUInteger fromTop = 0, fromAlbums = 0, fromSearch = 0;
+    void (^finish)(void) = ^{
+        MRGDJLog(@"catalog: %@: %lu tracks (%lu top, %lu from albums, %lu from search)", name, (unsigned long)out.count, (unsigned long)fromTop, (unsigned long)fromAlbums, (unsigned long)fromSearch);
+        done(out);
+    };
+    // Pages of artist:"Name" (offsets 0…40), the fallback and the top-up.
+    void (^searchPages)(void) = ^{
+        NSString *q = enc([NSString stringWithFormat:@"artist:\"%@\"", name]);
+        dispatch_group_t g = dispatch_group_create();
+        NSMutableArray *pages = [NSMutableArray arrayWithCapacity:5];
+        for (int i = 0; i < 5; i++) [pages addObject:@[]];
+        for (int i = 0; i < 5; i++) {
+            dispatch_group_enter(g);
+            call(@"GET", [NSString stringWithFormat:@"/search?type=track&limit=10&offset=%d&q=%@", i * 10, q], nil, ^(id j, NSInteger s, NSString *e) {
+                pages[i] = itemsIn(j, @"tracks") ?: @[];
+                dispatch_group_leave(g);
+            });
+        }
+        dispatch_group_notify(g, dispatch_get_main_queue(), ^{
+            for (NSArray *page in pages) for (NSDictionary *tr in page) {
+                if (![tr isKindOfClass:NSDictionary.class] || !byThem(tr)) continue;
+                NSUInteger before = out.count; add(resolved(tr)); if (out.count > before) fromSearch++;
+            }
+            finish();
+        });
+    };
+    void (^albums)(void) = ^{
+        call(@"GET", [NSString stringWithFormat:@"/artists/%@/albums?include_groups=album,single&limit=10", aid], nil, ^(id j, NSInteger s, NSString *e) {
+            call(@"GET", [NSString stringWithFormat:@"/artists/%@/albums?include_groups=album,single&limit=10&offset=10", aid], nil, ^(id j2, NSInteger s2, NSString *e2) {
+                NSMutableArray *list = [NSMutableArray array];
+                for (id src in @[j ?: @{}, j2 ?: @{}]) {
+                    id items = [src isKindOfClass:NSDictionary.class] ? src[@"items"] : nil;
+                    for (NSDictionary *al in [items isKindOfClass:NSArray.class] ? items : @[]) if ([al isKindOfClass:NSDictionary.class] && [al[@"uri"] isKindOfClass:NSString.class] && [al[@"uri"] hasPrefix:@"spotify:album:"]) [list addObject:al];
+                }
+                if (!list.count) { MRGDJLog(@"catalog: %@: no albums from the Web API%@, searching instead", name, e ? [@" (" stringByAppendingFormat:@"%@)", e] : @""); searchPages(); return; }
+                if (list.count > 16) [list removeObjectsInRange:NSMakeRange(16, list.count - 16)];
+                NSMutableArray *perAlbum = [NSMutableArray array];
+                for (NSUInteger i = 0; i < list.count; i++) [perAlbum addObject:@[]];
+                dispatch_group_t g = dispatch_group_create();
+                for (NSUInteger i = 0; i < list.count; i++) {
+                    NSDictionary *al = list[i];
+                    NSString *alid = [al[@"uri"] hasPrefix:@"spotify:album:"] ? [al[@"uri"] substringFromIndex:14] : nil;
+                    if (!alid) continue;
+                    NSString *cover = artistImage(al);
+                    dispatch_group_enter(g);
+                    call(@"GET", [NSString stringWithFormat:@"/albums/%@/tracks?limit=50", alid], nil, ^(id j3, NSInteger s3, NSString *e3) {
+                        void (^take)(id) = ^(id json) {
+                            NSMutableArray *a = [NSMutableArray array];
+                            id items = [json isKindOfClass:NSDictionary.class] ? json[@"items"] : nil;
+                            for (NSDictionary *tr in [items isKindOfClass:NSArray.class] ? items : @[]) {
+                                if (![tr isKindOfClass:NSDictionary.class] || !byThem(tr)) continue;
+                                NSDictionary *d = albumTrack(tr, al, cover);
+                                if (d) [a addObject:d];
+                            }
+                            perAlbum[i] = a;
+                            dispatch_group_leave(g);
+                        };
+                        if (s3 == 400) {   // a smaller page where the token caps limits at 10
+                            call(@"GET", [NSString stringWithFormat:@"/albums/%@/tracks?limit=10", alid], nil, ^(id j4, NSInteger s4, NSString *e4) { take(j4); });
+                            return;
+                        }
+                        take(j3);
+                    });
+                }
+                dispatch_group_notify(g, dispatch_get_main_queue(), ^{
+                    for (NSArray *a in perAlbum) for (NSDictionary *d in a) { NSUInteger before = out.count; add(d); if (out.count > before) fromAlbums++; }
+                    if (out.count < 25 && out.count < (NSUInteger)max) searchPages(); else finish();
+                });
+            });
+        });
+    };
+    call(@"GET", [NSString stringWithFormat:@"/artists/%@/top-tracks?market=from_token", aid], nil, ^(id j, NSInteger s, NSString *e) {
+        id list = [j isKindOfClass:NSDictionary.class] ? j[@"tracks"] : nil;
+        for (NSDictionary *tr in [list isKindOfClass:NSArray.class] ? list : @[]) { NSUInteger before = out.count; add([tr isKindOfClass:NSDictionary.class] ? resolved(tr) : nil); if (out.count > before) fromTop++; }
+        albums();
+    });
+}
+
+// The artists on a record label (or crew imprint), most releases first: an album search on label:"Name". Spotify's
+// search has long taken the label filter though its docs don't list it; when it doesn't, the list is empty.
+void MRGWebLabelArtists(NSString *label, void (^done)(NSArray<NSDictionary *> *artists)) {
+    NSString *l = [label stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!l.length) { done(@[]); return; }
+    NSString *q = enc([NSString stringWithFormat:@"label:\"%@\"", l]);
+    call(@"GET", [NSString stringWithFormat:@"/search?type=album&limit=10&q=%@", q], nil, ^(id j, NSInteger s, NSString *e) {
+        call(@"GET", [NSString stringWithFormat:@"/search?type=album&limit=10&offset=10&q=%@", q], nil, ^(id j2, NSInteger s2, NSString *e2) {
+            NSMutableDictionary<NSString *, NSNumber *> *count = [NSMutableDictionary dictionary];
+            NSMutableDictionary<NSString *, NSDictionary *> *who = [NSMutableDictionary dictionary];
+            for (id src in @[j ?: @{}, j2 ?: @{}]) {
+                for (NSDictionary *al in itemsIn(src, @"albums") ?: @[]) {
+                    NSArray *ars = [al isKindOfClass:NSDictionary.class] && [al[@"artists"] isKindOfClass:NSArray.class] ? al[@"artists"] : @[];
+                    NSDictionary *ar = [ars.firstObject isKindOfClass:NSDictionary.class] ? ars.firstObject : nil;
+                    if (![ar[@"uri"] isKindOfClass:NSString.class] || ![ar[@"name"] isKindOfClass:NSString.class]) continue;
+                    if ([ar[@"name"] isEqualToString:@"Various Artists"]) continue;
+                    count[ar[@"uri"]] = @(count[ar[@"uri"]].integerValue + 1);
+                    who[ar[@"uri"]] = @{@"uri": ar[@"uri"], @"name": ar[@"name"]};
+                }
+            }
+            NSArray *uris = [count keysSortedByValueUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [b compare:a]; }];
+            NSMutableArray *out = [NSMutableArray array];
+            for (NSString *u in uris) { [out addObject:who[u]]; if (out.count >= 8) break; }
+            MRGDJLog(@"label: %lu artists on label \"%@\"%@", (unsigned long)out.count, l, e ? [@", " stringByAppendingString:e] : @"");
+            done(out);
+        });
+    });
+}

@@ -18,6 +18,8 @@ void MRGPlaylistRemove(NSString *playlistURI, NSArray<NSString *> *trackURIs, MR
 // recovered at spotify.com/account/recover-playlists); for someone else's it unfollows.
 void MRGPlaylistDelete(NSString *playlistURI, MRGPlaylistDone done);
 
+// The playlists in the listener's library (rootlist on spclient): uri, name, mine, tracks. Cached 10 minutes.
+void MRGPlaylistLibrary(void (^done)(NSArray<NSDictionary *> *playlists, NSString *error));
 // Playlists Mirage made (name, uri, created), newest first; kept on this phone.
 NSArray<NSDictionary *> *MRGPlaylistsMade(void);
 // A spotify:playlist: URI from a link or URI string, or nil.

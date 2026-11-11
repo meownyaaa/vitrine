@@ -23,6 +23,8 @@ NSString *MRGPlayerContextURI(void);   // what the player is playing from (spoti
 // came out: MRGWaitForPlayback checks that.
 void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL ok, NSString *error));
 // Adds tracks to Spotify's queue; call it once the context is playing (earlier, the player answers 409 Conflict).
+void MRGPlayContext(NSString *uri, NSString *startTrack, NSNumber *shuffle, void (^done)(BOOL ok, NSString *error));   // shuffle nil: unchanged
+void MRGClearQueue(void (^done)(NSUInteger removed, NSString *error));   // Spotify's own queue (provider "queue"), main queue
 void MRGQueueTracks(NSArray<NSString *> *uris, void (^done)(BOOL ok, NSString *error));
 // Hands a spotify: URI to Spotify's own link dispatcher, as a tapped link would (opens its page). NO when not captured.
 BOOL MRGOpenSpotifyURI(NSString *uri);

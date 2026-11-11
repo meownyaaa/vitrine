@@ -48,7 +48,8 @@ void MRGAIChat(NSString *system, NSString *user, BOOL json, void (^done)(NSStrin
 
 // The provider's speech for a line in `voice` (nil: its default), at `speed` (1 = normal): audio data AVAudioPlayer
 // can play (MP3 from OpenAI and xAI, WAV from Gemini and Groq).
-void MRGAISpeech(NSString *text, NSString *voice, double speed, void (^done)(NSData *audio, NSString *error));
+// instructions: how to say it (OpenAI gpt-4o-mini-tts "instructions", a style prompt for Gemini); nil for the default.
+void MRGAISpeech(NSString *text, NSString *voice, double speed, NSString *instructions, void (^done)(NSData *audio, NSString *error));
 // The provider's voices, from its docs or its own voice list (xAI's GET /v1/tts/voices): id, name.
 void MRGAIProviderVoices(void (^done)(NSArray<NSDictionary *> *voices));
 

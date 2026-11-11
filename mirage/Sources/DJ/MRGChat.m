@@ -20,6 +20,19 @@ static NSString *json(id obj) {
     return d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : @"{}";
 }
 
+// A tool result for the transcript, at most ~2500 characters (long lists cut to their first entries).
+static NSString *capped(id result) {
+    NSString *j = json(result);
+    if (j.length <= 2500 || ![result isKindOfClass:NSDictionary.class]) return j.length <= 2500 ? j : [[j substringToIndex:2500] stringByAppendingString:@"…(cut)"];
+    NSMutableDictionary *r = [result mutableCopy];
+    for (NSString *k in [r allKeys]) {
+        id v = r[k];
+        if ([v isKindOfClass:NSArray.class] && [v count] > 6) { r[k] = [v subarrayWithRange:NSMakeRange(0, 6)]; r[[k stringByAppendingString:@"_total"]] = @([v count]); }
+    }
+    j = json(r);
+    return j.length <= 2500 ? j : [[j substringToIndex:2500] stringByAppendingString:@"…(cut)"];
+}
+
 static NSString *isoDay(NSDate *d) {
     if (!d) return @"";
     static NSDateFormatter *f;
@@ -51,7 +64,7 @@ static NSArray<NSDictionary *> *tools(void) {
         list = @[
             tool(@"search", @"Search Spotify's catalog. Returns tracks (uri, title, artist, album, popularity 0-100), artists, albums or playlists. Use it to find exact track URIs before playing, queueing or adding them. Artist search understands nicknames, abbreviations and typos.",
                  @{@"query": S(@"what to search for, e.g. 'Archangel Burial', 'artist:Burial' or just an artist's name"), @"type": @{@"type": @"string", @"enum": @[@"track", @"artist", @"album", @"playlist"]}, @"limit": I(@"1-10, default 5")}, @[@"query"]),
-            tool(@"play_artist", @"Start a DJ set built around an artist: their songs plus artists right next to them (mode 'mix'), only their songs ('only'), or music that sounds like them ('like'). Use this whenever they ask for an artist by name, nickname or abbreviation (e.g. 'play some yvl', 'run pz', 'stuff like clairo').",
+            tool(@"play_artist", @"Play an artist (or a label / crew like 'yvl' or 'opium'): their whole catalog as deep as Spotify lists it, then similar artists, with the queue replaced (modes 'mix' and 'only'); or a set of music that sounds like them ('like'). Use this whenever they ask for an artist by name, nickname or abbreviation (e.g. 'play some yvl', 'run pz', 'stuff like clairo').",
                  @{@"artist": S(@"the artist as the listener wrote it or its full name"), @"mode": @{@"type": @"string", @"enum": @[@"mix", @"only", @"like"]}}, @[@"artist"]),
             tool(@"dj_segment", @"Start a Spotify-DJ-style segment from their own history: 'throwbacks' (songs they loved and haven't played in a while), 'on_repeat' (what they've been playing lately and songs close to it), 'discover' (new-to-them songs in their lane), or 'favorites'.",
                  @{@"kind": @{@"type": @"string", @"enum": @[@"throwbacks", @"on_repeat", @"discover", @"favorites"]}}, @[@"kind"]),
@@ -59,6 +72,8 @@ static NSArray<NSDictionary *> *tools(void) {
             tool(@"player_control", @"Control playback: skip to the next song, go back, pause or resume.", @{@"action": @{@"type": @"string", @"enum": @[@"next", @"previous", @"pause", @"resume"]}}, @[@"action"]),
             tool(@"like_track", @"Like a track (save it to Liked Songs) or unlike it. Without a uri it's the song playing now.", @{@"uri": S(@"spotify:track: URI, optional"), @"unlike": @{@"type": @"boolean", @"description": @"true to remove it from Liked Songs"}}, @[]),
             tool(@"taste_profile", @"What the listener is into, from the history on this phone: on repeat lately, top artists lately and all time, throwbacks.", @{}, @[]),
+            tool(@"play_context", @"Play a whole playlist, album, artist or the listener's Liked Songs in Spotify right now (it replaces the queue). target: a spotify: URI or open.spotify.com link (from search or list_playlists), 'liked' for their Liked Songs, or a playlist or album name (their own playlists are found by name, then Spotify search). Use this whenever they ask to play a playlist, an album or their likes; never tell them to tap it themselves.",
+                 @{@"target": S(@"URI, link, 'liked', or a name"), @"kind": @{@"type": @"string", @"enum": @[@"playlist", @"album", @"artist", @"liked"]}, @"shuffle": @{@"type": @"boolean", @"description": @"true to shuffle, false for in order; omit to keep their setting"}}, @[@"target"]),
             tool(@"play_tracks", @"Play these tracks now in Spotify, as a DJ set (the first plays, the rest are queued).", @{@"uris": A(@"spotify:track: URIs, in order"), @"intro": S(@"optional short line the DJ says before the first one")}, @[@"uris"]),
             tool(@"queue_tracks", @"Add tracks to the end of Spotify's queue without interrupting what's playing.", @{@"uris": A(@"spotify:track: URIs")}, @[@"uris"]),
             tool(@"start_dj_set", @"Start a full Mirage DJ set from a request (the DJ picks about 15 songs, plays them and talks between them).", @{@"request": S(@"the vibe, genre, era or constraints, in the listener's words")}, @[@"request"]),
@@ -71,7 +86,7 @@ static NSArray<NSDictionary *> *tools(void) {
             tool(@"add_to_playlist", @"Add tracks to a playlist. The playlist can be a spotify:playlist: URI or link, the name of one Mirage made, or 'current' for the playlist playing now. Without uris it adds the song playing now.", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs (optional: the song playing now)")}, @[@"playlist"]),
             tool(@"remove_from_playlist", @"Remove tracks from a playlist (URI, link, name of one Mirage made, or 'current').", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs")}, @[@"playlist", @"uris"]),
             tool(@"delete_playlist", @"Ask to delete (remove from the library) a playlist. This does NOT delete it: it shows the listener a Delete button to confirm. Tell them to tap it.", @{@"playlist": S(@"URI, link, name of one Mirage made, or 'current'")}, @[@"playlist"]),
-            tool(@"list_playlists", @"Playlists Mirage can act on: ones it created, and the one playing now. (It can't read the listener's whole library.)", @{}, @[]),
+            tool(@"list_playlists", @"The playlists in the listener's library (name, uri, whether they own it), plus ones Mirage made and the one playing now.", @{@"filter": S(@"optional: only names containing this")}, @[]),
         ];
     });
     return list;
@@ -131,8 +146,11 @@ static NSArray<NSDictionary *> *tools(void) {
         @"- They write casually: slang, abbreviations, typos, no punctuation (\"sum\" = some, \"ts\" = this, \"rn\" = right now, \"fr\", \"lowkey\", \"bangers\", \"slaps\", \"run it\", \"throw on\"). Work out what they mean and act; don't ask unless it's truly ambiguous.\n"
         @"- Short names are usually artists (\"yvl\", \"pz\", \"uzi\", \"carti\"): if they ask to play one, call play_artist with it as written (it resolves nicknames and abbreviations on Spotify). For a specific song, search type track, then play_tracks.\n"
         @"- \"make/create a playlist (named X)\" → create_playlist right away with that name (add songs only if they asked). \"add this\" → add_to_playlist without uris (the song playing now). \"skip\", \"pause\", \"go back\" → player_control. \"like this\"/\"save this\" → like_track.\n"
+        @"- \"play my liked songs\"/\"my likes\" → play_context target 'liked'. \"play <playlist or album>\" → play_context with its name (their own playlists are found by name) or a URI from search; \"shuffle\" → shuffle true.\n"
+        @"- An artist (\"play yvl\", \"run uzi\") → play_artist: it plays their whole catalog, then similar artists. Any new set, artist or playlist replaces the queue.\n"
         @"- \"throwbacks\", \"old stuff i used to play\" → dj_segment throwbacks; \"what i've been playing\" → on_repeat; \"something new\" → discover; \"switch it up\" → switch_it_up; a vibe, genre or mood → start_dj_set with their words.\n\n"
         @"Rules:\n"
+        @"- You can play anything: tracks, artists, playlists, albums, Liked Songs. NEVER tell the listener to tap, open or play something in Spotify themselves; do it with a tool, and if it fails say what failed.\n"
         @"- Use the function-calling tools to act. NEVER write a tool call, a function name, JSON or a spotify: URI in your reply text; the listener only sees your words and the cards.\n"
         @"- For any fact about their listening (first plays, counts, top artists, dates) call a tool; never invent numbers or dates. The listening history on this phone covers: %@. If it doesn't cover what they ask, say so and tell them they can import their Spotify data in Settings → Mirage → AI DJ → Listening history.\n"
         @"- Before playing, queueing or adding specific songs, get real URIs with search.\n"
@@ -166,10 +184,11 @@ static NSArray<NSDictionary *> *tools(void) {
     [self step:0 turn:++_turn];
 }
 
-// Keeps the last ~40 messages, cut at a user message so no tool answer loses its call.
+// Keeps the last ~24 messages, cut at a user message so no tool answer loses its call (every round resends them, and
+// free tiers count tokens per minute: Groq's 429 "Requested … Please try again in …" came from long chats).
 - (void)trim {
-    if (_transcript.count <= 40) return;
-    NSUInteger cut = _transcript.count - 40;
+    if (_transcript.count <= 24) return;
+    NSUInteger cut = _transcript.count - 24;
     while (cut < _transcript.count && ![_transcript[cut][@"role"] isEqualToString:@"user"]) cut++;
     if (cut < _transcript.count) [_transcript removeObjectsInRange:NSMakeRange(0, cut)];
 }
@@ -235,7 +254,7 @@ static NSArray<NSDictionary *> *tools(void) {
         if (turn != self->_turn) return;
         self->_lastToolResult = [result isKindOfClass:NSDictionary.class] ? result : nil;
         if (str(result[@"error"])) MRGDJLog(@"chat: tool %@ failed: %@", name, result[@"error"]);
-        [self->_transcript addObject:@{@"role": @"tool", @"tool_call_id": str(c[@"id"]) ?: @"", @"name": name, @"content": json(result)}];
+        [self->_transcript addObject:@{@"role": @"tool", @"tool_call_id": str(c[@"id"]) ?: @"", @"name": name, @"content": capped(result)}];
         [self runCalls:calls index:i + 1 turn:turn done:done];
     };
     if (str(c[@"bad_arguments"])) {
@@ -252,7 +271,7 @@ static NSArray<NSDictionary *> *tools(void) {
                         @"start_dj_set": @"Starting a set…", @"first_played": @"Checking your history…", @"track_stats": @"Checking your history…",
                         @"top_listening": @"Checking your history…", @"history_overview": @"Checking your history…",
                         @"create_playlist": @"Creating the playlist…", @"add_to_playlist": @"Adding songs…", @"remove_from_playlist": @"Removing songs…",
-                        @"play_artist": @"Finding the artist…", @"dj_segment": @"Starting a set…", @"switch_it_up": @"Switching it up…",
+                        @"play_artist": @"Finding the artist…", @"play_context": @"Starting it…", @"list_playlists": @"Reading your playlists…", @"dj_segment": @"Starting a set…", @"switch_it_up": @"Switching it up…",
                         @"player_control": @"On it…", @"like_track": @"Saving…", @"taste_profile": @"Checking your history…"};
     return m[tool] ?: @"Working…";
 }
@@ -288,8 +307,49 @@ static NSArray<NSDictionary *> *tools(void) {
     return nil;
 }
 
+// The same, also looking through the listener's library by name (exact, then contained, then close).
+- (void)findPlaylist:(NSString *)ref done:(void (^)(NSDictionary *playlist))done {
+    NSDictionary *quick = [self playlistFrom:ref];
+    if (quick || !ref.length || [ref.lowercaseString containsString:@"current"]) { done(quick); return; }
+    MRGPlaylistLibrary(^(NSArray<NSDictionary *> *lib, NSString *error) {
+        NSString *want = ref.lowercaseString;
+        for (NSDictionary *m in lib) if ([[m[@"name"] lowercaseString] isEqualToString:want]) { done(m); return; }
+        for (NSDictionary *m in lib) if (want.length >= 3 && [[m[@"name"] lowercaseString] containsString:want]) { done(m); return; }
+        for (NSDictionary *m in lib) if (MRGNamesMatch(m[@"name"], ref)) { done(m); return; }
+        done(nil);
+    });
+}
+
 static NSDictionary *notFound(NSString *ref) {
-    return @{@"error": [NSString stringWithFormat:@"Couldn't find a playlist called \"%@\". Mirage can only act on playlists it made, the one playing now, or one given by its Spotify link (Share → Copy link).", ref ?: @""]};
+    return @{@"error": [NSString stringWithFormat:@"Couldn't find a playlist called \"%@\" in their library or among the ones Mirage made. Try search type playlist, or list_playlists.", ref ?: @""]};
+}
+
+// spotify:(playlist|album|artist|show|collection…) from a URI or an open.spotify.com link, or nil.
+static NSString *contextURIFrom(NSString *text) {
+    NSString *t = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if ([t hasPrefix:@"spotify:"] && ![t hasPrefix:@"spotify:track:"]) return t;
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"open\\.spotify\\.com/(?:intl-[a-z]+/)?(playlist|album|artist|show)/([A-Za-z0-9]+)" options:0 error:nil];
+    NSTextCheckingResult *m = t.length ? [re firstMatchInString:t options:0 range:NSMakeRange(0, t.length)] : nil;
+    if (m) return [NSString stringWithFormat:@"spotify:%@:%@", [t substringWithRange:[m rangeAtIndex:1]], [t substringWithRange:[m rangeAtIndex:2]]];
+    return nil;
+}
+
+static BOOL meansLiked(NSString *t) {
+    NSString *l = t.lowercaseString;
+    return [l isEqualToString:@"liked"] || [l containsString:@"liked songs"] || [l containsString:@"my likes"] || [l isEqualToString:@"likes"] ||
+           [l containsString:@"saved songs"] || [l containsString:@"liked music"] || [l containsString:@"collection"] || [l isEqualToString:@"liked tracks"];
+}
+
+// Plays the context and answers the tool (Liked Songs: the user collection URI, then spotify:collection:tracks).
+- (void)playContextURIs:(NSArray<NSString *> *)uris name:(NSString *)pname shuffle:(NSNumber *)shuffle answer:(void (^)(id))answer {
+    NSString *uri = uris.firstObject;
+    [MRGDJ.shared playContext:uri shuffle:shuffle done:^(BOOL ok, NSString *error) {
+        if (!ok && uris.count > 1) { [self playContextURIs:[uris subarrayWithRange:NSMakeRange(1, uris.count - 1)] name:pname shuffle:shuffle answer:answer]; return; }
+        if (ok) [self add:[MRGChatItem kind:@"card" text:nil card:@{@"type": @"playlist", @"name": pname ?: @"Playing", @"uri": uri,
+                                                                     @"detail": shuffle ? ([shuffle boolValue] ? @"Playing · shuffled" : @"Playing · in order") : @"Playing"}]];
+        answer(ok ? @{@"ok": @YES, @"playing": pname ?: uri, @"uri": uri, @"note": error ? [@"Sent to Spotify; not confirmed yet: " stringByAppendingString:error] : @"Playing now; the queue was replaced."}
+                  : @{@"error": error ?: @"Spotify's player refused it."});
+    }];
 }
 
 - (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(id))answer {
@@ -325,6 +385,41 @@ static NSDictionary *notFound(NSString *ref) {
         });
         return;
     }
+    if ([name isEqualToString:@"play_context"]) {
+        NSString *target = str(args[@"target"]) ?: str(args[@"uri"]) ?: str(args[@"playlist"]) ?: str(args[@"name"]) ?: @"";
+        NSString *kind = str(args[@"kind"]);
+        NSNumber *shuffle = [args[@"shuffle"] respondsToSelector:@selector(boolValue)] ? @([args[@"shuffle"] boolValue]) : nil;
+        if ([kind isEqualToString:@"liked"] || meansLiked(target)) {
+            NSString *user = MRGSpotifyUsername();
+            NSMutableArray *uris = [NSMutableArray array];
+            if (user.length) [uris addObject:[NSString stringWithFormat:@"spotify:user:%@:collection", user]];
+            [uris addObject:@"spotify:collection:tracks"];
+            MRGDJLog(@"chat: play Liked Songs (%@)", user.length ? @"user collection first" : @"username unknown, spotify:collection:tracks");
+            [self playContextURIs:uris name:@"Liked Songs" shuffle:shuffle answer:answer];
+            return;
+        }
+        NSString *uri = contextURIFrom(target);
+        if (uri) { [self playContextURIs:@[uri] name:nil shuffle:shuffle answer:answer]; return; }
+        if (!target.length) { answer(@{@"error": @"Say which playlist, album or artist (or 'liked')."}); return; }
+        void (^bySearch)(void) = ^{
+            NSString *type = [kind isEqualToString:@"album"] ? @"album" : [kind isEqualToString:@"artist"] ? @"artist" : @"playlist";
+            MRGWebSearch(target, type, 5, ^(NSArray<NSDictionary *> *results, NSString *error) {
+                NSDictionary *best = nil;
+                for (NSDictionary *r in results) if ([[r[@"name"] lowercaseString] isEqualToString:target.lowercaseString]) { best = r; break; }
+                for (NSDictionary *r in results) if (!best && MRGNamesMatch(r[@"name"], target)) best = r;
+                best = best ?: results.firstObject;
+                if (!str(best[@"uri"])) { answer(@{@"error": error ?: [NSString stringWithFormat:@"No %@ called \"%@\" found.", type, target]}); return; }
+                MRGDJLog(@"chat: play_context found a %@ by search", type);
+                [self playContextURIs:@[best[@"uri"]] name:best[@"name"] shuffle:shuffle answer:answer];
+            });
+        };
+        if ([kind isEqualToString:@"album"] || [kind isEqualToString:@"artist"]) { bySearch(); return; }
+        [self findPlaylist:target done:^(NSDictionary *pl) {
+            if (pl[@"uri"]) { MRGDJLog(@"chat: play_context found the playlist in the library"); [self playContextURIs:@[pl[@"uri"]] name:pl[@"name"] shuffle:shuffle answer:answer]; return; }
+            bySearch();
+        }];
+        return;
+    }
     if ([name isEqualToString:@"play_tracks"]) {
         NSArray *tracks = [self tracksFor:strings(args[@"uris"])];
         if (!tracks.count) { answer(@{@"error": @"No spotify:track: URIs given; search first."}); return; }
@@ -357,8 +452,9 @@ static NSDictionary *notFound(NSString *ref) {
         NSString *request = [mode isEqualToString:@"only"] ? [NSString stringWithFormat:@"only %@", artist]
                           : [mode isEqualToString:@"like"] ? [NSString stringWithFormat:@"music like %@", artist] : [NSString stringWithFormat:@"play %@", artist];
         [MRGDJ.shared startWithRequest:request];
-        [self add:[MRGChatItem kind:@"note" text:[NSString stringWithFormat:@"Building a %@ set… it shows up in the DJ sheet and on Now Playing.", artist] card:nil]];
-        answer(@{@"ok": @YES, @"note": @"The DJ is finding the artist on Spotify and building the set (their songs plus close neighbours); it starts in a few seconds."});
+        [self add:[MRGChatItem kind:@"note" text:[NSString stringWithFormat:@"Lining up %@… it shows up in the DJ sheet and on Now Playing.", artist] card:nil]];
+        answer(@{@"ok": @YES, @"note": [mode isEqualToString:@"like"] ? @"The DJ is finding the artist and building a set of music like them; it starts in a few seconds, replacing the queue."
+                                                                        : @"The DJ is finding the artist (or label / crew) on Spotify and will play their whole catalog, then similar artists, replacing the queue; it starts in a few seconds."});
         return;
     }
     if ([name isEqualToString:@"dj_segment"]) {
@@ -476,7 +572,7 @@ static NSDictionary *notFound(NSString *ref) {
     }
     if ([name isEqualToString:@"add_to_playlist"] || [name isEqualToString:@"remove_from_playlist"]) {
         BOOL add = [name hasPrefix:@"add"];
-        NSDictionary *pl = [self playlistFrom:str(args[@"playlist"]) ?: @""];
+        [self findPlaylist:str(args[@"playlist"]) ?: @"" done:^(NSDictionary *pl) {
         if (!pl) { answer(notFound(str(args[@"playlist"]))); return; }
         NSArray *uris = strings(args[@"uris"]);
         if (!uris.count && add && str(MRGNowPlaying()[@"uri"])) { uris = @[MRGNowPlaying()[@"uri"]]; [self remember:@[MRGNowPlaying()]]; }
@@ -486,22 +582,36 @@ static NSDictionary *notFound(NSString *ref) {
             answer(ok ? @{@"ok": @YES} : @{@"error": error ?: @"Spotify refused."});
         };
         if (add) MRGPlaylistAdd(pl[@"uri"], uris, done); else MRGPlaylistRemove(pl[@"uri"], uris, done);
+        }];
         return;
     }
     if ([name isEqualToString:@"delete_playlist"]) {
-        NSDictionary *pl = [self playlistFrom:str(args[@"playlist"]) ?: @""];
-        if (!pl) { answer(notFound(str(args[@"playlist"]))); return; }
-        [self add:[MRGChatItem kind:@"card" text:nil card:@{@"type": @"confirm_delete", @"name": pl[@"name"] ?: @"this playlist", @"uri": pl[@"uri"], @"state": @"pending"}]];
-        MRGDJLog(@"chat: delete of %@ waiting for the listener's tap", pl[@"uri"]);
-        answer(@{@"status": @"waiting_for_confirmation", @"note": @"A Delete button is shown. Nothing is deleted unless the listener taps it."});
+        [self findPlaylist:str(args[@"playlist"]) ?: @"" done:^(NSDictionary *pl) {
+            if (!pl) { answer(notFound(str(args[@"playlist"]))); return; }
+            [self add:[MRGChatItem kind:@"card" text:nil card:@{@"type": @"confirm_delete", @"name": pl[@"name"] ?: @"this playlist", @"uri": pl[@"uri"], @"state": @"pending"}]];
+            MRGDJLog(@"chat: delete of %@ waiting for the listener's tap", pl[@"uri"]);
+            answer(@{@"status": @"waiting_for_confirmation", @"note": @"A Delete button is shown. Nothing is deleted unless the listener taps it."});
+        }];
         return;
     }
     if ([name isEqualToString:@"list_playlists"]) {
-        NSMutableArray *out = [NSMutableArray array];
-        for (NSDictionary *m in MRGPlaylistsMade()) [out addObject:@{@"name": m[@"name"] ?: @"", @"uri": m[@"uri"] ?: @"", @"made_by": @"Mirage"}];
-        NSString *ctx = MRGPlayerContextURI();
-        if ([ctx hasPrefix:@"spotify:playlist:"]) [out addObject:@{@"name": @"(playing now)", @"uri": ctx}];
-        answer(@{@"playlists": out, @"note": @"Only playlists Mirage made and the one playing now are known; for others ask for the playlist's link."});
+        NSString *filter = str(args[@"filter"]).lowercaseString;
+        MRGPlaylistLibrary(^(NSArray<NSDictionary *> *lib, NSString *error) {
+            NSMutableArray *out = [NSMutableArray array];
+            NSMutableSet *seen = [NSMutableSet set];
+            for (NSDictionary *m in lib) {
+                if (filter.length && ![[m[@"name"] lowercaseString] containsString:filter]) continue;
+                [seen addObject:m[@"uri"]];
+                [out addObject:@{@"name": m[@"name"] ?: @"", @"uri": m[@"uri"], @"mine": m[@"mine"] ?: @YES}];
+                if (out.count >= 40) break;
+            }
+            for (NSDictionary *m in MRGPlaylistsMade()) if (![seen containsObject:m[@"uri"] ?: @""] && (!filter.length || [[m[@"name"] lowercaseString] containsString:filter])) [out addObject:@{@"name": m[@"name"] ?: @"", @"uri": m[@"uri"] ?: @"", @"made_by": @"Mirage"}];
+            NSString *ctx = MRGPlayerContextURI();
+            if ([ctx hasPrefix:@"spotify:playlist:"]) [out addObject:@{@"name": @"(playing now)", @"uri": ctx}];
+            NSMutableDictionary *r = [@{@"playlists": out} mutableCopy];
+            if (!lib.count) r[@"note"] = [NSString stringWithFormat:@"Their library couldn't be read (%@); search type playlist finds public ones by name.", error ?: @"?"];
+            answer(r);
+        });
         return;
     }
     answer(@{@"error": [NSString stringWithFormat:@"Unknown tool %@", name]});

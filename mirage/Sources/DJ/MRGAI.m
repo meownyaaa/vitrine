@@ -256,20 +256,57 @@ static NSString *errorMessage(MRGProvider p, NSInteger status, NSData *data, NSE
     NSString *base;
     if (status == 401 || status == 403) base = [NSString stringWithFormat:@"%@ refused this key (HTTP %ld).", name, (long)status];
     else if (status == 402) base = [NSString stringWithFormat:@"%@ says this key is out of credit (HTTP 402).", name];
-    else if (status == 429) base = [NSString stringWithFormat:@"%@ is rate-limiting this key or it's out of quota (HTTP 429). Wait a minute and try again.", name];
+    else if (status == 429) {
+        BOOL tpm = [detail rangeOfString:@"tokens per minute" options:NSCaseInsensitiveSearch].location != NSNotFound || [detail rangeOfString:@"TPM"].location != NSNotFound;
+        base = tpm ? [NSString stringWithFormat:@"%@'s free tier allows only so many words a minute and this chat went over it (HTTP 429). Mirage waited and tried again; give it a minute, or pick a model with higher limits in Settings → Mirage → AI DJ.", name]
+                   : [NSString stringWithFormat:@"%@ is rate-limiting this key or it's out of quota (HTTP 429). Wait a minute and try again.", name];
+    }
     else if (status >= 500) base = [NSString stringWithFormat:@"%@ is having trouble right now (HTTP %ld). Try again soon.", name, (long)status];
     else base = [NSString stringWithFormat:@"%@ answered HTTP %ld.", name, (long)status];
     return detail.length ? [NSString stringWithFormat:@"%@\n\n%@ said: %@", base, name, detail] : base;
 }
 
-static void send(MRGProvider p, NSURLRequest *r, void (^done)(id json, NSData *data, NSInteger status, NSString *error)) {
+// How long a 429 asks to wait: the Retry-After header, or the provider's own text ("Please try again in 7.52s",
+// "in 1m3.2s", "in 450ms": Groq's tokens-per-minute limit, which is what the chat's red "…Requested … Please t…"
+// bubble was). -1 when it doesn't say.
+static double retryAfter(NSHTTPURLResponse *resp, NSData *data) {
+    NSString *h = [resp isKindOfClass:NSHTTPURLResponse.class] ? resp.allHeaderFields[@"Retry-After"] ?: resp.allHeaderFields[@"retry-after"] : nil;
+    if ([h isKindOfClass:NSString.class] && h.doubleValue > 0) return h.doubleValue;
+    NSString *t = data.length ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+    if (!t.length) return -1;
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"try again in\\s+(?:(\\d+)m)?\\s*(?:([\\d.]+)(ms|s))?" options:NSRegularExpressionCaseInsensitive error:nil];
+    NSTextCheckingResult *m = [re firstMatchInString:t options:0 range:NSMakeRange(0, t.length)];
+    if (!m) return -1;
+    double secs = 0;
+    if ([m rangeAtIndex:1].location != NSNotFound) secs += [[t substringWithRange:[m rangeAtIndex:1]] doubleValue] * 60;
+    if ([m rangeAtIndex:2].location != NSNotFound) {
+        double v = [[t substringWithRange:[m rangeAtIndex:2]] doubleValue];
+        secs += [[t substringWithRange:[m rangeAtIndex:3]] isEqualToString:@"ms"] ? v / 1000.0 : v;
+    }
+    return secs > 0 ? secs : -1;
+}
+
+// One request; a 429 that asks for a short wait (up to 25 s) is sent again after it, twice at most, instead of failing.
+static void sendTry(MRGProvider p, NSURLRequest *r, int attempt, void (^done)(id json, NSData *data, NSInteger status, NSString *error)) {
     [[NSURLSession.sharedSession dataTaskWithRequest:r completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
         NSInteger status = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
+        if (status == 429 && attempt < 2) {
+            double wait = retryAfter((NSHTTPURLResponse *)resp, data);
+            if (wait < 0 && attempt == 0) wait = 6;   // no hint: one try after a few seconds
+            if (wait >= 0 && wait <= 25) {
+                MRGDJLog(@"ai: %@ rate limit (429), trying again in %.1fs", MRGProviderName(p), wait + 0.5);
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((wait + 0.5) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ sendTry(p, r, attempt + 1, done); });
+                return;
+            }
+        }
         id json = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         NSString *message = (error || status < 200 || status >= 300) ? errorMessage(p, status, data, error) : nil;
+        if (status == 429) MRGDJLog(@"ai: %@ rate limit (429) after %d tries: %@", MRGProviderName(p), attempt + 1, message);
         dispatch_async(dispatch_get_main_queue(), ^{ done(json, data, status, message); });
     }] resume];
 }
+
+static void send(MRGProvider p, NSURLRequest *r, void (^done)(id json, NSData *data, NSInteger status, NSString *error)) { sendTry(p, r, 0, done); }
 
 #pragma mark - setup
 
@@ -554,7 +591,7 @@ void MRGAIProviderVoices(void (^done)(NSArray<NSDictionary *> *)) {
     });
 }
 
-void MRGAISpeech(NSString *text, NSString *voice, double speed, void (^done)(NSData *, NSString *)) {
+void MRGAISpeech(NSString *text, NSString *voice, double speed, NSString *instructions, void (^done)(NSData *, NSString *)) {
     MRGProvider p = MRGAIProvider();
     NSString *key = MRGKeychainAPIKey();
     if (!key || !MRGProviderHasTTS(p)) { done(nil, @"This provider has no voice; using the phone's."); return; }
@@ -563,7 +600,7 @@ void MRGAISpeech(NSString *text, NSString *voice, double speed, void (^done)(NSD
     if (p == MRGProviderOpenAI) {
         NSMutableDictionary *body = [@{@"model": ttsModel(p), @"voice": v, @"input": text, @"response_format": @"mp3",
                                        @"speed": @(MIN(4.0, MAX(0.25, speed)))} mutableCopy];
-        if ([body[@"model"] containsString:@"gpt-4o"]) body[@"instructions"] = @"A relaxed, upbeat radio DJ. Casual, warm, natural.";
+        if ([body[@"model"] containsString:@"gpt-4o"]) body[@"instructions"] = instructions.length ? instructions : @"A relaxed, upbeat radio DJ. Casual, warm, natural.";
         NSMutableURLRequest *r = request(p, key, @"/audio/speech", body);
         [r setValue:@"audio/mpeg" forHTTPHeaderField:@"Accept"];
         send(p, r, ^(id j, NSData *d, NSInteger s, NSString *e) { done(e ? nil : d, e); });
@@ -594,7 +631,8 @@ void MRGAISpeech(NSString *text, NSString *voice, double speed, void (^done)(NSD
         });
         return;
     }
-    NSDictionary *body = @{@"contents": @[@{@"parts": @[@{@"text": [@"Say casually, like a laid-back radio DJ: " stringByAppendingString:text]}]}],
+    NSString *how = instructions.length ? [NSString stringWithFormat:@"Read the line after the colon aloud. %@\nLine: ", instructions] : @"Say casually, like a laid-back radio DJ: ";
+    NSDictionary *body = @{@"contents": @[@{@"parts": @[@{@"text": [how stringByAppendingString:text]}]}],
                            @"generationConfig": @{@"responseModalities": @[@"AUDIO"],
                                                   @"speechConfig": @{@"voiceConfig": @{@"prebuiltVoiceConfig": @{@"voiceName": v}}}}};
     NSString *path = [NSString stringWithFormat:@"/models/%@:generateContent", ttsModel(p)];

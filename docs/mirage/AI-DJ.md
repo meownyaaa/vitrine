@@ -2,6 +2,33 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.4.1
+
+- **One artist resolver for every entry point** (the sheet's "Ask for a vibe", the chat, play_artist, start_dj_set):
+  Spotify's artist search first; when that match is weak (nothing, a tiny artist, a short abbreviation, or only found
+  through a track) the model reads the text with your top artists, and labels / crews count: "yvl" is Playboi Carti's
+  Young Vamp Life imprint, not the 13-listener artist called YVL. A label's roster also comes from an album search on
+  `label:"…"`. Each request logs one `focus: "<what you typed>" → <artist> (<spotify:artist:…>) via …` line.
+- **"play <artist>" plays their catalog**: top tracks, then albums and singles newest first (`/artists/{id}/albums`,
+  `/albums/{id}/tracks`), de-duplicated by title, up to 80 songs (pages of an `artist:"Name"` search when those endpoints
+  are closed); a label / crew takes each artist's top tracks in turns. A few songs before the end the next set (artists
+  like them, none of their own songs) is picked and queued behind it, and so on.
+- **The queue is replaced** on every new vibe, chat request, artist, Switch it up and playlist: Spotify's queue is read
+  (`SPTPlayerQueueWrapperImpl fetchQueue`), the tracks whose provider is `queue` are dropped and it's sent back with the
+  player's `setQueue:` before the new set plays (`queue: clear …` lines).
+- **Playlists, albums, Liked Songs**: the chat's new `play_context` tool plays them as Spotify's own context
+  (`playContext:options:origin:`, with `SPTPlayerOptionOverrides.shufflingContext` for shuffle). Your playlists are found by
+  name in your library (spclient `GET /playlist/v2/user/<you>/rootlist?decorate=…`), then by search. Liked Songs is
+  `spotify:user:<you>:collection`, then `spotify:collection:tracks`. The chat never tells you to tap something yourself.
+- **Rate limits**: a provider's 429 that says how long to wait ("Please try again in 7.5s", Groq's tokens-per-minute
+  limit, which was the red chat bubble) is retried after that wait, twice at most; chats keep fewer old messages and cut
+  long tool results.
+- **Voice presets and finer controls** (AI DJ → Voice): Soft & Soothing, Hype Radio DJ, Late Night, Chill Narrator, Classic
+  Spotify DJ. A preset sets speed, pitch, warmth, breathiness, pauses, a voice style, a voice for every engine and the
+  persona (a new "Soft & soothing" persona). Warmth, breathiness, pitch and the free-text Voice style go to OpenAI
+  (gpt-4o-mini-tts `instructions`) and Gemini as speaking instructions; iPhone voices use speed, pitch and sentence
+  pauses; ElevenLabs gets stability, similarity, style and `<break>` pauses; xAI speed; Groq and xAI pauses as ellipses.
+
 ## What's new in 0.4.0
 
 - **Artist requests are that artist.** "play some yvl", "only pz", "stuff like clairo": Mirage finds the artist on Spotify

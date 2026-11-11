@@ -54,6 +54,8 @@ static NSArray<NSArray *> *personas(void) {
               @"a storyteller: tells a short, true story or piece of context behind the song or artist (how it was made, what it meant, where it came from), only facts you are sure of, vivid but brief.", @(MRGDJTalkFew), @40],
             @[@"Minimal", @"Barely talks: names and nothing else.",
               @"a minimal host: almost silent, just the song and artist or a two-word mood, nothing more.", @(MRGDJTalkSwitches), @8],
+            @[@"Soft & soothing", @"Gentle, warm and calm, close to the mic.",
+              @"a soft, soothing, warm host: gentle, calm, caring and reassuring, unhurried and intimate, like someone talking to you quietly late at night. Short tender lines in simple words; no hype, no slang overload, no emojis.", @(MRGDJTalkFew), @16],
         ];
     });
     return list;
@@ -145,8 +147,10 @@ static NSString *replaced(NSString *s, NSString *pattern, NSString *with) {
 
 // The part of a request that could be an artist's name, and the mode (1 artist + neighbours, 2 only them, 3 like them).
 // "play some yvl" → "yvl"; "only pz songs" → "pz" (2); "stuff like clairo" → "clairo" (3); "chill vibes" → nil.
-static NSString *artistCandidate(NSString *request, NSInteger *mode) {
+// `plain` is set when the request is nothing but the artist ("yvl", "play pz", "only uzi"): that plays their catalog.
+static NSString *artistCandidate(NSString *request, NSInteger *mode, BOOL *plain) {
     NSString *r = [[request ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] lowercaseString];
+    *plain = NO;
     if (!r.length || r.length > 80 || [r hasPrefix:@"switch it up"]) return nil;
     *mode = 1;
     if (matches(r, @"\\b(only|just|nothing but|all)\\b")) *mode = 2;
@@ -165,6 +169,7 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode) {
         c = replaced(c, @"\\s+(?:songs?|tracks?|music|bangers|hits|vibes?|type beat|stuff|only|pls|please|rn|right now|now|set|radio|mix|for me|bro|fr|asf|lol)$", @"");
     c = [c stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" .!?,\"'"]];
     if (!c.length || c.length > 40 || [c componentsSeparatedByString:@" "].count > 4) return nil;
+    *plain = !like && !matches(r, @"\\b(?:chill|sad|hype|slow|fast|underground|deep cuts?|old|new|early|late|unreleased|throwback|mix(?:ed)? with|and)\\b");
     // Genres, moods and filler aren't artists.
     if (matches(c, @"^(?:something|anything|music|vibes?|chill|sad|happy|hype|underground|rap|hip ?hop|r&?b|rnb|pop|rock|jazz|lo-?fi|house|techno|edm|drill|trap|indie|country|metal|punk|soul|funk|gym|workout|study|sleep|party|throwbacks?|old ?school|old|new|new music|it up|a vibe|bangers|hits|classics|love songs|songs|my favorites|favorites|on repeat|deep cuts|hidden gems|90s|80s|2000s|2010s|late night|morning|night|focus|road trip|summer|winter|dance|latin|afrobeats?|k-?pop|phonk|emo|grunge|reggae|reggaeton|blues|classical|ambient|alt|alternative)(?:\\s.*)?$")) return nil;
     return c;
@@ -190,7 +195,9 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode) {
     NSDictionary *_focus;                  // the artist the request is about (uri, name, genres), or nil
     NSArray<NSDictionary *> *_focusTracks; // their tracks on Spotify (resolved dictionaries)
     NSArray<NSDictionary *> *_focusRelated;
-    NSInteger _focusMode;                  // 1 artist and neighbours, 2 only them, 3 like them
+    NSInteger _focusMode;                  // 1 artist and neighbours, 2 only them, 3 like them, 4 after their catalog: similar only
+    NSArray<NSDictionary *> *_focusCrew;   // a label or crew: its artists (the first is _focus); nil for one artist
+    BOOL _focusPlain;                      // the request was just the artist: play their catalog
 }
 
 + (instancetype)shared {
@@ -306,6 +313,7 @@ static NSInteger popularityCap(NSString *request) {
     if (_focus) {
         NSString *name = _focus[@"name"];
         NSArray *genres = [_focus[@"genres"] isKindOfClass:NSArray.class] ? _focus[@"genres"] : nil;
+        if (_focusCrew.count) [p appendFormat:@"\n\nThe request is about a label / crew: %@. Count every one of them as 'the artist' below.", [self focusNames]];
         [p appendFormat:@"\n\nThe request is about the artist %@ (as Spotify has them%@).", name, genres.count ? [NSString stringWithFormat:@"; genres: %@", [genres componentsJoinedByString:@", "]] : @""];
         if (_focusTracks.count) {
             NSMutableArray *names = [NSMutableArray array];
@@ -317,7 +325,8 @@ static NSInteger popularityCap(NSString *request) {
             for (NSDictionary *a in _focusRelated) [rel addObject:a[@"name"]];
             [p appendFormat:@"\nArtists Spotify relates to them: %@", [rel componentsJoinedByString:@", "]];
         }
-        if (_focusMode == 2) [p appendFormat:@"\nEvery track must be by %@ (they asked for only them). Per-artist limits don't apply.", name];
+        if (_focusMode == 4) [p appendFormat:@"\nThey just heard everything by %@. Now play artists that sound like them (same scene, sound and era; the related artists above first), NOT a single song by %@.", [self focusNames], [self focusNames]];
+        else if (_focusMode == 2) [p appendFormat:@"\nEvery track must be by %@ (they asked for only them). Per-artist limits don't apply.", name];
         else if (_focusMode == 3) [p appendFormat:@"\nThey want music LIKE %@: 2-3 by %@, the rest by artists with the same sound and scene.", name, name];
         else [p appendFormat:@"\nAt least 7 tracks must be by %@ (the per-artist limit doesn't apply to them), the rest by artists right next to them in sound and scene. Nothing outside that lane.", name];
     }
@@ -435,7 +444,7 @@ static NSDictionary *parseJSON(NSString *text) {
             if (!t.uri) { [dropped addObject:t]; continue; }
             if ([seen containsObject:t.uri]) continue;
             NSString *ak = t.artist.lowercaseString ?: @"";
-            BOOL focusArtist = self->_focus && MRGNamesMatch(t.artist, self->_focus[@"name"]);
+            BOOL focusArtist = self->_focusMode != 4 && [self isFocusArtist:t.artist];
             if (perArtist[ak].integerValue >= 2 && !focusArtist) continue;
             if (t.popularity < 0) unrated++;
             if (cap && t.popularity > cap) { tooPopular++; [dropped addObject:t]; continue; }
@@ -452,20 +461,73 @@ static NSDictionary *parseJSON(NSString *text) {
     });
 }
 
-// Finds the artist a request is about (Spotify search with fallbacks, then the model to expand an abbreviation), and
-// their tracks and neighbours. done runs on the main queue either way.
+// The listener's top artists, for the model to read an abbreviation in their context.
+static NSString *tasteArtists(void) {
+    NSDictionary *t = MRGHistoryTaste();
+    NSMutableOrderedSet *names = [NSMutableOrderedSet orderedSet];
+    for (id n in [t[@"recentArtists"] isKindOfClass:NSArray.class] ? t[@"recentArtists"] : @[]) if ([n isKindOfClass:NSString.class]) [names addObject:n];
+    for (id n in [t[@"allTimeArtists"] isKindOfClass:NSArray.class] ? t[@"allTimeArtists"] : @[]) if ([n isKindOfClass:NSString.class]) [names addObject:n];
+    NSArray *a = names.array;
+    if (a.count > 14) a = [a subarrayWithRange:NSMakeRange(0, 14)];
+    return a.count ? [a componentsJoinedByString:@", "] : @"(unknown)";
+}
+
+- (BOOL)isFocusArtist:(NSString *)artist {
+    if (!_focus) return NO;
+    if (MRGNamesMatch(artist, _focus[@"name"])) return YES;
+    for (NSDictionary *a in _focusCrew) if (MRGNamesMatch(artist, a[@"name"])) return YES;
+    return NO;
+}
+
+- (NSString *)focusNames {
+    if (!_focusCrew.count) return _focus[@"name"] ?: @"";
+    NSMutableArray *n = [NSMutableArray array];
+    for (NSDictionary *a in _focusCrew) [n addObject:a[@"name"] ?: @""];
+    return [n componentsJoinedByString:@", "];
+}
+
+// Resolves several artist names on Spotify at once (in order, the ones not found left out).
+static void findAll(NSArray<NSString *> *names, void (^done)(NSArray<NSDictionary *> *)) {
+    NSMutableArray *slots = [NSMutableArray array];
+    for (NSUInteger i = 0; i < names.count; i++) [slots addObject:[NSNull null]];
+    dispatch_group_t g = dispatch_group_create();
+    for (NSUInteger i = 0; i < names.count; i++) {
+        dispatch_group_enter(g);
+        MRGWebFindArtist(names[i], ^(NSDictionary *a, NSString *how) { if (a) slots[i] = a; dispatch_group_leave(g); });
+    }
+    dispatch_group_notify(g, dispatch_get_main_queue(), ^{
+        NSMutableArray *out = [NSMutableArray array];
+        NSMutableSet *seen = [NSMutableSet set];
+        for (id a in slots) if ([a isKindOfClass:NSDictionary.class] && ![seen containsObject:a[@"uri"]]) { [seen addObject:a[@"uri"]]; [out addObject:a]; }
+        done(out);
+    });
+}
+
+// Finds what a request is about, the same way for every entry point (the sheet's vibe box, the chat, play_artist):
+//  1. Spotify: artist search as typed and in capitals, fuzzy names and initials, then track and combined searches.
+//  2. When that match is weak (nothing, a tiny artist, a short abbreviation, or only found through a track), the
+//     model reads the text with the listener's top artists: an artist nickname, or a label / crew ("yvl" is Playboi
+//     Carti's Young Vamp Life imprint, not the 13-listener artist called YVL), and its artists are found on Spotify.
+//  3. A label or crew also gets an album search on label:"…" for its roster.
+// Every outcome is logged as one "focus:" line with the raw text and what it resolved to. done runs on the main queue.
 - (void)focusFor:(NSString *)request generation:(NSUInteger)gen done:(void (^)(void))done {
     NSInteger mode = 0;
-    NSString *candidate = artistCandidate(request, &mode);
-    if (!candidate) { done(); return; }
+    BOOL plain = NO;
+    NSString *candidate = artistCandidate(request, &mode, &plain);
+    if (!candidate) { if (request.length && ![request hasPrefix:@"Switch it up"] && request.length < 120) MRGDJLog(@"focus: \"%@\" doesn't read as an artist, a normal set", request); done(); return; }
     [self setStatusText:@"Finding the artist…"];
-    void (^use)(NSDictionary *) = ^(NSDictionary *artist) {
+    void (^use)(NSArray<NSDictionary *> *, NSString *, NSString *) = ^(NSArray<NSDictionary *> *artists, NSString *label, NSString *how) {
         if (gen != self->_generation) return;
-        if (!artist) { MRGDJLog(@"focus: no artist in the request, a normal set"); done(); return; }
+        NSDictionary *artist = artists.firstObject;
+        if (!artist) { MRGDJLog(@"focus: \"%@\" → no artist found (%@), a normal set", candidate, how ?: @"?"); done(); return; }
         self->_focus = artist;
+        self->_focusCrew = artists.count > 1 ? artists : nil;
         self->_focusMode = mode;
-        MRGDJLog(@"focus: %@ (mode %ld)", artist[@"name"], (long)mode);
-        [self setStatusText:[NSString stringWithFormat:@"Digging into %@…", artist[@"name"]]];
+        self->_focusPlain = plain && mode != 3;
+        if (self->_focusCrew) MRGDJLog(@"focus: \"%@\" → %@ %@: %@ (%@, mode %ld%@)", candidate, label.length ? @"label/crew" : @"artists", label ?: @"", [self focusNames], how, (long)mode, self->_focusPlain ? @", catalog" : @"");
+        else MRGDJLog(@"focus: \"%@\" → %@ (%@) via %@%@ (mode %ld%@)", candidate, artist[@"name"], artist[@"uri"], how,
+                      [artist[@"popularity"] isKindOfClass:NSNumber.class] ? [NSString stringWithFormat:@", popularity %@", artist[@"popularity"]] : @"", (long)mode, self->_focusPlain ? @", catalog" : @"");
+        [self setStatusText:[NSString stringWithFormat:@"Digging into %@…", self->_focusCrew ? (label.length ? label : artist[@"name"]) : artist[@"name"]]];
         MRGWebArtistTracks(artist, 12, ^(NSArray<NSDictionary *> *tracks) {
             if (gen != self->_generation) return;
             self->_focusTracks = tracks;
@@ -477,18 +539,69 @@ static NSDictionary *parseJSON(NSString *text) {
             });
         });
     };
-    MRGWebFindArtist(candidate, ^(NSDictionary *artist, NSString *how) {
+    MRGWebFindArtist(candidate, ^(NSDictionary *found, NSString *how) {
         if (gen != self->_generation) return;
-        if (artist) { use(artist); return; }
-        // Not on Spotify as typed: let the model expand it ("yvl" → its full name), then search again.
-        NSString *ask = [NSString stringWithFormat:@"A listener typed this in a music app: \"%@\". If it names, nicknames or abbreviates a music artist or band, answer {\"artist\": \"<their exact name on Spotify>\"}. If it is a genre, mood or anything else, answer {\"artist\": null}. JSON only.", candidate];
-        MRGAIChat(@"You identify music artists from slang, nicknames, abbreviations and typos. Answer only JSON.", ask, YES, ^(NSString *text, NSString *error) {
+        NSNumber *pop = [found[@"popularity"] isKindOfClass:NSNumber.class] ? found[@"popularity"] : nil;
+        NSString *letters = [[candidate componentsSeparatedByCharactersInSet:NSCharacterSet.alphanumericCharacterSet.invertedSet] componentsJoinedByString:@""];
+        BOOL weak = !found || (pop && pop.integerValue < 25) || ![how isEqualToString:@"artist search"] || letters.length <= 4;
+        if (!weak) { use(@[found], nil, [NSString stringWithFormat:@"Spotify %@", how]); return; }
+        MRGDJLog(@"focus: \"%@\" → Spotify's closest is %@%@, asking %@ what it means", candidate, found ? found[@"name"] : @"nothing",
+                 pop ? [NSString stringWithFormat:@" (popularity %@)", pop] : @"", MRGProviderName(MRGAIProvider()));
+        NSString *ask = [NSString stringWithFormat:
+            @"A listener typed \"%@\" into their music app to ask for music.\nTheir top artists: %@.\nSpotify's closest artist match: %@.\n\n"
+            @"What do they most likely mean? Think of artist nicknames and abbreviations (\"uzi\" = Lil Uzi Vert, \"carti\" = Playboi Carti, \"pz\" can be an artist), "
+            @"record labels, imprints and crews (\"opium\" = Playboi Carti's label: Ken Carson, Destroy Lonely, Homixide Gang; \"yvl\" = Young Vamp Life, Carti's newer imprint: ApolloRed1 and its signees), "
+            @"and who fits their taste. A tiny artist that merely has the same name is usually NOT what they mean.\n"
+            @"Answer JSON only: {\"kind\": \"artist\" | \"label\" | \"crew\" | \"none\", \"artists\": [up to 6 exact Spotify artist names, the main one first], \"label\": string or null, \"spotify_match_is_right\": true or false}",
+            candidate, tasteArtists(), found ? [NSString stringWithFormat:@"%@%@", found[@"name"], pop ? [NSString stringWithFormat:@" (popularity %@/100)", pop] : @""] : @"none"];
+        MRGAIChat(@"You identify music artists, labels and crews from slang, nicknames, abbreviations and typos. Answer only JSON.", ask, YES, ^(NSString *text, NSString *error) {
             if (gen != self->_generation) return;
             NSDictionary *j = text ? parseJSON(text) : nil;
-            NSString *name = [j[@"artist"] isKindOfClass:NSString.class] ? j[@"artist"] : nil;
-            MRGDJLog(@"focus: the model read the request as %@", name.length ? @"an artist" : @"not an artist");
-            if (!name.length) { done(); return; }
-            MRGWebFindArtist(name, ^(NSDictionary *a2, NSString *how2) { use(a2); });
+            NSString *kind = [j[@"kind"] isKindOfClass:NSString.class] ? [j[@"kind"] lowercaseString] : nil;
+            NSMutableArray *names = [NSMutableArray array];
+            for (id n in [j[@"artists"] isKindOfClass:NSArray.class] ? j[@"artists"] : @[]) if ([n isKindOfClass:NSString.class] && [n length] && names.count < 6) [names addObject:n];
+            if (!names.count && [j[@"artist"] isKindOfClass:NSString.class]) [names addObject:j[@"artist"]];
+            NSString *label = [j[@"label"] isKindOfClass:NSString.class] && [j[@"label"] length] ? j[@"label"] : nil;
+            BOOL spotifyRight = [j[@"spotify_match_is_right"] respondsToSelector:@selector(boolValue)] && [j[@"spotify_match_is_right"] boolValue];
+            BOOL group = [kind isEqualToString:@"label"] || [kind isEqualToString:@"crew"];
+            MRGDJLog(@"focus: the model read \"%@\" as %@%@%@", candidate, error ? @"(no answer)" : kind ?: @"?", names.count ? [@": " stringByAppendingString:[names componentsJoinedByString:@", "]] : @"", error ? [@" — " stringByAppendingString:error] : @"");
+            void (^withLabel)(NSArray<NSDictionary *> *, NSString *) = ^(NSArray<NSDictionary *> *resolved, NSString *how2) {
+                // A label's roster from Spotify too (album search label:"…"), merged after the model's names.
+                void (^merge)(NSArray<NSDictionary *> *);
+                merge = ^(NSArray<NSDictionary *> *roster) {
+                    if (gen != self->_generation) return;
+                    NSMutableArray *all = [resolved mutableCopy];
+                    NSMutableSet *seen = [NSMutableSet set];
+                    for (NSDictionary *a in all) [seen addObject:a[@"uri"]];
+                    for (NSDictionary *a in roster) if (![seen containsObject:a[@"uri"]] && all.count < 6) { [seen addObject:a[@"uri"]]; [all addObject:a]; }
+                    if (all.count) { use(all, label ?: candidate, roster.count ? [how2 stringByAppendingString:@" + label search"] : how2); return; }
+                    use(found ? @[found] : @[], nil, found ? @"Spotify's match (nothing better)" : @"nothing on Spotify");
+                };
+                // The label as the model named it ("Young Vamp Life"), then as typed ("yvl") when that finds nothing.
+                MRGWebLabelArtists(label ?: candidate, ^(NSArray<NSDictionary *> *roster) {
+                    if (roster.count || !label || [label caseInsensitiveCompare:candidate] == NSOrderedSame) { merge(roster); return; }
+                    MRGWebLabelArtists(candidate, merge);
+                });
+            };
+            if (error || !kind) {
+                // No answer (a rate limit, say): Spotify's match, or a label search for a short tag with only a tiny match.
+                if (!found || (pop && pop.integerValue < 10 && letters.length <= 6)) { withLabel(@[], @"label search"); return; }
+                use(@[found], nil, [NSString stringWithFormat:@"Spotify %@ (the model didn't answer)", how]);
+                return;
+            }
+            if ([kind isEqualToString:@"none"] && !names.count) {
+                if (found) use(@[found], nil, [NSString stringWithFormat:@"Spotify %@", how]);
+                else { MRGDJLog(@"focus: \"%@\" isn't an artist, a normal set", candidate); done(); }
+                return;
+            }
+            if (spotifyRight && found && !group) { use(@[found], nil, [NSString stringWithFormat:@"Spotify %@, confirmed by the model", how]); return; }
+            findAll(names, ^(NSArray<NSDictionary *> *resolved) {
+                if (gen != self->_generation) return;
+                if (group) { withLabel(resolved, @"the model"); return; }
+                if (resolved.count) { use(@[resolved.firstObject], nil, @"the model's reading, found on Spotify"); return; }
+                if (found) use(@[found], nil, [NSString stringWithFormat:@"Spotify %@ (the model's names weren't found)", how]);
+                else withLabel(@[], @"label search");
+            });
         });
     });
 }
@@ -501,16 +614,25 @@ static MRGDJTrack *trackFrom(NSDictionary *d) {
 }
 
 // An artist set has to be that artist: when the model's picks have too few of their songs, their own top tracks are
-// woven in (every other slot), and with no usable picks at all the set is their top tracks.
+// woven in (every other slot), and with no usable picks at all the set is their top tracks. After their catalog
+// (mode 4) it's the other way round: their own songs are left out, the listener just heard them.
 - (NSArray<MRGDJTrack *> *)ensureFocus:(NSArray<MRGDJTrack *> *)found {
-    if (!_focus || !_focusTracks.count) return found;
+    if (!_focus) return found;
+    if (_focusMode == 4) {
+        NSMutableArray *out = [NSMutableArray array];
+        NSUInteger dropped = 0;
+        for (MRGDJTrack *t in found) { if ([self isFocusArtist:t.artist]) dropped++; else [out addObject:t]; }
+        if (dropped) MRGDJLog(@"focus: %lu of %@'s own songs left out of the similar-artists set", (unsigned long)dropped, _focus[@"name"]);
+        return out.count ? out : found;
+    }
+    if (!_focusTracks.count) return found;
     NSString *name = _focus[@"name"];
     NSUInteger want = _focusMode == 2 ? 12 : _focusMode == 3 ? 2 : 6;
     NSMutableArray *out = [NSMutableArray array];
     NSMutableSet *seen = [NSMutableSet set];
     NSUInteger have = 0;
     for (MRGDJTrack *t in found) {
-        BOOL theirs = MRGNamesMatch(t.artist, name);
+        BOOL theirs = [self isFocusArtist:t.artist];
         if (_focusMode == 2 && !theirs) continue;
         if (t.uri && ![seen containsObject:t.uri]) { [seen addObject:t.uri]; [out addObject:t]; if (theirs) have++; }
     }
@@ -531,6 +653,74 @@ static MRGDJTrack *trackFrom(NSDictionary *d) {
     return out.count > 15 ? [out subarrayWithRange:NSMakeRange(0, 15)] : out;
 }
 
+// "play <artist>": as much of their catalog as Spotify lists (top tracks, then albums and singles, de-duplicated, up to
+// kCatalogMax), or for a label / crew each artist's top tracks taken in turns. Similar artists follow when it runs low.
+static const NSInteger kCatalogMax = 80;
+
+- (void)catalogFor:(NSUInteger)gen done:(void (^)(NSArray<MRGDJTrack *> *))done {
+    void (^finish)(NSArray<NSDictionary *> *, NSString *) = ^(NSArray<NSDictionary *> *dicts, NSString *why) {
+        if (gen != self->_generation) return;
+        NSMutableArray *set = [NSMutableArray array];
+        NSMutableSet *seen = [NSMutableSet set];
+        for (NSDictionary *d in dicts) {
+            if (![d[@"uri"] isKindOfClass:NSString.class] || [seen containsObject:d[@"uri"]]) continue;
+            [seen addObject:d[@"uri"]];
+            MRGDJTrack *t = trackFrom(d);
+            t.why = why;
+            [set addObject:t];
+            if (set.count >= (NSUInteger)kCatalogMax) break;
+        }
+        done(set);
+    };
+    if (!_focusCrew.count) {
+        [self setStatusText:[NSString stringWithFormat:@"Pulling everything by %@…", _focus[@"name"]]];
+        MRGWebArtistCatalog(_focus, kCatalogMax, ^(NSArray<NSDictionary *> *tracks) { finish(tracks, @"their catalog"); });
+        return;
+    }
+    [self setStatusText:[NSString stringWithFormat:@"Pulling %@…", [self focusNames]]];
+    NSArray *crew = _focusCrew;
+    NSMutableArray *per = [NSMutableArray array];
+    for (NSUInteger i = 0; i < crew.count; i++) [per addObject:@[]];
+    dispatch_group_t g = dispatch_group_create();
+    for (NSUInteger i = 0; i < crew.count; i++) {
+        dispatch_group_enter(g);
+        MRGWebArtistTracks(crew[i], 12, ^(NSArray<NSDictionary *> *tracks) { per[i] = tracks ?: @[]; dispatch_group_leave(g); });
+    }
+    dispatch_group_notify(g, dispatch_get_main_queue(), ^{
+        NSMutableArray *mixed = [NSMutableArray array];
+        for (NSUInteger round = 0; round < 12; round++)
+            for (NSArray *list in per) if (round < list.count) [mixed addObject:list[round]];
+        MRGDJLog(@"catalog: %lu tracks from %lu artists of %@", (unsigned long)mixed.count, (unsigned long)crew.count, self->_focus[@"name"]);
+        finish(mixed, @"the crew");
+    });
+}
+
+// A few lines for the start of a catalog run (an intro and one per song for the first six), at most 6 seconds late.
+- (void)catalogLines:(NSArray<MRGDJTrack *> *)set generation:(NSUInteger)gen done:(void (^)(NSString *intro))done {
+    __block BOOL called = NO;
+    void (^once)(NSString *) = ^(NSString *intro) { if (called || gen != self->_generation) return; called = YES; done(intro); };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (!called) MRGDJLog(@"catalog: lines took too long, playing without them"); once(nil); });
+    NSMutableString *list = [NSMutableString string];
+    for (NSUInteger i = 0; i < MIN(set.count, (NSUInteger)6); i++) [list appendFormat:@"%lu. %@ — %@\n", (unsigned long)i + 1, set[i].title, set[i].artist];
+    NSString *who = _focusCrew.count ? [NSString stringWithFormat:@"the %@ crew (%@)", _focus[@"name"], [self focusNames]] : _focus[@"name"];
+    NSMutableString *system = [NSMutableString stringWithFormat:@"You are Mirage DJ, the host of the listener's personal radio show. How you talk: %@", MRGDJPersonaStyle()];
+    NSString *style = MRGDJStyleInstructions();
+    if (style) [system appendFormat:@"\n\n%@", style];
+    NSString *user = [NSString stringWithFormat:@"You're about to play everything you can find by %@ (%lu songs), then artists like them. It starts with:\n%@\n"
+                      @"Answer JSON only: {\"intro\": string (opens the run, at most 20 words), \"lines\": [{\"title\": string, \"line\": string (at most %ld words, about that song or artist, only true facts)}] for those songs}.",
+                      who, (unsigned long)set.count, list, (long)personaWords()];
+    MRGAIChat(system, user, YES, ^(NSString *text, NSString *error) {
+        if (gen != self->_generation) return;
+        NSDictionary *j = text ? parseJSON(text) : nil;
+        for (NSDictionary *l in [j[@"lines"] isKindOfClass:NSArray.class] ? j[@"lines"] : @[]) {
+            if (![l isKindOfClass:NSDictionary.class] || ![l[@"line"] isKindOfClass:NSString.class] || ![l[@"title"] isKindOfClass:NSString.class]) continue;
+            for (MRGDJTrack *t in set) if (!t.line && MRGNamesMatch(t.title, l[@"title"])) { t.line = l[@"line"]; break; }
+        }
+        if (error) MRGDJLog(@"catalog: no lines (%@)", error);
+        once([j[@"intro"] isKindOfClass:NSString.class] ? j[@"intro"] : nil);
+    });
+}
+
 - (void)startWithRequest:(NSString *)request {
     if (MRGAIProvider() == MRGProviderNone) { [self fail:@"Add your AI provider's API key in Mirage settings first."]; return; }
     NSUInteger gen = ++_generation;
@@ -542,16 +732,31 @@ static MRGDJTrack *trackFrom(NSDictionary *d) {
     _next = nil;
     _fetchingNext = NO;
     [self setStatusText:request.length ? @"On it…" : @"Reading the room…"];
-    _focus = nil; _focusTracks = nil; _focusRelated = nil; _focusMode = 0;
+    _focus = nil; _focusTracks = nil; _focusRelated = nil; _focusMode = 0; _focusCrew = nil; _focusPlain = NO;
     [self focusFor:request generation:gen done:^{
         if (gen != self->_generation) return;
-        [self setStatusText:@"Picking the songs…"];
-        [self buildSetWithRequest:request generation:gen done:^(NSArray<MRGDJTrack *> *found, NSString *intro, NSString *error) {
+        void (^modelSet)(void) = ^{
+            [self setStatusText:@"Picking the songs…"];
+            [self buildSetWithRequest:request generation:gen done:^(NSArray<MRGDJTrack *> *found, NSString *intro, NSString *error) {
+                if (gen != self->_generation) return;
+                NSArray *set = [self ensureFocus:found ?: @[]];
+                if (!set.count) { [self fail:error ?: @"Couldn't find those songs on Spotify. Try again."]; return; }
+                if (error) MRGDJLog(@"set: the model failed (%@), playing the artist's own tracks", error);
+                [self playSet:set intro:intro generation:gen fresh:YES];
+            }];
+        };
+        if (!self->_focus || !self->_focusPlain) { modelSet(); return; }
+        [self catalogFor:gen done:^(NSArray<MRGDJTrack *> *set) {
             if (gen != self->_generation) return;
-            NSArray *set = [self ensureFocus:found ?: @[]];
-            if (!set.count) { [self fail:error ?: @"Couldn't find those songs on Spotify. Try again."]; return; }
-            if (error) MRGDJLog(@"set: the model failed (%@), playing the artist's own tracks", error);
-            [self playSet:set intro:intro generation:gen];
+            if (set.count < 5) { MRGDJLog(@"catalog: only %lu tracks, a DJ set around them instead", (unsigned long)set.count); modelSet(); return; }
+            MRGDJLog(@"catalog: playing %lu tracks by %@, similar artists after", (unsigned long)set.count, [self focusNames]);
+            [self setStatusText:@"Lining it up…"];
+            [self catalogLines:set generation:gen done:^(NSString *intro) {
+                if (gen != self->_generation) return;
+                self->_plan = [NSString stringWithFormat:@"Everything by %@, then artists that sound like them.", self->_focusCrew.count ? [self focusNames] : self->_focus[@"name"]];
+                self->_focusMode = 4;   // what comes after the catalog: similar artists only
+                [self playSet:set intro:intro generation:gen fresh:YES];
+            }];
         }];
     }];
 }
@@ -580,10 +785,10 @@ static MRGDJTrack *trackFrom(NSDictionary *d) {
     _error = nil;
     _next = nil;
     _fetchingNext = NO;
-    _focus = nil; _focusTracks = nil; _focusRelated = nil; _focusMode = 0;
+    _focus = nil; _focusTracks = nil; _focusRelated = nil; _focusMode = 0; _focusCrew = nil; _focusPlain = NO;
     _state = MRGDJThinking;
     MRGDJLog(@"chat: playing %lu tracks as a set", (unsigned long)set.count);
-    [self playSet:set intro:intro generation:gen];
+    [self playSet:set intro:intro generation:gen fresh:YES];
 }
 
 // Playback, all through Spotify's own player (no Web API):
@@ -594,7 +799,17 @@ static MRGDJTrack *trackFrom(NSDictionary *d) {
 //     straight after the play command, the player answered 409 Conflict.
 //  4. If the queue still refuses, "step" mode: whenever a set track ends and something else starts, the next set track
 //     is played as its own context (arrivedAt:).
-- (void)playSet:(NSArray<MRGDJTrack *> *)found intro:(NSString *)intro generation:(NSUInteger)gen {
+- (void)playSet:(NSArray<MRGDJTrack *> *)found intro:(NSString *)intro generation:(NSUInteger)gen fresh:(BOOL)fresh {
+    if (fresh) {
+        // A new vibe or request replaces what was lined up: Spotify's queue (the last set's queued songs and anything the
+        // listener added) is emptied first, then the new set plays as its own context and the rest is queued.
+        [self setStatusText:@"Clearing the queue…"];
+        MRGClearQueue(^(NSUInteger removed, NSString *error) {
+            if (gen != self->_generation) return;
+            [self playSet:found intro:intro generation:gen fresh:NO];
+        });
+        return;
+    }
     NSArray<NSString *> *uris = urisOf(found);
     void (^failed)(NSString *) = ^(NSString *why) {
         if (gen != self->_generation) return;
@@ -741,7 +956,7 @@ static NSString *plain(NSString *s) {
         if (_set.count && _spoken.count && _next.count && _lastIndex == (NSInteger)_set.count - 1) {
             NSArray *next = _next;
             _next = nil;
-            [self playSet:next intro:nil generation:_generation];
+            [self playSet:next intro:nil generation:_generation fresh:NO];
         }
         [self changed];
         return;
@@ -766,12 +981,33 @@ static NSString *plain(NSString *s) {
             });
         }
     }
-    if (index >= (NSInteger)_set.count - 1 && !_fetchingNext && !_next) [self fetchNext];
+    // Keeps going: the next set is picked a few songs before the end and queued behind this one two songs before the end,
+    // so the queue never runs dry (after an artist's catalog: artists like them).
+    if (index >= (NSInteger)_set.count - 4 && !_fetchingNext && !_next) [self fetchNext];
+    if (index >= (NSInteger)_set.count - 2 && _next.count) [self appendNext];
+    [self changed];
+}
+
+- (void)appendNext {
+    NSArray<MRGDJTrack *> *next = _next;
+    _next = nil;
+    NSMutableSet *have = [NSMutableSet setWithArray:urisOf(_set)];
+    NSMutableArray *add = [NSMutableArray array];
+    for (MRGDJTrack *t in next) if (t.uri && ![have containsObject:t.uri]) { [have addObject:t.uri]; [add addObject:t]; }
+    if (!add.count) return;
+    _set = [_set arrayByAddingObjectsFromArray:add];
+    NSUInteger gen = _generation;
+    MRGDJLog(@"refill: %lu more songs after the set", (unsigned long)add.count);
+    MRGQueueTracks(urisOf(add), ^(BOOL queued, NSString *error) {
+        if (gen != self->_generation) return;
+        if (!queued) { self->_playbackMode = @"step"; MRGDJLog(@"refill: queue refused (%@), stepping", error ?: @"?"); }
+    });
     [self changed];
 }
 
 - (void)fetchNext {
     _fetchingNext = YES;
+    MRGDJLog(@"refill: picking the next set%@", _focusMode == 4 ? [NSString stringWithFormat:@" (artists like %@)", [self focusNames]] : @"");
     NSUInteger gen = _generation;
     [self buildSetWithRequest:nil generation:gen done:^(NSArray<MRGDJTrack *> *found, NSString *intro, NSString *error) {
         if (gen != self->_generation) return;
@@ -779,6 +1015,31 @@ static NSString *plain(NSString *s) {
         NSArray *set = [self ensureFocus:found ?: @[]];
         if (set.count) self->_next = set;
     }];
+}
+
+#pragma mark - playing a context (playlist, album, artist, Liked Songs)
+
+- (void)playContext:(NSString *)uri shuffle:(NSNumber *)shuffle done:(void (^)(BOOL ok, NSString *error))done {
+    // The DJ set steps aside (nothing of it steps in later) and the queue is emptied, then Spotify plays the context.
+    NSUInteger gen = ++_generation;
+    _state = MRGDJIdle;
+    _set = @[]; _next = nil; _fetchingNext = NO; _currentIndex = -1; _lastIndex = -1; _stepping = NO; _status = nil; _error = nil;
+    _focus = nil; _focusTracks = nil; _focusRelated = nil; _focusMode = 0; _focusCrew = nil; _focusPlain = NO;
+    [MRGVoiceSpeaker.shared stop];
+    MRGDuckMusic(NO);
+    [self changed];
+    MRGDJLog(@"context: playing %@%@", uri, shuffle ? ([shuffle boolValue] ? @" shuffled" : @" in order") : @"");
+    MRGClearQueue(^(NSUInteger removed, NSString *clearError) {
+        if (gen != self->_generation) return;
+        MRGPlayContext(uri, nil, shuffle, ^(BOOL ok, NSString *error) {
+            if (gen != self->_generation) return;
+            if (!ok) { done(NO, error ?: @"Spotify's player refused it."); return; }
+            MRGWaitForPlayback(@[], uri, 8, ^(BOOL playing, NSString *seen) {
+                MRGDJLog(@"context: %@", playing ? @"playing" : [@"sent, not confirmed: " stringByAppendingString:seen ?: @"?"]);
+                done(YES, playing ? nil : seen);
+            });
+        });
+    });
 }
 
 #pragma mark - speaking

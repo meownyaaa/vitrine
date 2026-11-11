@@ -12,10 +12,30 @@ typedef NS_ENUM(NSInteger, MRGVoiceEngine) {
 
 MRGVoiceEngine MRGVoiceGetEngine(void);
 void MRGVoiceSetEngine(MRGVoiceEngine e);
-double MRGVoiceSpeed(void);            // 0.7 … 1.5, 1 = normal
+double MRGVoiceSpeed(void);            // 0.6 … 1.5, 1 = normal
 void MRGVoiceSetSpeed(double s);
-double MRGVoicePitch(void);            // 0.75 … 1.5 (phone voices only)
+double MRGVoicePitch(void);            // 0.75 … 1.5 (iPhone voices; a "lower/higher register" instruction for styled engines)
 void MRGVoiceSetPitch(double p);
+double MRGVoiceWarmth(void);           // 0 … 1 (styled engines: OpenAI gpt-4o-mini-tts, Gemini)
+void MRGVoiceSetWarmth(double v);
+double MRGVoiceBreathiness(void);      // 0 … 1 (styled engines)
+void MRGVoiceSetBreathiness(double v);
+double MRGVoicePause(void);            // seconds between sentences, 0 … 1.5
+void MRGVoiceSetPause(double v);
+NSString *MRGVoiceStyleText(void);     // the listener's own "voice style" instruction, or nil
+void MRGVoiceSetStyleText(NSString *t);
+NSString *MRGVoiceInstructions(void);  // style text + words for the sliders, sent as TTS instructions where supported
+double MRGElevenStability(void);
+void MRGElevenSetStability(double v);
+double MRGElevenSimilarity(void);
+void MRGElevenSetSimilarity(double v);
+
+// Presets: id, name, blurb, and the settings they set (speed, pitch, warmth, breath, pause, style, persona, a voice
+// per engine). Apply returns what voices it picked (for the UI), or nil. Editing a slider makes it "Custom".
+NSArray<NSDictionary *> *MRGVoicePresets(void);
+NSString *MRGVoiceApplyPreset(NSString *presetID);
+NSString *MRGVoicePresetID(void);      // nil: custom
+void MRGVoiceMarkCustom(void);
 
 // Phone voices: English and the phone's language, best first (personal, Premium, Enhanced, default).
 NSArray<AVSpeechSynthesisVoice *> *MRGVoicePhoneVoices(void);

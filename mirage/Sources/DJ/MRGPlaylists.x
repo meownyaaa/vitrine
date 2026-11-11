@@ -437,3 +437,40 @@ void MRGPlaylistDelete(NSString *playlist, MRGPlaylistDone done) {
         });
     });
 }
+
+#pragma mark - the listener's own playlists (rootlist)
+
+// The playlists in the listener's library, from their rootlist on spclient (GET /playlist/v2/user/<you>/rootlist with
+// decorate=attributes, as Spotify's web player asks: contents.items[i].uri, contents.metaItems[i].attributes.name).
+// Kept for 10 minutes. done on the main queue: [{uri, name}] (folders left out), or an error.
+void MRGPlaylistLibrary(void (^done)(NSArray<NSDictionary *> *playlists, NSString *error)) {
+    static NSArray *cached;
+    static NSDate *cachedAt;
+    if (cached.count && cachedAt && -cachedAt.timeIntervalSinceNow < 600) { done(cached, nil); return; }
+    NSString *u = MRGSpotifyUsername();
+    if (!u.length) { MRGDJLog(@"playlists: library read skipped, username not known yet"); done(@[], @"Mirage hasn't seen your Spotify username yet (open your Library once)."); return; }
+    NSMutableCharacterSet *ok = [NSCharacterSet.URLPathAllowedCharacterSet mutableCopy];
+    [ok removeCharactersInString:@"/"];
+    NSString *path = [NSString stringWithFormat:@"/playlist/v2/user/%@/rootlist?decorate=revision,attributes,length,owner&from=0&length=300", [u stringByAddingPercentEncodingWithAllowedCharacters:ok]];
+    spclient(@"GET", path, nil, ^(id json, NSInteger status, NSString *error) {
+        NSDictionary *contents = [json isKindOfClass:NSDictionary.class] && [json[@"contents"] isKindOfClass:NSDictionary.class] ? json[@"contents"] : nil;
+        NSArray *items = [contents[@"items"] isKindOfClass:NSArray.class] ? contents[@"items"] : @[];
+        NSArray *meta = [contents[@"metaItems"] isKindOfClass:NSArray.class] ? contents[@"metaItems"] : @[];
+        NSMutableArray *out = [NSMutableArray array];
+        for (NSUInteger i = 0; i < items.count; i++) {
+            NSDictionary *it = [items[i] isKindOfClass:NSDictionary.class] ? items[i] : nil;
+            NSString *uri = [it[@"uri"] isKindOfClass:NSString.class] ? it[@"uri"] : nil;
+            if (![uri hasPrefix:@"spotify:playlist:"]) continue;
+            NSDictionary *m = i < meta.count && [meta[i] isKindOfClass:NSDictionary.class] ? meta[i] : nil;
+            NSDictionary *attrs = [m[@"attributes"] isKindOfClass:NSDictionary.class] ? m[@"attributes"] : nil;
+            NSString *name = [attrs[@"name"] isKindOfClass:NSString.class] ? attrs[@"name"] : nil;
+            NSMutableDictionary *d = [@{@"uri": uri, @"name": name ?: @""} mutableCopy];
+            if ([m[@"ownerUsername"] isKindOfClass:NSString.class]) d[@"mine"] = @([m[@"ownerUsername"] isEqualToString:u]);
+            if ([m[@"length"] isKindOfClass:NSNumber.class]) d[@"tracks"] = m[@"length"];
+            [out addObject:d];
+        }
+        MRGDJLog(@"playlists: library has %lu playlists%@", (unsigned long)out.count, error ? [@" — " stringByAppendingString:error] : @"");
+        if (out.count) { cached = out; cachedAt = NSDate.date; }
+        done(out, out.count ? nil : (error ?: @"Spotify sent no playlists."));
+    });
+}

@@ -88,6 +88,8 @@ static NSString *sampleLine(void) {
 @interface MRGVoicePageController : MRGDJTablePage
 @end
 
+// Sections: 0 presets, 1 engine, 2 sound (sliders, voice style, preview), 3 voices of the engine, 4 ElevenLabs key.
+// Sound rows by id: speed, pitch, warmth, breath, pause, style, [stability, similarity with ElevenLabs], preview.
 @implementation MRGVoicePageController {
     NSArray<AVSpeechSynthesisVoice *> *_phone;
     NSArray<NSDictionary *> *_provider;
@@ -104,17 +106,24 @@ static NSString *sampleLine(void) {
 
 - (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; [MRGVoiceSpeaker.shared stop]; }
 
-// 0 engine, 1 speed/pitch/preview, 2 voices of the engine, 3 ElevenLabs key
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 4; }
+- (NSArray<NSString *> *)soundRows {
+    NSMutableArray *r = [@[@"speed", @"pitch", @"warmth", @"breath", @"pause", @"style"] mutableCopy];
+    if (MRGVoiceGetEngine() == MRGVoiceEngineEleven) [r addObjectsFromArray:@[@"stability", @"similarity"]];
+    [r addObject:@"preview"];
+    return r;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 5; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     return MRGSafeCount(^NSInteger { return [self mrg_rowsIn:t section:s]; });
 }
 
 - (NSInteger)mrg_rowsIn:(UITableView *)t section:(NSInteger)s {
-    if (s == 0) return 4;
-    if (s == 1) return 3;
-    if (s == 3) return 1;
+    if (s == 0) return MRGVoicePresets().count;
+    if (s == 1) return 4;
+    if (s == 2) return [self soundRows].count;
+    if (s == 4) return 1;
     switch (MRGVoiceGetEngine()) {
         case MRGVoiceEnginePhone: return _phone.count + 1 + ([self personalVoiceAsk] ? 1 : 0);
         case MRGVoiceEngineProvider: return MRGProviderHasTTS(MRGAIProvider()) ? MAX((NSInteger)_provider.count, 1) : 0;
@@ -129,9 +138,10 @@ static NSString *sampleLine(void) {
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    if (s == 0) return @"Who speaks";
-    if (s == 1) return @"Sound";
-    if (s == 3) return @"ElevenLabs";
+    if (s == 0) return @"Presets";
+    if (s == 1) return @"Who speaks";
+    if (s == 2) return MRGVoicePresetID() ? @"Sound" : @"Sound (custom)";
+    if (s == 4) return @"ElevenLabs";
     switch (MRGVoiceGetEngine()) {
         case MRGVoiceEnginePhone: return @"Voices on this iPhone (tap to hear)";
         case MRGVoiceEngineProvider: return [NSString stringWithFormat:@"%@ voices (tap to hear)", MRGProviderName(MRGAIProvider())];
@@ -145,11 +155,12 @@ static NSString *sampleLine(void) {
 }
 
 - (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
-    if (s == 0) return @"AI provider voice works with OpenAI, Gemini, xAI and Groq keys and costs a little per line on your provider's bill. If a network voice fails, the phone's voice speaks instead.";
-    if (s == 1) return @"Pitch only changes the iPhone's own voices.";
-    if (s == 2 && MRGVoiceGetEngine() == MRGVoiceEnginePhone)
+    if (s == 0) return @"A preset sets speed, pitch, warmth, breathiness, pauses, a voice style, a fitting voice for every engine and the DJ's persona. Change anything after and it becomes your own.";
+    if (s == 1) return @"AI provider voice works with OpenAI, Gemini, xAI and Groq keys and costs a little per line on your provider's bill. If a network voice fails, the phone's voice speaks instead.";
+    if (s == 2) return @"Warmth, breathiness, pitch and Voice style are speaking instructions: OpenAI (gpt-4o-mini-tts) and Gemini voices follow them. iPhone voices use speed, pitch and pauses. ElevenLabs uses speed, pauses (as breaks), stability and similarity. xAI uses speed; Groq and xAI get pauses as ellipses.";
+    if (s == 3 && MRGVoiceGetEngine() == MRGVoiceEnginePhone)
         return @"Want a better voice? iOS Settings → Accessibility → Spoken Content → Voices → English, and download an Enhanced or Premium voice (Ava, Zoe, Evan, Nathan…). It shows up here after. A Personal Voice you made in Accessibility can be used once you allow it.";
-    if (s == 3) return @"Optional: paste an ElevenLabs API key (elevenlabs.io → Developers → API keys) to use its voices. The key stays in this phone's keychain; only the lines the DJ says are sent.";
+    if (s == 4) return @"Optional: paste an ElevenLabs API key (elevenlabs.io → Developers → API keys) to use its voices. The key stays in this phone's keychain; only the lines the DJ says are sent.";
     return nil;
 }
 
@@ -157,9 +168,33 @@ static NSString *sampleLine(void) {
     return MRGSafeCell(ip, ^UITableViewCell *{ return [self mrg_cellIn:t at:ip]; });
 }
 
+- (UITableViewCell *)slider:(NSString *)title value:(double)v min:(double)min max:(double)max tag:(NSInteger)tag {
+    UITableViewCell *c = [self sliderCell:title value:v min:min max:max tag:tag];
+    c.detailTextLabel.text = [self format:v tag:tag];
+    return c;
+}
+
+- (NSString *)format:(double)v tag:(NSInteger)tag {
+    if (tag <= 2) return [NSString stringWithFormat:@"%.2f×", v];
+    if (tag == 5) return v < 0.05 ? @"none" : [NSString stringWithFormat:@"%.1fs", v];
+    return [NSString stringWithFormat:@"%.0f%%", v * 100];
+}
+
 - (UITableViewCell *)mrg_cellIn:(UITableView *)t at:(NSIndexPath *)ip {
     MRGVoiceEngine engine = MRGVoiceGetEngine();
     if (ip.section == 0) {
+        NSDictionary *p = MRGVoicePresets()[ip.row];
+        UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        c.backgroundColor = [UIColor colorWithWhite:0.11 alpha:0.9];
+        c.textLabel.text = p[@"name"];
+        c.textLabel.textColor = UIColor.whiteColor;
+        c.detailTextLabel.text = p[@"blurb"];
+        c.detailTextLabel.textColor = UIColor.grayColor;
+        c.tintColor = MRGAccent();
+        c.accessoryType = [MRGVoicePresetID() isEqualToString:p[@"id"]] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+        return c;
+    }
+    if (ip.section == 1) {
         NSArray *titles = @[@"iPhone voice", @"AI provider voice", @"ElevenLabs", @"Off (captions only)"];
         NSArray *symbols = @[@"iphone", @"sparkles", @"waveform", @"speaker.slash.fill"];
         BOOL enabled = ip.row == 0 || ip.row == 3 || (ip.row == 1 && MRGProviderHasTTS(MRGAIProvider())) || (ip.row == 2 && MRGElevenHasKey());
@@ -170,14 +205,26 @@ static NSString *sampleLine(void) {
         c.userInteractionEnabled = enabled;
         return c;
     }
-    if (ip.section == 1) {
-        if (ip.row == 0) return [self sliderCell:@"Speed" value:MRGVoiceSpeed() min:0.7 max:1.5 tag:1];
-        if (ip.row == 1) return [self sliderCell:@"Pitch" value:MRGVoicePitch() min:0.75 max:1.5 tag:2];
+    if (ip.section == 2) {
+        NSString *row = [self soundRows][ip.row];
+        if ([row isEqualToString:@"speed"]) return [self slider:@"Speed" value:MRGVoiceSpeed() min:0.6 max:1.5 tag:1];
+        if ([row isEqualToString:@"pitch"]) return [self slider:@"Pitch" value:MRGVoicePitch() min:0.75 max:1.5 tag:2];
+        if ([row isEqualToString:@"warmth"]) return [self slider:@"Warmth" value:MRGVoiceWarmth() min:0 max:1 tag:3];
+        if ([row isEqualToString:@"breath"]) return [self slider:@"Breathiness" value:MRGVoiceBreathiness() min:0 max:1 tag:4];
+        if ([row isEqualToString:@"pause"]) return [self slider:@"Pauses" value:MRGVoicePause() min:0 max:1.5 tag:5];
+        if ([row isEqualToString:@"stability"]) return [self slider:@"Stability" value:MRGElevenStability() min:0 max:1 tag:6];
+        if ([row isEqualToString:@"similarity"]) return [self slider:@"Similarity" value:MRGElevenSimilarity() min:0 max:1 tag:7];
+        if ([row isEqualToString:@"style"]) {
+            NSString *st = MRGVoiceStyleText();
+            UITableViewCell *c = [self cell:@"Voice style" detail:st ? (st.length > 28 ? [[st substringToIndex:28] stringByAppendingString:@"…"] : st) : @"Add" symbol:@"text.quote"];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
         UITableViewCell *c = [self cell:@"Preview" detail:MRGVoiceSummary() symbol:@"play.circle.fill"];
         c.textLabel.textColor = MRGAccent();
         return c;
     }
-    if (ip.section == 3) {
+    if (ip.section == 4) {
         UITableViewCell *c = [self cell:@"ElevenLabs key" detail:MRGElevenHasKey() ? [NSString stringWithFormat:@"%lu voices", (unsigned long)MRGElevenVoices().count] : @"Add" symbol:@"key.fill"];
         c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         return c;
@@ -196,7 +243,8 @@ static NSString *sampleLine(void) {
             return c;
         }
         AVSpeechSynthesisVoice *v = _phone[row - 1];
-        UITableViewCell *c = [self cell:v.name detail:[NSString stringWithFormat:@"%@ · %@", MRGVoiceQualityName(v), v.language] symbol:nil];
+        NSString *g = v.gender == AVSpeechSynthesisVoiceGenderFemale ? @" · female" : v.gender == AVSpeechSynthesisVoiceGenderMale ? @" · male" : @"";
+        UITableViewCell *c = [self cell:v.name detail:[NSString stringWithFormat:@"%@ · %@%@", MRGVoiceQualityName(v), v.language, g] symbol:nil];
         c.accessoryType = [chosen isEqualToString:v.identifier] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         return c;
     }
@@ -205,7 +253,7 @@ static NSString *sampleLine(void) {
         NSDictionary *v = _provider[ip.row];
         NSString *chosen = MRGVoiceProviderVoice();
         UITableViewCell *c = [self cell:v[@"name"] ?: v[@"id"] detail:[v[@"name"] isEqualToString:v[@"id"]] ? nil : v[@"id"] symbol:nil];
-        c.accessoryType = ([chosen isEqualToString:v[@"id"]] || (!chosen && ip.row == 0)) ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+        c.accessoryType = ([chosen.lowercaseString isEqualToString:[v[@"id"] lowercaseString]] || (!chosen && ip.row == 0)) ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         return c;
     }
     NSArray *voices = MRGElevenVoices();
@@ -225,14 +273,27 @@ static NSString *sampleLine(void) {
     [t deselectRowAtIndexPath:ip animated:YES];
     MRGVoiceEngine engine = MRGVoiceGetEngine();
     if (ip.section == 0) {
+        NSDictionary *p = MRGVoicePresets()[ip.row];
+        NSString *picked = MRGVoiceApplyPreset(p[@"id"]);
+        [t reloadData];
+        if (picked) MRGDJLog(@"voice: preset picked %@", picked);
+        [self preview:-1 voice:nil];
+        return;
+    }
+    if (ip.section == 1) {
         MRGVoiceSetEngine(ip.row);
         [t reloadData];
         if (ip.row == MRGVoiceEngineProvider && !_provider.count)
             MRGAIProviderVoices(^(NSArray<NSDictionary *> *voices) { self->_provider = voices ?: @[]; [self.tableView reloadData]; });
         return;
     }
-    if (ip.section == 1) { if (ip.row == 2) [self preview:-1 voice:nil]; return; }
-    if (ip.section == 3) { [self editElevenKey]; return; }
+    if (ip.section == 2) {
+        NSString *row = [self soundRows][ip.row];
+        if ([row isEqualToString:@"preview"]) [self preview:-1 voice:nil];
+        else if ([row isEqualToString:@"style"]) [self editStyle];
+        return;
+    }
+    if (ip.section == 4) { [self editElevenKey]; return; }
     if (engine == MRGVoiceEnginePhone) {
         NSInteger row = ip.row;
         if ([self personalVoiceAsk]) {
@@ -264,13 +325,37 @@ static NSString *sampleLine(void) {
 }
 
 - (void)slid:(UISlider *)s {
-    double v = round(s.value * 20) / 20;
-    if (s.tag == 1) MRGVoiceSetSpeed(v); else MRGVoiceSetPitch(v);
+    double v = s.tag == 5 ? round(s.value * 10) / 10 : round(s.value * 20) / 20;
+    switch (s.tag) {
+        case 1: MRGVoiceSetSpeed(v); break;
+        case 2: MRGVoiceSetPitch(v); break;
+        case 3: MRGVoiceSetWarmth(v); break;
+        case 4: MRGVoiceSetBreathiness(v); break;
+        case 5: MRGVoiceSetPause(v); break;
+        case 6: MRGElevenSetStability(v); break;
+        case 7: MRGElevenSetSimilarity(v); break;
+    }
     UITableViewCell *c = (UITableViewCell *)s.superview;
     while (c && ![c isKindOfClass:UITableViewCell.class]) c = (UITableViewCell *)c.superview;
-    c.detailTextLabel.text = [NSString stringWithFormat:@"%.2f×", v];
+    c.detailTextLabel.text = [self format:v tag:s.tag];
 }
-- (void)slideEnded:(UISlider *)s { [self preview:-1 voice:nil]; }
+- (void)slideEnded:(UISlider *)s {
+    if (MRGVoicePresetID()) { MRGVoiceMarkCustom(); [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationNone]; }
+    [self preview:-1 voice:nil];
+}
+
+- (void)editStyle {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Voice style" message:@"How the voice should sound, in your words: sent as speaking instructions to OpenAI and Gemini voices. E.g. \"slow, soft and soothing, warm and close, a little breathy\"." preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f) { f.text = MRGVoiceStyleText(); f.placeholder = @"slow, soft, warm, soothing…"; f.clearButtonMode = UITextFieldViewModeWhileEditing; }];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        MRGVoiceSetStyleText(a.textFields.firstObject.text);
+        MRGVoiceMarkCustom();
+        [self.tableView reloadData];
+        [self preview:-1 voice:nil];
+    }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
 
 - (void)editElevenKey {
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"ElevenLabs key" message:@"Paste your ElevenLabs API key. Mirage checks it by listing your voices." preferredStyle:UIAlertControllerStyleAlert];
