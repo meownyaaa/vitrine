@@ -2,6 +2,31 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.4.3 (bug fixes)
+
+- **Crash when tapping a song** ("Assertion failure: tracks, SPTPlayerQueueWrapperImpl.m:174"): Spotify's queue wrapper
+  (`queueMultipleTracks` → `queueTracksInternal` → `fetchQueueInternal`, and `fetchQueue`) chains on its own queue fetch
+  and asserts the queue it gets back has tracks. Right after a context change (a tapped row) that queue isn't there,
+  and 0.4.2 fired a fetch, a clear and a queue at exactly that moment. The throw happens in Spotify's later main-queue
+  callback, so no `@try` can catch it. Now every queue command runs one at a time and waits until the player has
+  settled (a track and an up-next list in its state, 1.5 s after the last play); the sync reads the queue from the
+  player's state (`SPTPlayerState.future`) without calling Spotify; clearing uses the player's own `fetchQueue:on:` and
+  `setQueue:` (0.4.2's wrapper `fetchQueue` returned a read-only `SPTPlayerQueueSnapshotImpl`, so every clear failed);
+  only real `SPTPlayerTrack`s with a valid URI are ever sent, never an empty list; and a queue that isn't ready or
+  can't be cleared falls back to step mode instead of being retried.
+- **Start played the old vibe**: with an old set still listed, Start meant "Switch it up", which kept the earlier
+  request ("the playlist clairo"); and no-request sets seeded from the three most played artists. Now Start is a fresh
+  set seeded from the song playing now (the intro names it); Switch it up only applies while the set is playing and
+  only keeps constraints like "underground"; stopping or a new request forgets the old focus, plan and pool; history
+  adds at most 2 picks. Spotify's related-artists endpoint answers 404 to the app's token, so a small pool is only a hint.
+- **Voice presets change only the voice**, never the persona or the music (0.4.2's Soft & soothing persona leaked into
+  the sets).
+- **ElevenLabs presets by ID**: *Soft & Close* (Ivy, `KhpuFRhu6kfNvpalcYtz`), *Classic Whisper* (Nicole,
+  `piTKgcLEGmPE4e6mEKli`), *Playful Spark* (Arabella, `Z3R5wn05IrDiVCyEkUrK`). The picked voice is never swapped for
+  another; when it isn't in your ElevenLabs voices the voice page says so and offers **Add to my ElevenLabs**
+  (`GET /v1/shared-voices`, then `POST /v1/voices/add/{public_owner_id}/{voice_id}`, only when tapped).
+- The vibe box understands "skip", "pause", "go back" and the like as player controls.
+
 ## What's new in 0.4.2
 
 - **Queue sync**: Spotify can accept a queue command and not apply it, and a play can wipe the queue, so the set sheet no

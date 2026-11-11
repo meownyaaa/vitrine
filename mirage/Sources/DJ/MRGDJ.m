@@ -209,6 +209,8 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode, BOOL *plain
     NSString *_poolKey;                           // which seeds it was built for
     CFTimeInterval _poolTime;
     BOOL _poolHard;                               // off-pool picks are capped (no request, or an artist request)
+    NSInteger _missStreak;                        // sync reads in a row that found set songs missing
+    CFTimeInterval _setStarted;                   // when the current set's first song was verified
 }
 
 + (instancetype)shared {
@@ -252,6 +254,10 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode, BOOL *plain
     _lastIndex = -1;
     _stepping = NO;
     _status = nil;
+    // Nothing of this set's direction is remembered for the next Start.
+    _origRequest = nil; _plan = nil; _lastRequest = nil;
+    _focus = nil; _focusTracks = nil; _focusRelated = nil; _focusMode = 0; _focusCrew = nil; _focusPlain = NO;
+    _pool = nil; _poolKey = nil;
     [MRGVoiceSpeaker.shared stop];
     MRGDuckMusic(NO);
     [self setSpeaking:NO line:nil];
@@ -274,7 +280,7 @@ static NSString *listOf(NSArray<NSDictionary *> *tracks, NSUInteger max) {
 static NSString *systemPrompt(void) {
     NSMutableString *p = [NSMutableString string];
     [p appendString:@"You are Mirage DJ, the host of a personal radio show inside the listener's Spotify, and a serious music curator.\n"];
-    [p appendFormat:@"How you talk: %@\n\n", MRGDJPersonaStyle()];
+    [p appendFormat:@"How you talk: %@\n(That is only your speaking style. It never decides the music: the songs come from the seeds and the request below, not from your persona or voice.)\n\n", MRGDJPersonaStyle()];
     [p appendString:
         @"How you curate:\n"
         @"1. Read the request first. Every constraint in it (genre, scene, era or year, mood, energy, tempo, language, 'underground', 'obscure', 'deep cuts', 'no hits', 'like artist X') is a hard rule for every single track, not a suggestion.\n"
@@ -322,7 +328,12 @@ static NSInteger popularityCap(NSString *request) {
     if (top.count) [p appendFormat:@"Their top and recent tracks:\n%@\n\n", listOf(top, 20)];
     if (artists.count) [p appendFormat:@"Their top artists: %@\n\n", [artists componentsJoinedByString:@", "]];
     if (liked.count) [p appendFormat:@"Songs they liked:\n%@\n\n", listOf(liked, 15)];
-    [p appendFormat:@"Request: %@", request.length ? request : (_focus ? @"(keep going with the same artist focus)" : @"(none: just play something great for them right now)")];
+    BOOL seeded = !request.length && !_focus && now[@"artist"];
+    if (seeded) {
+        [p appendFormat:@"Request: none. SEED: the song playing right now, \"%@\" by %@. Build the whole set out of this song: its scene, sound, era and energy, artists right next to %@. Their top artists and history above may supply at most 2 picks, and only if they fit this seed. The intro must name %@ or the song.", now[@"title"] ?: @"?", now[@"artist"], now[@"artist"], now[@"artist"]];
+    } else {
+        [p appendFormat:@"Request: %@", request.length ? request : (_focus ? @"(keep going with the same artist focus)" : @"(none: just play something great for them right now)")];
+    }
     if (_focus) {
         NSString *name = _focus[@"name"];
         NSArray *genres = [_focus[@"genres"] isKindOfClass:NSArray.class] ? _focus[@"genres"] : nil;
@@ -393,6 +404,9 @@ static NSString *firstArtist(NSString *a) {
     if (!_focus) {
         NSString *now = firstArtist(MRGNowPlaying()[@"artist"]);
         if (now.length) [seeds addObject:now];
+        // With something playing, the seed is that song's artist (and their neighbours). History only adds a little:
+        // 0.4.2 made the three most played artists seeds too, so Clairo took over every Start.
+        NSUInteger maxSeeds = now.length ? 1 : 3;
         for (NSDictionary *h in [MRGRecentHistory() subarrayWithRange:NSMakeRange(0, MIN(MRGRecentHistory().count, (NSUInteger)40))]) {
             NSString *a = firstArtist(h[@"artist"]);
             if (!a.length) continue;
@@ -401,7 +415,7 @@ static NSString *firstArtist(NSString *a) {
         }
         NSArray *top = [counts keysSortedByValueUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [b compare:a]; }];
         for (NSString *k in top) {
-            if (seeds.count >= 3) break;
+            if (seeds.count >= maxSeeds) break;
             BOOL have = NO;
             for (NSString *x in seeds) if ([x.lowercaseString isEqualToString:k]) have = YES;
             if (!have && display[k]) [seeds addObject:display[k]];
@@ -413,13 +427,16 @@ static NSString *firstArtist(NSString *a) {
     if (!seeds.count) { _pool = nil; _poolSeeds = nil; done(); return; }
     if ([key isEqualToString:_poolKey] && _pool.count && CACurrentMediaTime() - _poolTime < 600) { done(); return; }
     NSMutableDictionary<NSString *, NSNumber *> *pool = [NSMutableDictionary dictionary];
-    for (NSString *k in counts) if (counts[k].integerValue >= 2) pool[k] = @2;   // their own repeats
+    for (NSString *k in counts) if (counts[k].integerValue >= 3) pool[k] = @1;   // their own repeats, a little
     for (NSString *sd in seeds) pool[sd.lowercaseString] = @3;
     __block BOOL finished = NO;
     void (^finish)(NSString *) = ^(NSString *why) {
         if (finished) return;
         finished = YES;
         if (gen != self->_generation) return;
+        // Spotify's related-artists endpoint answers 404 to the app's token (0.4.2 log), so a pool can end up as just the
+        // seeds; that small a pool would throw out every good neighbour, so it's only a hint then.
+        if (pool.count < 8) self->_poolHard = NO;
         self->_pool = pool.count > seeds.count ? [pool copy] : nil;
         self->_poolSeeds = [seeds copy];
         self->_poolKey = key;
@@ -850,7 +867,7 @@ static const NSInteger kCatalogMax = 80;
     if (MRGAIProvider() == MRGProviderNone) { [self fail:@"Add your AI provider's API key in Mirage settings first."]; return; }
     NSUInteger gen = ++_generation;
     _lastRequest = [request copy];
-    if (![request hasPrefix:@"Switch it up:"]) _origRequest = [request copy];
+    if (![request hasPrefix:@"Switch it up:"]) { _origRequest = [request copy]; _plan = nil; _pool = nil; _poolKey = nil; }
     MRGDJLog(@"start: %@ with %@ (%@)", request.length ? @"a request" : @"no request", MRGProviderName(MRGAIProvider()), MRGAIModel() ?: @"?");
     _state = MRGDJThinking;
     _error = nil;
@@ -917,6 +934,16 @@ static NSInteger intentOf(NSString *text) {
 }
 
 - (void)handleInput:(NSString *)text {
+    NSString *cmd = [[text ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" .!?"]];
+    NSDictionary *controls = @{@"skip": @"next", @"skip this": @"next", @"skip it": @"next", @"skip this song": @"next", @"next": @"next", @"next song": @"next",
+                               @"pause": @"pause", @"stop": @"pause", @"resume": @"resume", @"play": @"resume", @"unpause": @"resume",
+                               @"back": @"previous", @"go back": @"previous", @"previous": @"previous", @"last song": @"previous"};
+    if (controls[cmd]) {
+        // 0.4.2 read "skip this" as an artist called "skip this song".
+        MRGDJLog(@"vibe box: \"%@\" → player %@", cmd, controls[cmd]);
+        MRGPlayerControl(controls[cmd], ^(BOOL ok, NSString *error) { if (!ok) [self fail:error ?: @"Spotify's player refused."]; });
+        return;
+    }
     NSInteger intent = intentOf(text ?: @"");
     MRGDJLog(@"vibe box: \"%@\" → %@", text.length > 60 ? [[text substringToIndex:60] stringByAppendingString:@"…"] : text,
              @[@"music", @"artist question", @"song question", @"question"][intent]);
@@ -980,7 +1007,10 @@ static NSInteger intentOf(NSString *text) {
 - (void)switchItUp {
     NSMutableString *r = [NSMutableString stringWithString:@"Switch it up: take the set in a clearly different direction from the last one (another genre, scene, era or energy; different artists), still something this listener would love."];
     if (_plan.length) [r appendFormat:@" The last set's plan was: \"%@\" — do not repeat that direction.", _plan];
-    if (_origRequest.length) [r appendFormat:@" Keep the hard constraints of their earlier request (like underground or an era): \"%@\".", _origRequest];
+    // Only constraints like "underground" carry over; an earlier artist or vibe doesn't (it made Start replay Clairo).
+    if (_origRequest.length && popularityCap(_origRequest)) [r appendFormat:@" Keep the hard constraints of their earlier request (like underground or an era): \"%@\".", _origRequest];
+    NSDictionary *now = MRGNowPlaying();
+    if (now[@"artist"]) [r appendFormat:@" Playing right now: \"%@\" by %@; start from there.", now[@"title"] ?: @"?", now[@"artist"]];
     [self startWithRequest:r];
 }
 
@@ -1055,6 +1085,8 @@ static NSInteger intentOf(NSString *text) {
             self->_state = MRGDJPlaying;
             self->_status = nil;
             self->_currentIndex = -1;
+            self->_setStarted = CACurrentMediaTime();
+            self->_missStreak = 0;
             [self->_spoken removeAllObjects];
             self->_talkCount = 0;
             self->_intro = intro;
@@ -1078,14 +1110,17 @@ static NSInteger intentOf(NSString *text) {
 
 - (void)playFromIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_set.count) return;
-    if (index == _currentIndex) return;
-    NSArray<NSString *> *uris = urisOf([_set subarrayWithRange:NSMakeRange(index, _set.count - index)]);
-    NSString *target = uris.firstObject;
+    if (index == _currentIndex || _stepping || _state == MRGDJThinking) return;
+    MRGDJTrack *row = _set[index];
+    NSString *target = row.uri;
+    if (![target hasPrefix:@"spotify:track:"]) { [self fail:@"That song isn't ready yet (no Spotify match). Try another row."]; return; }
     NSUInteger gen = _generation;
     _error = nil;
     _stepping = YES;
     [self setStatusText:@"Skipping to it…"];
-    MRGDJLog(@"row: jump to %ld", (long)index);
+    MRGDJLog(@"row: jump to %ld (%@, was %@)", (long)index, target, @[@"unknown", @"pending", @"in queue", @"missing", @"played"][MIN(MAX(row.queueState, 0), 4)]);
+    // The row plays by its URI straight away; nothing is queued until the player has settled on it (0.4.2 cleared and
+    // re-queued at once, which is where Spotify's queue wrapper asserted).
     MRGPlayContextURI(target, nil, ^(BOOL ok, NSString *error) {
         if (gen != self->_generation) return;
         if (!ok) { self->_stepping = NO; [self fail:[NSString stringWithFormat:@"Couldn't jump to that song: %@", error ?: @"Spotify refused it (Spotify Free can't pick songs on demand)."]]; return; }
@@ -1096,20 +1131,27 @@ static NSInteger intentOf(NSString *text) {
             if (!playing) { [self fail:[NSString stringWithFormat:@"Spotify didn't jump to that song (%@). On Spotify Free it can't pick songs on demand.", seen]]; return; }
             if (self->_state == MRGDJIdle) self->_state = MRGDJPlaying;
             self->_playbackMode = @"step";
+            self->_setStarted = CACurrentMediaTime();
+            self->_missStreak = 0;
+            self->_rebuilds = 0;
             [self changed];
-            if (uris.count < 2) return;
-            // Jumping plays a fresh context; what was queued before stays in Spotify's queue, so the rest is re-sent only
-            // after clearing it (otherwise the set would sit there twice).
+            if (index + 1 >= (NSInteger)self->_set.count) return;
             NSArray *rest = [self->_set subarrayWithRange:NSMakeRange(index + 1, self->_set.count - index - 1)];
             [self mark:rest state:MRGDJQueuePending];
-            self->_rebuilds = 0;
+            // What was queued before the jump is still in Spotify's queue: cleared first; if that fails, the rest is
+            // not queued again (it would play twice) and Mirage steps through it instead.
             MRGClearQueue(^(NSUInteger removed, NSString *clearError) {
                 if (gen != self->_generation) return;
-                MRGQueueTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)], ^(BOOL queued, NSString *queueError) {
+                if (clearError) {
+                    MRGDJLog(@"row: queue not cleared (%@), stepping through the rest", clearError);
+                    [self mark:rest state:MRGDJQueueMissing];
+                    return;
+                }
+                MRGQueueTracks(urisOf(rest), ^(BOOL queued, NSString *queueError) {
                     if (gen != self->_generation) return;
                     self->_playbackMode = queued ? @"queue" : @"step";
                     if (!queued) [self mark:rest state:MRGDJQueueMissing];
-                    [self syncQueueSoon:2.0 reason:@"after a jump"];
+                    [self syncQueueSoon:2.5 reason:@"after a jump"];
                 });
             });
         });
@@ -1236,7 +1278,7 @@ static NSString *plain(NSString *s) {
 }
 
 - (void)syncTick {
-    if (_state == MRGDJPlaying && CACurrentMediaTime() - _lastSync > 20) [self syncQueue:@"timer"];
+    if (_state == MRGDJPlaying && !_stepping && CACurrentMediaTime() - _lastSync > 20) [self syncQueue:@"timer"];
 }
 
 - (void)syncQueueSoon:(double)delay reason:(NSString *)reason {
@@ -1256,7 +1298,9 @@ static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
 }
 
 - (void)syncQueue:(NSString *)reason {
+    // Never while a set or a jump is starting, never two at once, and not in the first seconds of a set.
     if (_state != MRGDJPlaying || !_set.count || _syncing || _stepping) return;
+    if (CACurrentMediaTime() - _setStarted < 3) { [self syncQueueSoon:3 reason:reason]; return; }
     NSInteger here = MAX(_currentIndex, _lastIndex);
     if (here < 0) return;   // the player is somewhere else; nothing to line up
     _syncing = YES;
@@ -1264,8 +1308,11 @@ static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
     NSUInteger gen = _generation;
     MRGFetchQueue(^(NSArray<NSDictionary *> *queued, NSArray<NSDictionary *> *upNext, NSString *error) {
         self->_syncing = NO;
-        if (gen != self->_generation || self->_state != MRGDJPlaying) return;
+        if (gen != self->_generation || self->_state != MRGDJPlaying || self->_stepping) return;
         if (error) { MRGDJLog(@"sync: couldn't read Spotify's queue (%@) [%@]", error, reason); return; }
+        // The player's state lists only so many songs ahead: when every listed one is queued, the songs past them
+        // aren't visible and count as unknown, not missing.
+        BOOL allQueued = upNext.count && queued.count == upNext.count;
         NSInteger from = MAX(self->_currentIndex, self->_lastIndex) + 1;
         NSArray<MRGDJTrack *> *set = self->_set;
         for (NSInteger i = 0; i < from && i < (NSInteger)set.count; i++) if (i != self->_currentIndex) set[i].queueState = MRGDJQueuePlayed;
@@ -1274,8 +1321,11 @@ static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
         NSMutableArray *missing = [NSMutableArray array];
         NSMutableArray *positions = [NSMutableArray array];
         NSMutableSet *ours = [NSMutableSet set];
+        NSUInteger checkedCount = 0;
         for (MRGDJTrack *t in upcoming) {
             NSInteger pos = queuePosition(t, queued);
+            if (pos == NSNotFound && allQueued && checkedCount >= queued.count) { if (t.queueState != MRGDJQueueQueued) t.queueState = MRGDJQueuePending; continue; }
+            checkedCount++;
             if (pos == NSNotFound) { [missing addObject:t]; t.queueState = MRGDJQueueMissing; }
             else { [positions addObject:@(pos)]; [ours addObject:@(pos)]; t.queueState = MRGDJQueueQueued; }
         }
@@ -1286,6 +1336,7 @@ static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
                  (unsigned long)upcoming.count, (unsigned long)(upcoming.count - missing.count), (unsigned long)missing.count, (unsigned long)foreign.count,
                  after[@"title"] ?: @"nothing", after[@"provider"] ?: @"-");
         if (!missing.count) {
+            self->_missStreak = 0;
             self->_playbackMode = @"queue";
             // Same songs, other order: the listener reordered Spotify's queue, so the set follows it.
             BOOL sorted = YES;
@@ -1302,6 +1353,8 @@ static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
             return;
         }
         if (missing.count == upcoming.count) MRGDJLog(@"sync: none of the set is in Spotify's queue (wiped or never applied)");
+        // Two reads in a row must agree before anything is changed (the state can lag a queue command).
+        if (++self->_missStreak < 2) { [self changed]; [self syncQueueSoon:4 reason:@"confirming"]; return; }
         if (self->_rebuilds >= 2) {
             if (![self->_playbackMode isEqualToString:@"step"]) MRGDJLog(@"sync: the queue keeps dropping songs, step mode: Mirage plays the missing ones itself");
             self->_playbackMode = @"step";
@@ -1316,7 +1369,17 @@ static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
         for (MRGDJTrack *t in missing) t.requeues++;
         [self mark:upcoming state:MRGDJQueuePending];
         MRGClearQueue(^(NSUInteger removed, NSString *clearError) {
-            if (gen != self->_generation) return;
+            if (gen != self->_generation || self->_stepping) return;
+            if (clearError) {
+                // Re-sending without a clear would put songs in twice: step mode instead.
+                MRGDJLog(@"sync: queue not cleared (%@), step mode for the missing songs", clearError);
+                self->_playbackMode = @"step";
+                for (MRGDJTrack *t in upcoming) t.queueState = [missing containsObject:t] ? MRGDJQueueMissing : MRGDJQueueQueued;
+                self->_rebuilds = 2;
+                [self changed];
+                return;
+            }
+            self->_missStreak = 0;
             MRGQueueTracks(send, ^(BOOL ok, NSString *queueError) {
                 if (gen != self->_generation) return;
                 if (!ok) {

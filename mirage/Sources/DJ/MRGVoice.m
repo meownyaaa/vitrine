@@ -88,22 +88,28 @@ NSArray<NSDictionary *> *MRGVoicePresets(void) {
               @"openai": @"shimmer", @"gemini": @"Achernar", @"groq": @"diana", @"xai": @"ara",
               @"eleven": @[@"Sarah", @"Lily", @"Matilda", @"Alice", @"Jessica", @"Laura", @"Charlotte", @"Rachel"], @"gender": @"female",
               @"stability": @0.7, @"similarity": @0.8, @"elStyle": @0.15},
-            // Modeled on Alex's first sample (soft close-mic female, ~200 Hz median, narrow melody, very slow with long gaps).
-            @{@"id": @"velvet", @"name": @"Warm Velvet", @"blurb": @"Very soft, slow and close; warm, caring, unhurried female voice.",
-              @"speed": @0.8, @"pitch": @0.97, @"warmth": @1.0, @"breath": @0.6, @"pause": @0.85, @"persona": @6,
-              @"style": @"A very soft, close-mic female voice, almost a murmur but still voiced: slow and unhurried, short phrases with long gentle pauses between them, low-to-mid pitch with a calm, narrow melody, warm and affectionate, quietly reassuring, a soft smile in the voice. Never loud, never bright, never rushed.",
+            // Alex's pick for his first sample: ElevenLabs "Ivy" (low, soft, slow, close-mic, calm, a bit caring and bossy).
+            @{@"id": @"velvet", @"name": @"Soft & Close", @"blurb": @"Low, soft and slow, right at the mic; calm, caring, a little bossy (ElevenLabs Ivy).",
+              @"speed": @0.82, @"pitch": @0.95, @"warmth": @1.0, @"breath": @0.6, @"pause": @0.8,
+              @"style": @"A low, soft, slow female voice right at the mic: calm and caring with a gentle, slightly bossy confidence, short phrases with unhurried pauses, a narrow calm melody and a soft smile. Never loud, never bright, never rushed.",
               @"openai": @"shimmer", @"gemini": @"Sulafat", @"groq": @"autumn", @"xai": @"ara",
-              @"eleven": @[@"Mia", @"Nora", @"Faith", @"Sarah", @"Lily", @"Matilda"],
-              @"elevenID": @"sp8CrAP79SOncD3rShle", @"elevenIDName": @"Mia (soft & intimate)",
+              @"elevenID": @"KhpuFRhu6kfNvpalcYtz", @"elevenIDName": @"Ivy",
               @"phone": @[@"Ava", @"Zoe", @"Samantha"], @"gender": @"female",
               @"stability": @0.75, @"similarity": @0.8, @"elStyle": @0.1},
+            // ElevenLabs' classic "Nicole": a soft, breathy, intimate whisper.
+            @{@"id": @"whisper", @"name": @"Classic Whisper", @"blurb": @"Soft, breathy, intimate whisper (ElevenLabs Nicole).",
+              @"speed": @0.88, @"pitch": @1.05, @"warmth": @0.8, @"breath": @0.95, @"pause": @0.6,
+              @"style": @"A soft, breathy, intimate whisper, light and high, very close to the mic: calm, gentle and hushed, every word unhurried. Never voiced loudly.",
+              @"openai": @"shimmer", @"gemini": @"Achernar", @"groq": @"diana", @"xai": @"ara",
+              @"elevenID": @"piTKgcLEGmPE4e6mEKli", @"elevenIDName": @"Nicole",
+              @"phone": @[@"Zoe", @"Ava", @"Samantha"], @"gender": @"female",
+              @"stability": @0.6, @"similarity": @0.8, @"elStyle": @0.0},
             // Modeled on Alex's second sample (ElevenLabs "Arabella" v3 demo: young bright American female, very expressive).
             @{@"id": @"spark", @"name": @"Playful Spark", @"blurb": @"Young, bright and super expressive; laughs, whispers, big swings.",
               @"speed": @1.05, @"pitch": @1.03, @"warmth": @0.6, @"breath": @0.25, @"pause": @0.35, @"persona": @0,
               @"style": @"A young, bright American female voice, playful and very expressive: big pitch swings, quick excited delivery that drops to a conspiratorial whisper, little laughs and giggles, dramatic pauses before the reveal, sounds amazed by everything, like a friend gushing about a song.",
               @"openai": @"coral", @"gemini": @"Zephyr", @"groq": @"hannah", @"xai": @"eve",
-              @"eleven": @[@"Arabella", @"Jessica", @"Laura", @"Lily"],
-              @"elevenID": @"Z3R5wn05IrDiVCyEkUrK", @"elevenIDName": @"Arabella (library)",
+              @"elevenID": @"Z3R5wn05IrDiVCyEkUrK", @"elevenIDName": @"Arabella",
               @"phone": @[@"Zoe", @"Ava", @"Nicky"], @"gender": @"female",
               @"stability": @0.3, @"similarity": @0.75, @"elStyle": @0.55},
             @{@"id": @"hype", @"name": @"Hype Radio DJ", @"blurb": @"Loud, fast, big energy.",
@@ -159,22 +165,32 @@ NSString *MRGVoiceApplyPreset(NSString *pid) {
     MRGElevenSetStability([p[@"stability"] doubleValue]);
     MRGElevenSetSimilarity([p[@"similarity"] doubleValue]);
     [D() setDouble:[p[@"elStyle"] doubleValue] forKey:@"mirage.dj.elevenStyle"];
-    NSInteger persona = [p[@"persona"] integerValue];
-    if (persona >= 0 && persona < (NSInteger)MRGDJPersonaNames().count) MRGDJSetPersona(persona);
+    // Voice only: a preset never changes the DJ's persona or the music (0.4.2's "Soft & soothing" persona leaked into
+    // the sets: "a quiet flow", "a soft pulse").
     NSMutableArray *what = [NSMutableArray array];
     MRGProvider prov = MRGAIProvider();
     NSString *key = prov == MRGProviderOpenAI ? @"openai" : prov == MRGProviderGemini ? @"gemini" : prov == MRGProviderGroq ? @"groq" : prov == MRGProviderXAI ? @"xai" : nil;
     if (key && MRGProviderHasTTS(prov)) { MRGVoiceSetProviderVoice(p[key]); [what addObject:[NSString stringWithFormat:@"%@ voice %@", MRGProviderName(prov), p[key]]]; }
     BOOL elevenSet = NO;
-    for (NSString *want in p[@"eleven"]) {
+    [D() removeObjectForKey:@"mirage.dj.elevenNeedsAdd"];
+    if ([p[@"elevenID"] length] && MRGKeychainGet(kEleven).length) {
+        // The voice Alex picked, by its ID: never silently swapped for another. Shared-library voices that aren't in his
+        // ElevenLabs voices yet work by ID on paid plans; otherwise the voice page offers "Add to my ElevenLabs".
+        NSString *vid = p[@"elevenID"], *vname = p[@"elevenIDName"] ?: vid;
+        BOOL mine = NO;
+        for (NSDictionary *v in MRGElevenVoices()) if ([v[@"id"] isEqualToString:vid]) mine = YES;
+        MRGElevenSetVoice(vid);
+        elevenSet = YES;
+        [what addObject:[NSString stringWithFormat:@"ElevenLabs %@%@", vname, mine ? @"" : @" (by ID, not in your voices)"]];
+        if (!mine) {
+            [D() setObject:@{@"id": vid, @"name": vname} forKey:@"mirage.dj.elevenNeedsAdd"];
+            MRGDJLog(@"voice: ElevenLabs %@ (%@) isn't in your ElevenLabs voices; using it by ID. If it fails, add it in ElevenLabs → Voice Library (or Add to my ElevenLabs on the voice page).", vname, vid);
+        }
+    }
+    for (NSString *want in elevenSet ? @[] : p[@"eleven"]) {
         NSDictionary *hit = nil;
         for (NSDictionary *v in MRGElevenVoices()) if ([[v[@"name"] lowercaseString] hasPrefix:want.lowercaseString]) { hit = v; break; }
         if (hit) { MRGElevenSetVoice(hit[@"id"]); [what addObject:[@"ElevenLabs " stringByAppendingString:hit[@"name"]]]; elevenSet = YES; break; }
-    }
-    // Not in the account's list: use the shared-library voice by ID (paid ElevenLabs plans can use these directly).
-    if (!elevenSet && [p[@"elevenID"] length] && MRGKeychainGet(kEleven).length) {
-        MRGElevenSetVoice(p[@"elevenID"]);
-        [what addObject:[@"ElevenLabs " stringByAppendingString:p[@"elevenIDName"] ?: p[@"elevenID"]]];
     }
     AVSpeechSynthesisVoice *phone = nil;
     for (NSString *want in p[@"phone"]) {
@@ -322,6 +338,49 @@ void MRGElevenRefreshVoices(void (^done)(NSArray<NSDictionary *> *, NSString *))
     });
 }
 
+// The preset voice the account doesn't have yet ({id, name, error?}), or nil.
+NSDictionary *MRGElevenNeedsAdd(void) {
+    NSDictionary *n = [D() dictionaryForKey:@"mirage.dj.elevenNeedsAdd"];
+    if (![n[@"id"] isKindOfClass:NSString.class]) return nil;
+    for (NSDictionary *v in MRGElevenVoices()) if ([v[@"id"] isEqualToString:n[@"id"]]) return nil;
+    return n;
+}
+
+// Adds a shared Voice Library voice to the user's ElevenLabs voices with their own key: GET /v1/shared-voices?search=
+// finds its public_owner_id, then POST /v1/voices/add/{public_owner_id}/{voice_id}. Only when the user taps.
+void MRGElevenAddShared(NSString *voiceID, NSString *name, void (^done)(BOOL ok, NSString *message)) {
+    NSString *key = MRGKeychainGet(kEleven);
+    if (!key.length || !voiceID.length) { done(NO, @"Add your ElevenLabs key first."); return; }
+    NSString *q = [name ?: voiceID stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
+    NSString *path = [NSString stringWithFormat:@"/v1/shared-voices?page_size=100&search=%@", q];
+    [[NSURLSession.sharedSession dataTaskWithRequest:elevenRequest(path, key, nil) completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+        NSInteger status = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
+        id j = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSString *owner = nil;
+        id list = [j isKindOfClass:NSDictionary.class] ? j[@"voices"] : nil;
+        for (id v in [list isKindOfClass:NSArray.class] ? list : @[])
+            if ([v isKindOfClass:NSDictionary.class] && [v[@"voice_id"] isEqual:voiceID] && [v[@"public_owner_id"] isKindOfClass:NSString.class]) owner = v[@"public_owner_id"];
+        if (!owner) {
+            NSString *msg = status >= 200 && status < 300 ? [NSString stringWithFormat:@"Couldn't find %@ in ElevenLabs' Voice Library. Add it on elevenlabs.io → Voices → Explore.", name ?: voiceID] : elevenError(status, data, error);
+            MRGDJLog(@"voice: add %@ (%@): %@", name, voiceID, msg);
+            dispatch_async(dispatch_get_main_queue(), ^{ done(NO, msg); });
+            return;
+        }
+        NSString *addPath = [NSString stringWithFormat:@"/v1/voices/add/%@/%@", owner, voiceID];
+        [[NSURLSession.sharedSession dataTaskWithRequest:elevenRequest(addPath, key, @{@"new_name": name ?: voiceID}) completionHandler:^(NSData *d2, NSURLResponse *r2, NSError *e2) {
+            NSInteger s2 = [r2 isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)r2).statusCode : 0;
+            BOOL ok = !e2 && s2 >= 200 && s2 < 300;
+            NSString *msg = ok ? [NSString stringWithFormat:@"%@ was added to your ElevenLabs voices.", name ?: voiceID] : elevenError(s2, d2, e2);
+            MRGDJLog(@"voice: add %@ (%@) → HTTP %ld %@", name, voiceID, (long)s2, ok ? @"added" : msg);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!ok) { done(NO, msg); return; }
+                [D() removeObjectForKey:@"mirage.dj.elevenNeedsAdd"];
+                MRGElevenRefreshVoices(^(NSArray<NSDictionary *> *voices, NSString *err) { done(YES, msg); });
+            });
+        }] resume];
+    }] resume];
+}
+
 static void elevenSpeech(NSString *text, NSString *voice, double speed, void (^done)(NSData *, NSString *)) {
     NSString *key = MRGKeychainGet(kEleven);
     if (!key.length || !voice.length) { done(nil, @"No ElevenLabs key or voice."); return; }
@@ -336,9 +395,23 @@ static void elevenSpeech(NSString *text, NSString *voice, double speed, void (^d
             dispatch_async(dispatch_get_main_queue(), ^{ cb(err ? nil : data, status, err); });
         }] resume];
     };
+    void (^finish)(NSData *, NSInteger, NSString *) = ^(NSData *d, NSInteger st, NSString *e) {
+        if (!d && st >= 400 && st < 500) {
+            BOOL mine = NO;
+            for (NSDictionary *v in MRGElevenVoices()) if ([v[@"id"] isEqualToString:voice]) mine = YES;
+            if (!mine) {
+                NSString *name = voice;
+                for (NSDictionary *p in MRGVoicePresets()) if ([p[@"elevenID"] isEqualToString:voice]) name = p[@"elevenIDName"] ?: voice;
+                NSString *msg = [NSString stringWithFormat:@"ElevenLabs refused %@ (HTTP %ld): it isn't in your ElevenLabs voices. Add it in ElevenLabs → Voice Library, or tap Add to my ElevenLabs below.", name, (long)st];
+                [D() setObject:@{@"id": voice, @"name": name, @"error": msg} forKey:@"mirage.dj.elevenNeedsAdd"];
+                MRGDJLog(@"voice: %@ (%@)", msg, e ?: @"?");
+            }
+        }
+        done(d, e);
+    };
     run(@"eleven_flash_v2_5", ^(NSData *d, NSInteger s, NSString *e) {
-        if (d || (s != 400 && s != 422)) { done(d, e); return; }
-        run(@"eleven_multilingual_v2", ^(NSData *d2, NSInteger s2, NSString *e2) { done(d2, e2); });
+        if (d || (s != 400 && s != 422)) { finish(d, s, e); return; }
+        run(@"eleven_multilingual_v2", ^(NSData *d2, NSInteger s2, NSString *e2) { finish(d2, s2, e2); });
     });
 }
 

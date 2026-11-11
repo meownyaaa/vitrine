@@ -53,6 +53,8 @@ void MRGElevenRefreshVoices(void (^done)(NSArray<NSDictionary *> *voices, NSStri
 NSArray<NSDictionary *> *MRGElevenVoices(void);
 NSString *MRGElevenVoice(void);
 void MRGElevenSetVoice(NSString *voiceID);
+NSDictionary *MRGElevenNeedsAdd(void);   // a preset's voice missing from the account: {id, name, error?}, or nil
+void MRGElevenAddShared(NSString *voiceID, NSString *name, void (^done)(BOOL ok, NSString *message));
 
 // A short summary for the settings row ("Ava (Premium)", "OpenAI · ash", "Off").
 NSString *MRGVoiceSummary(void);

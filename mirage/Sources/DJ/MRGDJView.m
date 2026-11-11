@@ -659,8 +659,11 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
 
 - (void)go {
     [self.view endEditing:YES];
-    if (MRGDJ.shared.set.count || MRGDJ.shared.state == MRGDJPlaying) [MRGDJ.shared switchItUp];
-    else [MRGDJ.shared startWithRequest:nil];
+    // Switch it up only while the set is actually what's playing; otherwise Start is a fresh set seeded from the song
+    // playing now (0.4.2 switched up the old set and kept its "clairo" request, so Nettspend → Clairo).
+    MRGDJ *dj = MRGDJ.shared;
+    if (dj.state == MRGDJPlaying && dj.currentIndex >= 0) [dj switchItUp];
+    else [dj startWithRequest:nil];
 }
 - (void)stop { [MRGDJ.shared stop]; }
 - (void)openChat { [self.view endEditing:YES]; MRGShowDJChat(self); }

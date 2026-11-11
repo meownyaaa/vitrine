@@ -123,7 +123,7 @@ static NSString *sampleLine(void) {
     if (s == 0) return MRGVoicePresets().count;
     if (s == 1) return 4;
     if (s == 2) return [self soundRows].count;
-    if (s == 4) return 1;
+    if (s == 4) return 1 + (MRGElevenHasKey() && MRGElevenNeedsAdd() ? 1 : 0);
     switch (MRGVoiceGetEngine()) {
         case MRGVoiceEnginePhone: return _phone.count + 1 + ([self personalVoiceAsk] ? 1 : 0);
         case MRGVoiceEngineProvider: return MRGProviderHasTTS(MRGAIProvider()) ? MAX((NSInteger)_provider.count, 1) : 0;
@@ -155,11 +155,15 @@ static NSString *sampleLine(void) {
 }
 
 - (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
-    if (s == 0) return @"A preset sets speed, pitch, warmth, breathiness, pauses, a voice style, a fitting voice for every engine and the DJ's persona. Change anything after and it becomes your own.";
+    if (s == 0) return @"A preset sets speed, pitch, warmth, breathiness, pauses, a voice style and a fitting voice for every engine. It only changes the voice, never the music or the DJ's persona. Change anything after and it becomes your own.";
     if (s == 1) return @"AI provider voice works with OpenAI, Gemini, xAI and Groq keys and costs a little per line on your provider's bill. If a network voice fails, the phone's voice speaks instead.";
     if (s == 2) return @"Warmth, breathiness, pitch and Voice style are speaking instructions: OpenAI (gpt-4o-mini-tts) and Gemini voices follow them. iPhone voices use speed, pitch and pauses. ElevenLabs uses speed, pauses (as breaks), stability and similarity. xAI uses speed; Groq and xAI get pauses as ellipses.";
     if (s == 3 && MRGVoiceGetEngine() == MRGVoiceEnginePhone)
         return @"Want a better voice? iOS Settings → Accessibility → Spoken Content → Voices → English, and download an Enhanced or Premium voice (Ava, Zoe, Evan, Nathan…). It shows up here after. A Personal Voice you made in Accessibility can be used once you allow it.";
+    if (s == 4 && MRGElevenHasKey() && MRGElevenNeedsAdd()) {
+        NSDictionary *n = MRGElevenNeedsAdd();
+        return n[@"error"] ?: [NSString stringWithFormat:@"%@ isn't in your ElevenLabs voices yet. Mirage uses it by ID (works on paid ElevenLabs plans); if it fails, add it in ElevenLabs → Voice Library or tap Add to my ElevenLabs.", n[@"name"]];
+    }
     if (s == 4) return @"Optional: paste an ElevenLabs API key (elevenlabs.io → Developers → API keys) to use its voices. The key stays in this phone's keychain; only the lines the DJ says are sent.";
     return nil;
 }
@@ -221,6 +225,12 @@ static NSString *sampleLine(void) {
             return c;
         }
         UITableViewCell *c = [self cell:@"Preview" detail:MRGVoiceSummary() symbol:@"play.circle.fill"];
+        c.textLabel.textColor = MRGAccent();
+        return c;
+    }
+    if (ip.section == 4 && ip.row == 1) {
+        NSDictionary *n = MRGElevenNeedsAdd();
+        UITableViewCell *c = [self cell:[NSString stringWithFormat:@"Add %@ to my ElevenLabs", n[@"name"] ?: @"this voice"] detail:nil symbol:@"plus.circle.fill"];
         c.textLabel.textColor = MRGAccent();
         return c;
     }
@@ -291,6 +301,17 @@ static NSString *sampleLine(void) {
         NSString *row = [self soundRows][ip.row];
         if ([row isEqualToString:@"preview"]) [self preview:-1 voice:nil];
         else if ([row isEqualToString:@"style"]) [self editStyle];
+        return;
+    }
+    if (ip.section == 4 && ip.row == 1) {
+        NSDictionary *n = MRGElevenNeedsAdd();
+        if (!n) { [t reloadData]; return; }
+        MRGElevenAddShared(n[@"id"], n[@"name"], ^(BOOL ok, NSString *message) {
+            UIAlertController *a = [UIAlertController alertControllerWithTitle:ok ? @"Added" : @"Couldn't add it" message:message preferredStyle:UIAlertControllerStyleAlert];
+            [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            if (self.view.window) [self presentViewController:a animated:YES completion:nil];
+            [self.tableView reloadData];
+        });
         return;
     }
     if (ip.section == 4) { [self editElevenKey]; return; }

@@ -485,11 +485,13 @@ static id runPlay(id player, id context, id options, id origin) {
 // Plays a context by URI (a track, an album, a playlist) the way Spotify's own Play buttons do: SPTPlayerContext
 // contextForURI:, SPTPlayOptions (skipTo the start track when given, sent again without it if refused) and the player's
 // own origin (playOriginWithViewURIOverride:externalReferrer:), through playContext:options:origin:.
+void MRGNotePlayCommand(void);
 void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL, NSString *)) { MRGPlayContext(uri, startTrack, nil, done); }
 
 // The same, with shuffle set for this play (SPTPlayOptions.playerOptionsOverride = SPTPlayerOptionOverrides with
 // shufflingContext) when `shuffle` is given; nil leaves the listener's shuffle setting alone.
 void MRGPlayContext(NSString *uri, NSString *startTrack, NSNumber *shuffle, void (^done)(BOOL, NSString *)) {
+    MRGNotePlayCommand();
     @try {
         id player = playingPlayer();
         Class contextClass = objc_getClass("SPTPlayerContext");
@@ -542,155 +544,218 @@ void MRGPlayContext(NSString *uri, NSString *startTrack, NSNumber *shuffle, void
     }
 }
 
+#pragma mark - Spotify's queue (serialized, gated, validated)
+
+// 0.4.2 crashed with "Assertion failure: tracks, SPTPlayerQueueWrapperImpl.m:174" thrown from a main-queue block inside
+// Spotify: the queue wrapper's calls (queueMultipleTracks → queueTracksInternal → fetchQueueInternal, fetchQueue)
+// chain on Spotify's own queue fetch and assert that the queue they get back has its tracks. Right after a context
+// change (a row tapped, a new set) the player's queue isn't there yet, and Mirage fired a fetch, a clear and a queue
+// at that moment, plus a sync read-back. Being thrown on Spotify's later callback, no @try of ours can catch it. So:
+//  - every queue command waits until the player is settled (a track in its state, its future list present, at least
+//    1.5 s after Mirage's last play command), and runs one at a time, in order (queueOp);
+//  - the sync reads the queue from the player's state (SPTPlayerState.future, no Spotify call at all);
+//  - clearing uses the player's own fetchQueue:on: and setQueue:, and only when there is something queued;
+//  - only real SPTPlayerTracks with a spotify:track:<22 chars> URI are sent, never an empty list;
+//  - a queue that isn't ready or refuses is not retried in a loop: the caller falls back to step mode.
+static CFTimeInterval sg_lastPlayCommand;
+static id sg_queueWrapper;
+static NSMutableArray *sg_queueOps;
+static BOOL sg_queueBusy;
+
+static void runNextQueueOp(void);
+static void queueOp(NSString *name, void (^op)(void (^next)(void))) {
+    if (!sg_queueOps) sg_queueOps = [NSMutableArray array];
+    [sg_queueOps addObject:@[name, [op copy]]];
+    if (sg_queueOps.count > 1 || sg_queueBusy) MRGDJLog(@"queue: %@ waits for %lu earlier queue command(s)", name, (unsigned long)(sg_queueOps.count - (sg_queueBusy ? 0 : 1)));
+    runNextQueueOp();
+}
+static void runNextQueueOp(void) {
+    if (sg_queueBusy || !sg_queueOps.count) return;
+    NSArray *item = sg_queueOps.firstObject;
+    [sg_queueOps removeObjectAtIndex:0];
+    sg_queueBusy = YES;
+    __block BOOL released = NO;
+    void (^next)(void) = ^{
+        if (released) return;
+        released = YES;
+        // A short gap so Spotify's own follow-up work from one command is done before the next one.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ sg_queueBusy = NO; runNextQueueOp(); });
+    };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!released) MRGDJLog(@"queue: %@ didn't finish in 8 s, moving on", item[0]);
+        next();
+    });
+    void (^op)(void (^)(void)) = item[1];
+    @try { op(next); }
+    @catch (NSException *e) { MRGDJLog(@"queue: %@ threw %@: %@", item[0], e.name, e.reason); next(); }
+}
+
+static NSArray *stateFuture(id state) {
+    id f = state ? sget(state, @"future") : nil;
+    return [f isKindOfClass:NSArray.class] ? f : nil;
+}
+
+// Settled enough for a queue command: nil, or why not.
+static NSString *queueNotReady(void) {
+    if (!playingPlayer()) return @"no player captured yet";
+    SPTPlayerState *st = currentState();
+    if (!st) return @"no player state";
+    if (!uriString(sget(stateTrack(st), @"URI"))) return @"no track in the player's state";
+    if (!stateFuture(st)) return @"the player's up-next list isn't there";
+    if (CACurrentMediaTime() - sg_lastPlayCommand < 1.5) return @"a play command just went out";
+    return nil;
+}
+
+// Waits (up to `wait` seconds, checking every half second) for the player to settle.
+static void whenQueueReady(NSTimeInterval wait, void (^go)(NSString *notReady)) {
+    NSString *why = queueNotReady();
+    if (!why || wait <= 0) { go(why); return; }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ whenQueueReady(wait - 0.5, go); });
+}
+
+static BOOL validTrackURI(NSString *u) {
+    if (![u isKindOfClass:NSString.class] || ![u hasPrefix:@"spotify:track:"] || u.length != 14 + 22) return NO;
+    NSCharacterSet *bad = [[NSCharacterSet alphanumericCharacterSet] invertedSet];
+    return [[u substringFromIndex:14] rangeOfCharacterFromSet:bad].location == NSNotFound;
+}
+
+// Real SPTPlayerTracks (each with its URI set) for the valid URIs; never nil.
 static NSArray *playerTracks(NSArray<NSString *> *uris) {
     Class trackClass = objc_getClass("SPTPlayerTrack");
-    if (![trackClass respondsToSelector:@selector(trackWithURI:)]) { MRGDJLog(@"selector missing: +[SPTPlayerTrack trackWithURI:]"); return nil; }
+    if (![trackClass respondsToSelector:@selector(trackWithURI:)]) { MRGDJLog(@"selector missing: +[SPTPlayerTrack trackWithURI:]"); return @[]; }
     NSMutableArray *tracks = [NSMutableArray array];
-    for (NSString *u in uris) {
-        id t = [trackClass trackWithURI:[NSURL URLWithString:u]];
-        if (t) [tracks addObject:t];
+    NSUInteger skipped = 0;
+    for (NSString *u in [uris isKindOfClass:NSArray.class] ? uris : @[]) {
+        if (!validTrackURI(u)) { skipped++; continue; }
+        NSURL *url = [NSURL URLWithString:u];
+        id t = url ? [trackClass trackWithURI:url] : nil;
+        if (![t isKindOfClass:trackClass] || !uriString(sget(t, @"URI"))) { skipped++; continue; }
+        [tracks addObject:t];
     }
+    if (skipped) MRGDJLog(@"queue: %lu invalid track(s) left out", (unsigned long)skipped);
     return tracks;
 }
 
-// Adds tracks to the queue (SPTPlayerQueueWrapperImpl initWithPlayer: + queueMultipleTracks:loggingParams:, the
-// wrapper Spotify's "Add to queue" uses). Only called once the context is actually playing: queued earlier, the player
-// answered 409 Conflict. A Conflict is tried again twice, a second apart.
+void MRGNotePlayCommand(void) { sg_lastPlayCommand = CACurrentMediaTime(); }
+
+// Adds tracks to Spotify's queue (SPTPlayerQueueWrapperImpl queueMultipleTracks:loggingParams:, the wrapper Spotify's
+// "Add to queue" uses), serialized and gated as above. A 409 Conflict is tried once more; anything else is reported and
+// the caller steps through the set instead.
 void MRGQueueTracks(NSArray<NSString *> *uris, void (^done)(BOOL ok, NSString *error)) {
-    __block NSUInteger tries = 0;
-    __block void (^attempt)(void);
-    void (^run)(void) = ^{
-        @try {
-            Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
-            id player = playingPlayer();
-            NSArray *tracks = playerTracks(uris);
-            if (!player || !tracks.count || ![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] ||
-                ![wrapper instancesRespondToSelector:@selector(queueMultipleTracks:loggingParams:)]) {
-                MRGDJLog(@"queue: the queue wrapper isn't reachable");
-                attempt = nil;
-                done(NO, @"Spotify's queue isn't reachable.");
-                return;
-            }
-            SPTPlayerQueueWrapperImpl *queue = [[wrapper alloc] initWithPlayer:player];
-            tries++;
-            watchTask([queue queueMultipleTracks:tracks loggingParams:nil], ^(BOOL ok, NSString *error) {
-                (void)queue;
-                MRGDJLog(@"queue: %lu tracks, try %lu: %@", (unsigned long)tracks.count, (unsigned long)tries, ok ? @"queued" : [@"refused: " stringByAppendingString:error ?: @"?"]);
-                if (ok || tries >= 3) { attempt = nil; done(ok, error); return; }
-                void (^again)(void) = attempt;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (again) again(); });
+    NSArray *checked = playerTracks(uris);
+    if (!checked.count) { MRGDJLog(@"queue: nothing valid to queue, not calling Spotify"); done(NO, @"no valid tracks"); return; }
+    queueOp([NSString stringWithFormat:@"queue %lu", (unsigned long)checked.count], ^(void (^next)(void)) {
+        __block NSUInteger tries = 0;
+        __block void (^attempt)(void);
+        void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *e) { attempt = nil; next(); done(ok, e); };
+        void (^run)(void) = ^{
+            whenQueueReady(4, ^(NSString *notReady) {
+                if (notReady) { MRGDJLog(@"queue: not sent, %@", notReady); finish(NO, notReady); return; }
+                @try {
+                    Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
+                    id player = playingPlayer();
+                    NSArray *tracks = playerTracks(uris);   // rebuilt now, never an empty or stale list
+                    if (!tracks.count || ![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] ||
+                        ![wrapper instancesRespondToSelector:@selector(queueMultipleTracks:loggingParams:)]) {
+                        MRGDJLog(@"queue: the queue wrapper isn't reachable");
+                        finish(NO, @"Spotify's queue isn't reachable.");
+                        return;
+                    }
+                    SPTPlayerQueueWrapperImpl *queue = [[wrapper alloc] initWithPlayer:player];
+                    sg_queueWrapper = queue;   // lives until Spotify's callbacks are done
+                    tries++;
+                    watchTask([queue queueMultipleTracks:tracks loggingParams:nil], ^(BOOL ok, NSString *error) {
+                        MRGDJLog(@"queue: %lu tracks, try %lu: %@", (unsigned long)tracks.count, (unsigned long)tries, ok ? @"queued" : [@"refused: " stringByAppendingString:error ?: @"?"]);
+                        BOOL conflict = !ok && ([error containsString:@"409"] || [error.lowercaseString containsString:@"conflict"]);
+                        if (ok || !conflict || tries >= 2) { finish(ok, error); return; }
+                        void (^again)(void) = attempt;
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (again) again(); });
+                    });
+                } @catch (NSException *e) {
+                    MRGDJLog(@"queue: exception %@: %@", e.name, e.reason);
+                    finish(NO, e.reason);
+                }
             });
-        } @catch (NSException *e) {
-            MRGDJLog(@"queue: exception %@: %@", e.name, e.reason);
-            attempt = nil;
-            done(NO, e.reason);
-        }
-    };
-    attempt = run;
-    run();
-}
-
-// Empties Spotify's own queue (what "Add to queue" and the DJ queued; the context's own up-next stays, and a new context
-// replaces that anyway): the queue wrapper's fetchQueue (SPTPlayerQueueWrapperImpl, an SPTask whose result is the
-// SPTPlayerQueue), its nextTracks without the tracks whose provider is "queue", sent back with the player's own
-// setQueue: (SPTEsperantoPlayer, as Spotify's queue page does when tracks are removed). Answers within 4 seconds.
-void MRGClearQueue(void (^done)(NSUInteger removed, NSString *error)) {
-    __block BOOL answered = NO;
-    void (^finish)(NSUInteger, NSString *) = ^(NSUInteger n, NSString *e) {
-        if (answered) return;
-        answered = YES;
-        MRGDJLog(@"queue: clear %@", e ? [@"failed: " stringByAppendingString:e] : n ? [NSString stringWithFormat:@"done, %lu queued track(s) removed", (unsigned long)n] : @"done, nothing was queued");
-        if (done) done(n, e);
-    };
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ finish(0, @"Spotify didn't answer in time"); });
-    @try {
-        id player = playingPlayer();
-        Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
-        if (!player) { finish(0, @"no player captured yet"); return; }
-        if (![player respondsToSelector:@selector(setQueue:)]) { missing(player, @"setQueue:"); finish(0, @"the player has no setQueue:"); return; }
-        if (![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] || ![wrapper instancesRespondToSelector:@selector(fetchQueue)]) { finish(0, @"the queue wrapper has no fetchQueue"); return; }
-        void (^edit)(id) = ^(id q) {
-            @try {
-                if (!q || ![q respondsToSelector:@selector(nextTracks)] || ![q respondsToSelector:@selector(copyWithZone:)]) {
-                    finish(0, [NSString stringWithFormat:@"the queue came back as %@", q ? NSStringFromClass([q class]) : @"nothing"]);
-                    return;
-                }
-                NSArray *next = [q nextTracks];
-                NSMutableArray *keep = [NSMutableArray array];
-                NSUInteger removed = 0;
-                for (id t in [next isKindOfClass:NSArray.class] ? next : @[]) {
-                    NSString *provider = [t respondsToSelector:@selector(provider)] ? sget(t, @"provider") : nil;
-                    if ([provider isKindOfClass:NSString.class] && [provider isEqualToString:@"queue"]) removed++;
-                    else [keep addObject:t];
-                }
-                if (!removed) { finish(0, nil); return; }
-                id copy = [q copy];
-                if (![copy respondsToSelector:@selector(setNextTracks:)]) { finish(0, @"the queue can't be edited"); return; }
-                [copy setNextTracks:keep];
-                id task = [player setQueue:copy];
-                MRGDJLog(@"queue: clear via setQueue: (%lu up next kept, %lu queued removed), task %@", (unsigned long)keep.count, (unsigned long)removed, task ? NSStringFromClass([task class]) : @"nil");
-                if (!task) { finish(removed, nil); return; }
-                watchTask(task, ^(BOOL ok, NSString *e) { finish(ok ? removed : 0, ok ? nil : (e ?: @"setQueue: refused")); });
-            } @catch (NSException *e) { finish(0, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]); }
         };
-        id w = [[wrapper alloc] initWithPlayer:player];
-        id task = [w fetchQueue];
-        if (![task respondsToSelector:@selector(addCallback:on:)] || ![task respondsToSelector:@selector(addErrorCallback:on:)]) {
-            finish(0, [NSString stringWithFormat:@"fetchQueue gave %@", task ? NSStringFromClass([task class]) : @"nothing"]);
-            return;
-        }
-        [task addCallback:^(id result) { (void)w; edit(result); } on:dispatch_get_main_queue()];
-        [task addErrorCallback:^(NSError *e) { finish(0, e.localizedDescription ?: @"fetchQueue failed"); } on:dispatch_get_main_queue()];
-    } @catch (NSException *e) {
-        finish(0, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]);
-    }
+        attempt = run;
+        run();
+    });
 }
 
-// Reads Spotify's actual queue back (SPTPlayerQueueWrapperImpl fetchQueue → SPTPlayerQueue nextTracks). `queued` are the
-// tracks whose provider is "queue" (what was queued, in order), `upNext` everything after the current track, each as
-// {uri, title, artist, provider}. Answers within 4 seconds; error is set when the queue couldn't be read.
-void MRGFetchQueue(void (^done)(NSArray<NSDictionary *> *queued, NSArray<NSDictionary *> *upNext, NSString *error)) {
-    __block BOOL answered = NO;
-    void (^finish)(NSArray *, NSArray *, NSString *) = ^(NSArray *q, NSArray *u, NSString *e) {
-        if (answered) return;
-        answered = YES;
-        if (done) done(q, u, e);
-    };
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ finish(nil, nil, @"Spotify didn't answer in time"); });
-    @try {
-        id player = playingPlayer();
-        Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
-        if (!player) { finish(nil, nil, @"no player captured yet"); return; }
-        if (![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] || ![wrapper instancesRespondToSelector:@selector(fetchQueue)]) { finish(nil, nil, @"the queue wrapper has no fetchQueue"); return; }
-        id w = [[wrapper alloc] initWithPlayer:player];
-        id task = [w fetchQueue];
-        if (![task respondsToSelector:@selector(addCallback:on:)] || ![task respondsToSelector:@selector(addErrorCallback:on:)]) {
-            finish(nil, nil, [NSString stringWithFormat:@"fetchQueue gave %@", task ? NSStringFromClass([task class]) : @"nothing"]);
-            return;
-        }
-        [task addCallback:^(id q) {
-            (void)w;
+static NSString *providerOf(id t) {
+    NSString *p = [t respondsToSelector:@selector(provider)] ? sget(t, @"provider") : nil;
+    return [p isKindOfClass:NSString.class] ? p : @"";
+}
+
+// Empties Spotify's own queue (provider "queue"; the context's own up-next stays): the player's fetchQueue:on: gives
+// its SPTPlayerQueue, whose nextTracks without the queued ones go back with setQueue:. Not called at all when the
+// player's state shows nothing queued. (0.4.2 used the wrapper's fetchQueue, which hands back a read-only
+// SPTPlayerQueueSnapshotImpl, so every clear failed.)
+void MRGClearQueue(void (^done)(NSUInteger removed, NSString *error)) {
+    NSArray *future = stateFuture(currentState());
+    NSUInteger queuedNow = 0;
+    for (id t in future ?: @[]) if ([providerOf(t) isEqualToString:@"queue"]) queuedNow++;
+    if (future && !queuedNow) { MRGDJLog(@"queue: clear not needed, nothing queued"); done(0, nil); return; }
+    queueOp(@"clear", ^(void (^next)(void)) {
+        __block BOOL answered = NO;
+        void (^finish)(NSUInteger, NSString *) = ^(NSUInteger n, NSString *e) {
+            if (answered) return;
+            answered = YES;
+            MRGDJLog(@"queue: clear %@", e ? [@"failed: " stringByAppendingString:e] : n ? [NSString stringWithFormat:@"done, %lu queued track(s) removed", (unsigned long)n] : @"done, nothing was queued");
+            next();
+            if (done) done(n, e);
+        };
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ finish(0, @"Spotify didn't answer in time"); });
+        whenQueueReady(3, ^(NSString *notReady) {
+            if (notReady) { finish(0, notReady); return; }
             @try {
-                if (!q || ![q respondsToSelector:@selector(nextTracks)]) { finish(nil, nil, @"the queue came back empty"); return; }
-                NSArray *next = [q nextTracks];
-                NSMutableArray *queued = [NSMutableArray array], *up = [NSMutableArray array];
-                for (id t in [next isKindOfClass:NSArray.class] ? next : @[]) {
-                    NSDictionary *info = infoOf(t) ?: @{};
-                    NSString *provider = [t respondsToSelector:@selector(provider)] ? sget(t, @"provider") : nil;
-                    if (![provider isKindOfClass:NSString.class]) provider = @"";
-                    NSMutableDictionary *d = [info mutableCopy];
-                    d[@"provider"] = provider;
-                    if (![d[@"uri"] length]) continue;
-                    [up addObject:d];
-                    if ([provider isEqualToString:@"queue"]) [queued addObject:d];
-                }
-                finish(queued, up, nil);
-            } @catch (NSException *e) { finish(nil, nil, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]); }
-        } on:dispatch_get_main_queue()];
-        [task addErrorCallback:^(NSError *e) { finish(nil, nil, e.localizedDescription ?: @"fetchQueue failed"); } on:dispatch_get_main_queue()];
-    } @catch (NSException *e) {
-        finish(nil, nil, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]);
+                id player = playingPlayer();
+                SEL fetch = NSSelectorFromString(@"fetchQueue:on:");
+                if (![player respondsToSelector:fetch] || ![player respondsToSelector:@selector(setQueue:)]) { finish(0, @"the player has no fetchQueue:on: / setQueue:"); return; }
+                void (^got)(id) = ^(id q) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        @try {
+                            if (!q || ![q respondsToSelector:@selector(nextTracks)] || ![q respondsToSelector:@selector(copyWithZone:)] || ![q respondsToSelector:@selector(setNextTracks:)]) {
+                                finish(0, [NSString stringWithFormat:@"the queue came back as %@", q ? NSStringFromClass([q class]) : @"nothing"]);
+                                return;
+                            }
+                            NSArray *nextTracks = [q nextTracks];
+                            if (![nextTracks isKindOfClass:NSArray.class]) { finish(0, @"the queue had no track list"); return; }
+                            NSMutableArray *keep = [NSMutableArray array];
+                            NSUInteger removed = 0;
+                            for (id t in nextTracks) { if ([providerOf(t) isEqualToString:@"queue"]) removed++; else [keep addObject:t]; }
+                            if (!removed) { finish(0, nil); return; }
+                            id copy = [q copy];
+                            if (![copy respondsToSelector:@selector(setNextTracks:)]) { finish(0, @"the queue can't be edited"); return; }
+                            [copy setNextTracks:keep];
+                            id task = [player setQueue:copy];
+                            if (!task) { finish(removed, nil); return; }
+                            watchTask(task, ^(BOOL ok, NSString *e) { finish(ok ? removed : 0, ok ? nil : (e ?: @"setQueue: refused")); });
+                        } @catch (NSException *e) { finish(0, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]); }
+                    });
+                };
+                ((void (*)(id, SEL, id, id))objc_msgSend)(player, fetch, got, dispatch_get_main_queue());
+            } @catch (NSException *e) { finish(0, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]); }
+        });
+    });
+}
+
+// Spotify's queue as the player's state has it (SPTPlayerState.future: what plays next, each with its provider), read
+// without calling Spotify. `queued` are the provider "queue" ones. Error when the state has no up-next list.
+void MRGFetchQueue(void (^done)(NSArray<NSDictionary *> *queued, NSArray<NSDictionary *> *upNext, NSString *error)) {
+    NSArray *future = nil;
+    @try { future = stateFuture(currentState()); } @catch (__unused NSException *e) {}
+    NSMutableArray *queued = [NSMutableArray array], *up = [NSMutableArray array];
+    for (id t in future ?: @[]) {
+        NSDictionary *info = infoOf(t);
+        if (![info[@"uri"] length]) continue;
+        NSMutableDictionary *d = [info mutableCopy];
+        d[@"provider"] = providerOf(t);
+        [up addObject:d];
+        if ([d[@"provider"] isEqualToString:@"queue"]) [queued addObject:d];
     }
+    NSString *err = future ? nil : @"the player's state has no up-next list";
+    dispatch_async(dispatch_get_main_queue(), ^{ done(future ? queued : nil, future ? up : nil, err); });
 }
 
 BOOL MRGOpenSpotifyURI(NSString *uri) {

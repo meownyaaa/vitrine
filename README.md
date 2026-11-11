@@ -14,7 +14,7 @@ Vitrine's own:
   artist-aware sets, taste from what you actually play, talks like you, player controls and likes, its own settings page. Since 0.4.1:
   an artist plays their whole catalog then similar artists, labels/crews ("yvl"), playlists/albums/Liked Songs, the queue is replaced
   on every new request, and voice presets with fine controls. Since 0.4.2: the set is checked against Spotify's real queue and
-  repaired, picks stay near your seeds, the vibe box answers questions, artist/song info cards with sources, two new voice presets.
+  repaired, picks stay near your seeds, the vibe box answers questions, artist/song info cards with sources, two new voice presets. 0.4.3: the queue crash on tapping a song is fixed, Start follows the song playing now, ElevenLabs Ivy / Nicole / Arabella presets.
   See [docs/mirage/AI-DJ.md](docs/mirage/AI-DJ.md).
 - Coming next: an **Addon Shop**.
 
