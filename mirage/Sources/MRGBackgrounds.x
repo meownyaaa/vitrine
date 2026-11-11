@@ -70,11 +70,14 @@ static void clearDarkFill(UIView *v) {
 static void clearCell(UIView *cell) {
     clearDarkFill(cell);
     UIView *content = [cell isKindOfClass:UICollectionViewCell.class] ? ((UICollectionViewCell *)cell).contentView
-                    : [cell isKindOfClass:UITableViewCell.class] ? ((UITableViewCell *)cell).contentView : nil;
+                    : [cell isKindOfClass:UITableViewCell.class] ? ((UITableViewCell *)cell).contentView
+                    : [cell isKindOfClass:UITableViewHeaderFooterView.class] ? ((UITableViewHeaderFooterView *)cell).contentView
+                    : cell;   // a header or decoration view: its own subviews
     UIView *back = [cell isKindOfClass:UICollectionViewCell.class] ? ((UICollectionViewCell *)cell).backgroundView
-                 : [cell isKindOfClass:UITableViewCell.class] ? ((UITableViewCell *)cell).backgroundView : nil;
+                 : [cell isKindOfClass:UITableViewCell.class] ? ((UITableViewCell *)cell).backgroundView
+                 : [cell isKindOfClass:UITableViewHeaderFooterView.class] ? ((UITableViewHeaderFooterView *)cell).backgroundView : nil;
     clearDarkFill(back);
-    clearDarkFill(content);
+    if (content != cell) clearDarkFill(content);
     // The cell-sized fills inside it (row containers, tile plates), two levels down.
     CGSize size = cell.bounds.size;
     for (UIView *a in content.subviews) {
@@ -85,10 +88,21 @@ static void clearCell(UIView *cell) {
     }
 }
 
+// Cells, and the list's other reusable views: section headers (Library's "Recents" sort row), footers and
+// decoration views (a section's backdrop), all direct subviews of the list.
 static void clearCells(UIScrollView *list) {
-    NSArray *cells = [list isKindOfClass:UICollectionView.class] ? (NSArray *)((UICollectionView *)list).visibleCells
-                   : [list isKindOfClass:UITableView.class] ? (NSArray *)((UITableView *)list).visibleCells : nil;
-    for (UIView *cell in cells) clearCell(cell);
+    for (UIView *v in list.subviews) {
+        if ([v isKindOfClass:UICollectionReusableView.class] || [v isKindOfClass:UITableViewCell.class] ||
+            [v isKindOfClass:UITableViewHeaderFooterView.class]) clearCell(v);
+    }
+}
+
+// Bars that run across the page outside its list (a sort row or a strip under the filter chips): as wide
+// as the page, at most 120pt tall, filled opaque near-black. Only that fill goes, like a cell's.
+static void clearPageBar(UIView *v, CGSize page) {
+    CGSize s = v.bounds.size;
+    if (s.width < page.width * 0.9 || s.height > 120 || s.height < 1) return;
+    clearDarkFill(v);
 }
 
 static void tagList(UIScrollView *list) {
@@ -140,6 +154,7 @@ static void tagPageLists(UIView *host) {
         if ([v isKindOfClass:MRGBackgroundView.class] || [v isKindOfClass:UICollectionViewCell.class] ||
             [v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UIVisualEffectView.class]) continue;
         if ([v.accessibilityIdentifier isEqualToString:@"mirage.settings"]) continue;   // draws its own
+        clearPageBar(v, page);
         if (([v isKindOfClass:UICollectionView.class] || [v isKindOfClass:UITableView.class]) &&
             v.bounds.size.width >= page.width * 0.9 && v.bounds.size.height >= page.height * 0.4) {
             clearView(v);
