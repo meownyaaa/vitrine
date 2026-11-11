@@ -1,0 +1,62 @@
+name: Build Mirage IPA (Vitrine + Mirage, with the Live Activity widget)
+
+# The Live Activity widget extension needs Xcode (swiftc for iOS and appintentsmetadataprocessor), so
+# this runs on macOS. A Linux build (docs/mirage/BUILDING.md) produces the same IPA without the widget.
+# The IPA is uploaded as a short-lived workflow artifact, never as a release: it contains Spotify.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Direct link to a decrypted Spotify IPA (9.1.90 is the tested one)"
+        required: true
+        type: string
+
+env:
+  THEOS: ${{ github.workspace }}/theos
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Mask IPA link
+        run: |
+          URL="$(jq -r '.inputs.ipa_url // empty' "$GITHUB_EVENT_PATH")"
+          [ -z "$URL" ] || echo "::add-mask::$URL"
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/checkout@v5
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+
+      - name: Tools
+        run: |
+          brew install --quiet make dpkg ldid
+          python3 -m pip install --quiet --break-system-packages pillow git+https://github.com/asdfzxcvbn/pyzule-rw.git
+
+      - name: Download IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          mkdir -p ipa
+          curl -fsSL --retry 3 "$IPA_URL" -o ipa/spotify.ipa
+          unzip -tq ipa/spotify.ipa >/dev/null || { echo "::error::Not a complete IPA (zip check failed)"; exit 1; }
+
+      - name: Build
+        run: ./scripts/mirage-build.sh ipa/spotify.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mirage-ipa
+          path: |
+            out/Mirage-*.ipa
+            out/Mirage.dylib
+            out/*.deb
+          retention-days: 3
