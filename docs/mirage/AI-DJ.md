@@ -105,16 +105,37 @@ Sources (checked November 2026):
    - names only
 2. **Model.** The model returns JSON: `intro`, then `tracks[{title, artist, line}]`. Each line is one or two casual sentences.
 3. **Resolve.** Each pick is looked up with Spotify search: first a strict `track:"…" artist:"…"` query, then a loose one, matched on normalized names. Picks that don't resolve are dropped.
-4. **Play.** Mirage first tries Spotify's own player directly, `SPTEsperantoPlayer playContext:` with a track-list context. If that is refused, it fills a private **Mirage DJ** playlist in your library and plays that.
-5. **Talk.** Each line is spoken about 0.8 s after its track starts. Nothing is said over ads.
-6. **Keep going.** When the last track starts, the next set is prepared. Once Spotify's autoplay takes over, the next set starts.
+4. **Play.** As of 0.2.2:
+   1. Mirage refills your private **Mirage DJ** playlist with the set over the Web API.
+   2. It plays that playlist the way Spotify's own Play button on a playlist page does: `SPTPlayerContext contextForURI:`, `SPTPlayOptions.skipTo` the first track, and the origin the player builds for itself. If Spotify refuses `skipTo` (Free), it asks again without it.
+   3. It then watches the player for up to 6 s. The set only counts as started once a set track (or the playlist) is actually playing.
+   4. **If the playlist can't be filled:** the first track plays as its own context and the rest are queued.
+   5. **If the player takes neither:** Mirage hands the playlist to Spotify's own link dispatcher, so its page opens and one tap on Play starts it.
+   6. Any failure ends in a "Couldn't start playback: …" line with the reason.
+
+   0.2.0–0.2.1 played a context built from a bare track list (`contextWithTracks:`). That context has no URI. The player took the command, reported success, and then stopped what was playing without starting anything. That is the likely cause of the silent failure and the pause, but it was never confirmed on a device.
+5. **Tracks are real.** A pick only counts when Spotify's search returns a track whose title and artist both match. Made-up songs are dropped, and the set shows Spotify's own spelling.
+6. **Talk.** Each line is spoken about 0.8 s after its track starts, only while that track is actually playing (not paused, not an ad). The voice uses the system's speech session, never Spotify's audio session.
+7. **Keep going.** When the last track starts, the next set is prepared. Once Spotify's autoplay takes over, the next set starts.
 
 ## Spotify Free
 
-- Free accounts can't always play exact tracks on demand. If the direct play is refused, the Mirage DJ playlist is used instead, and Spotify may **shuffle** it. A line can then be spoken over a different track than the one it was written for, so Mirage only speaks lines for tracks that are actually playing.
+- Free accounts can't always play exact tracks on demand. The Mirage DJ playlist is always what plays first, and on Free Spotify may **shuffle** it. A line can then be spoken over a different track than the one it was written for, so Mirage only speaks lines for tracks that are actually playing.
 - Spotify's skip limit (about 6 an hour) still applies. **Switch it up** starts a new set, which can count as a skip.
 - Ads play as normal. The DJ stays quiet during ads and doesn't lower the volume for them.
 - Mirage doesn't add Premium features. It doesn't block ads.
+
+## Debug log
+
+Settings → Mirage → AI DJ → **DJ debug log** shows the last 200 lines. **Copy** puts them on the clipboard so they can be sent along with a bug report. The log covers:
+- Web API calls and their HTTP status
+- the account's plan
+- every player found
+- every play path tried and what the player said
+- what the player was doing when verification gave up
+- skipped voice lines
+
+It never contains keys, tokens or search terms.
 
 ## Verified vs not yet verified
 

@@ -5,6 +5,7 @@
 #import "MRGAI.h"
 #import "MRGDJ.h"
 #import "MRGDJView.h"
+#import "MRGDJLog.h"
 #import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
@@ -74,7 +75,7 @@ static const CGFloat kBottomChrome = 150;
         case MRGSecLook: return 6;                 // blur, dim, scale, top fade, clear pages, profile glow
         case MRGSecScreens: return 5;
         case MRGSecShop: return 1;
-        case MRGSecDJ: return 7;                   // key, model, voice, duck, Home chip, player button, open
+        case MRGSecDJ: return 8;                   // key, model, voice, duck, Home chip, player button, open, debug log
         case MRGSecAbout: return 2;
     }
     return 0;
@@ -212,7 +213,12 @@ static UITableViewCell *baseCell(void) {
         case 3: return [self switchCell:@"Lower music while talking" on:MRGDJDucks() tag:20 symbol:@"speaker.badge.exclamationmark.fill"];
         case 4: return [self switchCell:@"DJ chip on Home" on:MRGDJShowsPill() tag:21 symbol:@"capsule.fill"];
         case 5: return [self switchCell:@"DJ button on Now Playing" on:MRGDJShowsPlayerButton() tag:22 symbol:@"play.circle.fill"];
-        default: return [self actionCell:@"Open Mirage DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
+        case 6: return [self actionCell:@"Open Mirage DJ" symbol:@"waveform.and.mic" destructive:NO enabled:YES];
+        default: {
+            UITableViewCell *c = [self actionCell:@"DJ debug log" symbol:@"ladybug.fill" destructive:NO enabled:YES];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return c;
+        }
     }
 }
 
@@ -349,6 +355,7 @@ static UITableViewCell *baseCell(void) {
         if (ip.row == 0) [self editKey];
         else if (ip.row == 1 && MRGAIProvider() != MRGProviderNone) [self pickModel:[t cellForRowAtIndexPath:ip]];
         else if (ip.row == 6) MRGShowDJ(self);
+        else if (ip.row == 7) [self.navigationController pushViewController:MRGDJLogPage() animated:YES];
         return;
     }
     if (ip.section != MRGSecMedia) return;

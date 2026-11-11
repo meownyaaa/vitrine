@@ -15,12 +15,20 @@ BOOL MRGPlayerIsAd(void);
 // The authorization (and client-token etc.) Spotify's own requests carry; nil until one has gone out.
 NSDictionary<NSString *, NSString *> *MRGSpotifyHeaders(void);
 
-// Plays the URIs as one context, starting at the first. Falls back to queueing them and skipping to them.
-void MRGPlayURIs(NSArray<NSString *> *uris, void (^done)(BOOL ok, NSString *how, NSString *error));
-void MRGPlayContextURI(NSString *uri, void (^done)(BOOL ok, NSString *error));
+BOOL MRGPlayerIsPlaying(void);       // a track on, not paused
+NSString *MRGPlayerContextURI(void);   // what the player is playing from (spotify:playlist:…), or nil
 
-// Lowers Spotify's own output (its equalizer unit's global gain) while the DJ speaks; NO when that unit
-// is not reachable or the equalizer is bypassed, and the DJ talks over the music instead.
+// Plays a context by URI (a playlist, album or track) as Spotify's own Play buttons do, starting at `startTrack` when
+// given (sent again without it when that is refused). `done` says whether the player took the command, not that sound
+// came out: MRGWaitForPlayback checks that.
+void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL ok, NSString *error));
+// The first track as its own context, the rest added to the queue (Premium).
+void MRGPlayTrackThenQueue(NSArray<NSString *> *uris, void (^done)(BOOL ok, NSString *error));
+// Hands a spotify: URI to Spotify's own link dispatcher, as a tapped link would (opens its page). NO when not captured.
+BOOL MRGOpenSpotifyURI(NSString *uri);
+// Waits until the player is on one of the tracks or in the context, not paused; `seen` says what it saw instead.
+void MRGWaitForPlayback(NSArray<NSString *> *tracks, NSString *contextURI, NSTimeInterval timeout, void (^done)(BOOL ok, NSString *seen));
+
 // Lowers Spotify's own output to 30% while the DJ speaks (a render notify on Spotify's output units, eased so
 // it never clicks) and brings it back. NO when Spotify's AudioOutputUnitStart could not be rebound: the DJ
 // then talks over the music at full level.

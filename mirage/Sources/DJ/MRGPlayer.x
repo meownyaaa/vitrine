@@ -7,6 +7,7 @@
 #import <stdatomic.h>
 #import <os/lock.h>
 #import "MRGRebind.h"
+#import "MRGDJLog.h"
 
 NSString *const MRGPlayerTrackChangedNotification = @"MiragePlayerTrackChanged";
 
@@ -20,6 +21,9 @@ NSString *const MRGPlayerTrackChangedNotification = @"MiragePlayerTrackChanged";
 @end
 @interface SPTPlayerState : NSObject
 @property (nonatomic, readonly) SPTPlayerTrack *track;
+@property (nonatomic, readonly) NSURL *contextURI;
+@property (nonatomic, readonly) BOOL playing;
+@property (nonatomic, readonly) BOOL paused;
 @property (nonatomic, readonly) NSArray *future;
 @property (nonatomic, readonly) NSArray *reverse;
 @end
@@ -31,6 +35,17 @@ NSString *const MRGPlayerTrackChangedNotification = @"MiragePlayerTrackChanged";
 + (id)contextForURI:(id)uri;
 @end
 @interface SPTPlayOptions : NSObject
+@property (copy, nonatomic) id skipTo;
+@end
+@interface SPTSkipToTrack : NSObject
+- (id)initWithTrackURI:(id)uri;
+@end
+@interface NSObject (MRGEsperanto)
+@property (readonly, copy, nonatomic) NSString *featureIdentifier;
+- (id)playOriginWithViewURIOverride:(id)uri externalReferrer:(id)referrer;
+- (id)playContext:(id)context options:(id)options origin:(id)origin;
+- (id)playContext:(id)context options:(id)options;
+- (void)navigateToURI:(id)uri options:(long long)options reason:(id)reason completionHandler:(id)completion resultHandler:(id)result;
 @end
 @interface SPTPlayOrigin : NSObject
 - (id)initWithFeatureIdentifier:(id)f featureVersion:(id)v viewURI:(id)u externalReferrer:(id)r;
@@ -77,10 +92,21 @@ static NSDictionary *infoOf(id track) {
     return d;
 }
 
-static SPTPlayerState *currentState(void) {
-    id p = sg_player;
+static NSHashTable *sg_players;      // every SPTEsperantoPlayer seen (Spotify makes one per feature)
+static SPTPlayerState *sg_lastState;  // the newest state any of them emitted
+
+static SPTPlayerState *stateOf(id p) {
     id s = [p respondsToSelector:@selector(state)] ? [p performSelector:@selector(state)] : nil;
     return [s isKindOfClass:objc_getClass("SPTPlayerState")] ? s : nil;
+}
+
+// The state with a track in it: the captured player's, another player's, or the last one emitted. At launch the player
+// restored from the last session has a track before any observer is told of it.
+static SPTPlayerState *currentState(void) {
+    SPTPlayerState *s = stateOf(sg_player);
+    if (s.track) return s;
+    for (id p in sg_players.allObjects) { SPTPlayerState *o = stateOf(p); if (o.track) return o; }
+    return sg_lastState ?: s;
 }
 
 id MRGPlayerInstance(void) { return sg_player; }
@@ -142,21 +168,57 @@ static void stateChanged(id state) {
 @end
 static MRGPlayerObserver *sg_observer;
 
+static void capturePlayer(id player) {
+    if (!sg_players) sg_players = [NSHashTable weakObjectsHashTable];
+    if ([sg_players containsObject:player]) return;
+    [sg_players addObject:player];
+    NSString *feature = [player respondsToSelector:@selector(featureIdentifier)] ? [player featureIdentifier] : nil;
+    MRGDJLog(@"player: found an SPTEsperantoPlayer (feature %@), %lu so far", feature ?: @"?", (unsigned long)sg_players.count);
+    if (!sg_player) {
+        sg_player = player;
+        sg_observer = [MRGPlayerObserver new];
+        [player addPlayerObserver:sg_observer];
+        stateChanged(currentState());
+    }
+}
+
 %group MRGPlayerHooks
 %hook SPTEsperantoPlayer
 - (void)addPlayerObserver:(id)observer {
     %orig;
     if ([observer isKindOfClass:MRGPlayerObserver.class]) return;
     id player = self;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        dispatch_async(dispatch_get_main_queue(), ^{
-            sg_player = player;
-            sg_observer = [MRGPlayerObserver new];
-            [player addPlayerObserver:sg_observer];
-            stateChanged(currentState());
-        });
+    dispatch_async(dispatch_get_main_queue(), ^{ capturePlayer(player); });
+}
+- (void)emitStateUpdate:(id)update oldState:(id)old observer:(id)observer {
+    %orig;
+    if (![update isKindOfClass:objc_getClass("SPTPlayerState")]) return;
+    id player = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        sg_lastState = update;
+        if (!sg_player) capturePlayer(player);
     });
+}
+%end
+%end
+
+// Spotify's link dispatcher, the object every spotify: link in the app goes through (SPTLinkDispatcherImplementation,
+// navigateToURI:options:reason:completionHandler:resultHandler:). Captured as it is made or first used.
+static __weak id sg_linkDispatcher;
+%group MRGLinkHooks
+%hook SPTLinkDispatcherImplementation
+- (id)initWithLoginNotifier:(id)a logoutNotifier:(id)b alertQueue:(id)c URISubtypeRegistry:(id)d externalLinkHandler:(id)e thirdPartyAuthLoginPromptEnabled:(BOOL)f {
+    id me = %orig;
+    sg_linkDispatcher = me;
+    return me;
+}
+- (void)navigateToURI:(id)uri options:(long long)options reason:(id)reason completionHandler:(id)completion resultHandler:(id)result {
+    sg_linkDispatcher = self;
+    %orig;
+}
+- (BOOL)canOpenURI:(id)uri allowExternalApps:(BOOL)apps {
+    sg_linkDispatcher = self;
+    return %orig;
 }
 %end
 %end
@@ -211,6 +273,14 @@ NSDictionary<NSString *, NSString *> *MRGSpotifyHeaders(void) { return sg_header
 
 #pragma mark - playing
 
+BOOL MRGPlayerIsPlaying(void) {
+    SPTPlayerState *s = currentState();
+    return s.track && s.playing && !s.paused;
+}
+
+NSString *MRGPlayerContextURI(void) { return uriString(currentState().contextURI); }
+
+// The task Spotify's player hands back for a command: its callbacks say whether the command was taken.
 static void watchTask(id task, void (^done)(BOOL ok, NSString *error)) {
     if (![task respondsToSelector:@selector(addCallback:on:)] || ![task respondsToSelector:@selector(addErrorCallback:on:)]) {
         done(task != nil, task ? nil : @"Spotify's player didn't take the request.");
@@ -227,22 +297,58 @@ static void watchTask(id task, void (^done)(BOOL ok, NSString *error)) {
     } on:dispatch_get_main_queue()];
 }
 
-static id playOrigin(void) {
-    Class c = objc_getClass("SPTPlayOrigin");
-    if (![c instancesRespondToSelector:@selector(initWithFeatureIdentifier:featureVersion:viewURI:externalReferrer:)]) return nil;
-    return [[c alloc] initWithFeatureIdentifier:@"mirage_dj" featureVersion:@MRG_VERSION viewURI:nil externalReferrer:nil];
+// The player that plays: the captured one if it has a state, else any with a track.
+static id playingPlayer(void) {
+    if (stateOf(sg_player)) return sg_player;
+    for (id p in sg_players.allObjects) if (stateOf(p).track) return p;
+    return sg_player ?: sg_players.anyObject;
 }
 
-static id playContext(id context) {
-    id player = sg_player;
-    id options = [objc_getClass("SPTPlayOptions") new];
-    id origin = playOrigin();
-    SEL withOrigin = @selector(playContext:options:origin:);
-    if (origin && [player respondsToSelector:withOrigin])
-        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(player, withOrigin, context, options, origin);
-    if ([player respondsToSelector:@selector(playContext:options:)])
-        return ((id (*)(id, SEL, id, id))objc_msgSend)(player, @selector(playContext:options:), context, options);
+// The origin the player makes for itself (its own feature identifier), as Spotify's pages do; an unknown feature
+// identifier of Mirage's own is never sent.
+static id originFor(id player, NSString *viewURI) {
+    NSURL *view = viewURI ? [NSURL URLWithString:viewURI] : nil;
+    if ([player respondsToSelector:@selector(playOriginWithViewURIOverride:externalReferrer:)])
+        return [player playOriginWithViewURIOverride:view externalReferrer:nil];
     return nil;
+}
+
+static id runPlay(id player, id context, id options, id origin) {
+    if (origin && [player respondsToSelector:@selector(playContext:options:origin:)]) return [player playContext:context options:options origin:origin];
+    if ([player respondsToSelector:@selector(playContext:options:)]) return [player playContext:context options:options];
+    return nil;
+}
+
+// Plays a context by URI (a playlist, an album, a track) the way Spotify's own Play buttons do: SPTPlayerContext
+// contextForURI:, SPTPlayOptions with skipTo the first track, and the player's own origin. Refused with skipTo (Spotify
+// Free can't pick the starting track), it is sent again without.
+void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL, NSString *)) {
+    id player = playingPlayer();
+    Class contextClass = objc_getClass("SPTPlayerContext");
+    id context = [contextClass respondsToSelector:@selector(contextForURI:)] ? [contextClass contextForURI:[NSURL URLWithString:uri]] : nil;
+    if (!player || !context) {
+        MRGDJLog(@"play %@: %@", uri, player ? @"no SPTPlayerContext" : @"no player captured yet");
+        done(NO, player ? @"Spotify's player classes weren't found." : @"Spotify's player isn't ready yet. Play any song once, then try again.");
+        return;
+    }
+    id origin = originFor(player, uri);
+    id options = [objc_getClass("SPTPlayOptions") new];
+    Class skipClass = objc_getClass("SPTSkipToTrack");
+    BOOL skips = startTrack && [options respondsToSelector:@selector(setSkipTo:)] && [skipClass instancesRespondToSelector:@selector(initWithTrackURI:)];
+    if (skips) [options setSkipTo:[[skipClass alloc] initWithTrackURI:[NSURL URLWithString:startTrack]]];
+    id task = runPlay(player, context, options, origin);
+    MRGDJLog(@"play %@ (skipTo %@, origin %@): task %@", uri, skips ? @"first track" : @"none", origin ? @"player's own" : @"none", task ? NSStringFromClass([task class]) : @"nil");
+    if (!task) { done(NO, @"Spotify's player didn't take the request."); return; }
+    watchTask(task, ^(BOOL ok, NSString *error) {
+        MRGDJLog(@"play %@: %@", uri, ok ? @"taken" : [@"refused: " stringByAppendingString:error ?: @"?"]);
+        if (ok || !skips) { done(ok, error); return; }
+        id plain = runPlay(player, context, [objc_getClass("SPTPlayOptions") new], origin);
+        if (!plain) { done(NO, error); return; }
+        watchTask(plain, ^(BOOL ok2, NSString *error2) {
+            MRGDJLog(@"play %@ without skipTo: %@", uri, ok2 ? @"taken" : [@"refused: " stringByAppendingString:error2 ?: @"?"]);
+            done(ok2, error2);
+        });
+    });
 }
 
 static NSArray *playerTracks(NSArray<NSString *> *uris) {
@@ -256,44 +362,65 @@ static NSArray *playerTracks(NSArray<NSString *> *uris) {
     return tracks;
 }
 
-static void queueAndSkip(NSArray<NSString *> *uris, void (^done)(BOOL, NSString *, NSString *)) {
-    id player = sg_player;
-    Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
-    NSArray *tracks = playerTracks(uris);
-    if (!player || !tracks.count || ![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] ||
-        ![wrapper instancesRespondToSelector:@selector(queueMultipleTracks:loggingParams:)]) {
-        done(NO, nil, @"Spotify's queue isn't reachable.");
-        return;
-    }
-    SPTPlayerQueueWrapperImpl *queue = [[wrapper alloc] initWithPlayer:player];
-    id task = [queue queueMultipleTracks:tracks loggingParams:nil];
-    watchTask(task, ^(BOOL ok, NSString *error) {
-        (void)queue;
-        if (!ok) { done(NO, nil, error); return; }
-        if ([player respondsToSelector:@selector(skipToNextTrack)]) [player performSelector:@selector(skipToNextTrack)];
-        done(YES, @"queue", nil);
+// The first track played as its own context (Spotify continues with autoplay), the rest queued after it.
+void MRGPlayTrackThenQueue(NSArray<NSString *> *uris, void (^done)(BOOL, NSString *)) {
+    if (!uris.count) { done(NO, @"No tracks to play."); return; }
+    MRGPlayContextURI(uris.firstObject, nil, ^(BOOL ok, NSString *error) {
+        if (!ok) { done(NO, error); return; }
+        done(YES, nil);
+        if (uris.count < 2) return;
+        Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
+        id player = playingPlayer();
+        NSArray *rest = playerTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)]);
+        if (!player || !rest.count || ![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] ||
+            ![wrapper instancesRespondToSelector:@selector(queueMultipleTracks:loggingParams:)]) {
+            MRGDJLog(@"queue: the queue wrapper isn't reachable, only the first track plays");
+            return;
+        }
+        SPTPlayerQueueWrapperImpl *queue = [[wrapper alloc] initWithPlayer:player];
+        watchTask([queue queueMultipleTracks:rest loggingParams:nil], ^(BOOL qok, NSString *qerr) {
+            (void)queue;
+            MRGDJLog(@"queue: %lu tracks %@", (unsigned long)rest.count, qok ? @"queued" : [@"refused: " stringByAppendingString:qerr ?: @"?"]);
+        });
     });
 }
 
-void MRGPlayURIs(NSArray<NSString *> *uris, void (^done)(BOOL, NSString *, NSString *)) {
-    if (!sg_player) { done(NO, nil, @"Play something in Spotify once, then try again."); return; }
-    Class contextClass = objc_getClass("SPTPlayerContext");
-    NSArray *tracks = playerTracks(uris);
-    id context = tracks.count && [contextClass respondsToSelector:@selector(contextWithTracks:)] ? [contextClass contextWithTracks:tracks] : nil;
-    id task = context ? playContext(context) : nil;
-    if (!task) { queueAndSkip(uris, done); return; }
-    watchTask(task, ^(BOOL ok, NSString *error) {
-        if (ok) done(YES, @"context", nil);
-        else queueAndSkip(uris, done);
-    });
+BOOL MRGOpenSpotifyURI(NSString *uri) {
+    id d = sg_linkDispatcher;
+    SEL sel = @selector(navigateToURI:options:reason:completionHandler:resultHandler:);
+    if (![d respondsToSelector:sel]) { MRGDJLog(@"open %@: link dispatcher not captured", uri); return NO; }
+    [d navigateToURI:[NSURL URLWithString:uri] options:0 reason:nil completionHandler:nil resultHandler:nil];
+    MRGDJLog(@"open %@: handed to Spotify's link dispatcher", uri);
+    return YES;
 }
 
-void MRGPlayContextURI(NSString *uri, void (^done)(BOOL, NSString *)) {
-    Class contextClass = objc_getClass("SPTPlayerContext");
-    id context = [contextClass respondsToSelector:@selector(contextForURI:)] ? [contextClass contextForURI:[NSURL URLWithString:uri]] : nil;
-    id task = context && sg_player ? playContext(context) : nil;
-    if (!task) { done(NO, @"Spotify's player didn't take the playlist."); return; }
-    watchTask(task, done);
+// Watches the player until it plays one of the tracks (or the context), or the time runs out.
+void MRGWaitForPlayback(NSArray<NSString *> *tracks, NSString *contextURI, NSTimeInterval timeout, void (^done)(BOOL, NSString *)) {
+    CFTimeInterval end = CACurrentMediaTime() + timeout;
+    __block BOOL finished = NO;
+    BOOL (^check)(void) = ^BOOL {
+        if (finished) return YES;
+        SPTPlayerState *s = currentState();
+        NSString *track = uriString(s.track.URI), *context = uriString(s.contextURI);
+        BOOL onTrack = track && [tracks containsObject:track];
+        BOOL onContext = contextURI && [context isEqualToString:contextURI];
+        if ((onTrack || onContext) && !s.paused) {
+            finished = YES;
+            MRGDJLog(@"verify: playing %@ in %@", onTrack ? @"a set track" : @"the context", context ?: @"?");
+            done(YES, nil);
+            return YES;
+        }
+        if (CACurrentMediaTime() >= end) {
+            finished = YES;
+            NSString *seen = [NSString stringWithFormat:@"the player stayed on %@ (%@)", context ?: @"no context", s.paused ? @"paused" : s.playing ? @"playing" : @"stopped"];
+            MRGDJLog(@"verify: gave up, %@", seen);
+            done(NO, seen);
+            return YES;
+        }
+        return NO;
+    };
+    if (check()) return;
+    [NSTimer scheduledTimerWithTimeInterval:0.4 repeats:YES block:^(NSTimer *t) { if (check()) [t invalidate]; }];
 }
 
 #pragma mark - ducking
@@ -403,6 +530,7 @@ BOOL MRGDuckMusic(BOOL duck) {
 %ctor {
     @autoreleasepool {
         if (objc_getClass("SPTEsperantoPlayer")) %init(MRGPlayerHooks);
+        if (objc_getClass("SPTLinkDispatcherImplementation")) %init(MRGLinkHooks);
         if (objc_getClass("SPTDataLoaderService")) %init(MRGHeadersDataLoader);
         if (objc_getClass("_TtC26Connectivity_HttpClientKit20HttpClientURLSession")) %init(MRGHeadersHttpClient);
         sg_duckReady = MRGRebindImport("AudioOutputUnitStart", (void *)startOutput, (void **)&sg_realStart) && sg_realStart;

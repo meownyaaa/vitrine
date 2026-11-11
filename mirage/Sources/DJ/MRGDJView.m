@@ -6,6 +6,8 @@
 #import "MRGBackgroundView.h"
 #import "MRGPrefs.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
+#import "MRGDJLog.h"
 
 #pragma mark - shared bits
 
@@ -18,7 +20,47 @@ static UIVisualEffect *glassEffect(BOOL interactive) {
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
 }
 
-static UIColor *kGreen(void) { return [UIColor colorWithRed:0.12 green:0.84 blue:0.38 alpha:1]; }
+// One accent for every DJ surface: Vitrine's accent color when one is set, Spotify's green otherwise (MRGDJLog.h).
+static UIColor *kGreen(void) { return MRGAccent(); }
+
+// Glass in a capsule or with round corners: iOS 26 glass takes its shape from a corner configuration (a layer corner
+// radius leaves it a rounded rectangle), older materials from the layer.
+static void shapeGlass(UIView *glass, CGFloat radius, BOOL capsule) {
+    Class config = NSClassFromString(@"UICornerConfiguration"), corner = NSClassFromString(@"UICornerRadius");
+    id shape = nil;
+    if (config && [glass respondsToSelector:NSSelectorFromString(@"setCornerConfiguration:")]) {
+        if (capsule && [config respondsToSelector:NSSelectorFromString(@"capsuleConfiguration")])
+            shape = ((id (*)(id, SEL))objc_msgSend)(config, NSSelectorFromString(@"capsuleConfiguration"));
+        else if ([config respondsToSelector:NSSelectorFromString(@"configurationWithUniformRadius:")] && [corner respondsToSelector:NSSelectorFromString(@"fixedRadius:")]) {
+            id r = ((id (*)(id, SEL, double))objc_msgSend)(corner, NSSelectorFromString(@"fixedRadius:"), radius);
+            shape = ((id (*)(id, SEL, id))objc_msgSend)(config, NSSelectorFromString(@"configurationWithUniformRadius:"), r);
+        }
+    }
+    if (shape) {
+        ((void (*)(id, SEL, id))objc_msgSend)(glass, NSSelectorFromString(@"setCornerConfiguration:"), shape);
+        glass.clipsToBounds = NO;
+    } else {
+        glass.layer.cornerRadius = capsule ? glass.bounds.size.height / 2 : radius;
+        glass.layer.cornerCurve = kCACornerCurveContinuous;
+        glass.clipsToBounds = YES;
+    }
+}
+
+// A label with its own padding: sized by its text plus symmetric insets, drawn centered in them, so a chip around a
+// word is exactly as tall as the word needs and the word sits in its middle.
+@interface MRGPaddedLabel : UILabel
+@property (nonatomic) UIEdgeInsets insets;
+@end
+@implementation MRGPaddedLabel
+- (CGSize)intrinsicContentSize {
+    if (!self.text.length) return CGSizeZero;
+    CGSize s = [super intrinsicContentSize];
+    return CGSizeMake(ceil(s.width + _insets.left + _insets.right), ceil(s.height + _insets.top + _insets.bottom));
+}
+- (CGSize)sizeThatFits:(CGSize)size { return self.intrinsicContentSize; }
+- (void)drawTextInRect:(CGRect)rect { [super drawTextInRect:UIEdgeInsetsInsetRect(rect, _insets)]; }
+- (void)layoutSubviews { [super layoutSubviews]; self.layer.cornerRadius = self.bounds.size.height / 2; }
+@end
 static UIColor *kSecondary(void) { return [UIColor colorWithWhite:1 alpha:0.62]; }
 
 static BOOL djActive(void) { return MRGDJ.shared.state != MRGDJIdle; }
@@ -106,7 +148,7 @@ static UIButton *glassButton(NSString *title, NSString *symbol, BOOL prominent) 
     c.image = symbol ? [UIImage systemImageNamed:symbol] : nil;
     c.imagePadding = 6;
     c.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-    c.baseForegroundColor = prominent ? UIColor.blackColor : UIColor.whiteColor;
+    c.baseForegroundColor = prominent ? MRGOnAccent() : UIColor.whiteColor;
     if (prominent) c.baseBackgroundColor = kGreen();
     c.contentInsets = NSDirectionalEdgeInsetsMake(13, 18, 13, 18);
     c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *a) {
@@ -185,8 +227,8 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
 
 @implementation MRGDJRow {
     UIImageView *_art;
-    UILabel *_title, *_artist, *_why;
-    UIView *_whyPill;
+    UILabel *_title, *_artist;
+    MRGPaddedLabel *_whyPill;
     MRGDJEqualizer *_eq;
     UIView *_highlight;
 }
@@ -212,16 +254,18 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     texts.userInteractionEnabled = NO;
     texts.translatesAutoresizingMaskIntoConstraints = NO;
 
-    _whyPill = [UIView new];
+    // The reason chip: the label is the chip (its own insets and capsule), so the word is centered in it whatever the font.
+    _whyPill = [MRGPaddedLabel new];
+    _whyPill.insets = UIEdgeInsetsMake(3, 8, 3, 8);
+    _whyPill.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+    _whyPill.textColor = [UIColor colorWithWhite:1 alpha:0.75];
     _whyPill.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
-    _whyPill.layer.cornerRadius = 9;
+    _whyPill.textAlignment = NSTextAlignmentCenter;
+    _whyPill.clipsToBounds = YES;
     _whyPill.userInteractionEnabled = NO;
     _whyPill.translatesAutoresizingMaskIntoConstraints = NO;
-    _why = makeLabel(11, UIFontWeightSemibold, [UIColor colorWithWhite:1 alpha:0.7], 1);
-    _why.translatesAutoresizingMaskIntoConstraints = NO;
-    [_whyPill addSubview:_why];
     [_whyPill setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-    [_why setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [_whyPill setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
 
     _eq = [MRGDJEqualizer new];
     _eq.translatesAutoresizingMaskIntoConstraints = NO;
@@ -242,10 +286,6 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
         [texts.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
         [_whyPill.leadingAnchor constraintGreaterThanOrEqualToAnchor:texts.trailingAnchor constant:8],
         [_whyPill.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_whyPill.heightAnchor constraintEqualToConstant:18],
-        [_why.leadingAnchor constraintEqualToAnchor:_whyPill.leadingAnchor constant:7],
-        [_why.trailingAnchor constraintEqualToAnchor:_whyPill.trailingAnchor constant:-7],
-        [_why.centerYAnchor constraintEqualToAnchor:_whyPill.centerYAnchor],
         [_eq.leadingAnchor constraintEqualToAnchor:_whyPill.trailingAnchor constant:10],
         [_eq.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [_eq.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
@@ -265,8 +305,9 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
 - (void)showTrack:(MRGDJTrack *)t {
     _title.text = t.title;
     _artist.text = t.artist;
-    _why.text = t.why;
+    _whyPill.text = t.why;
     _whyPill.hidden = !t.why.length;
+    [_whyPill invalidateIntrinsicContentSize];
     loadImage(_art, t.image, notePlaceholder(16));
     self.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", t.title ?: @"", t.artist ?: @""];
 }
@@ -490,6 +531,20 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
 
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 
+// The last line clear of the home indicator at every detent: the window's bottom inset, whatever the sheet reports.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat bottom = MAX(MAX(self.view.safeAreaInsets.bottom, self.view.window.safeAreaInsets.bottom), 20) + 12;
+    if (fabs(_scroll.contentInset.bottom - bottom) > 0.5) {
+        UIEdgeInsets in = _scroll.contentInset;
+        in.bottom = bottom;
+        _scroll.contentInset = in;
+        UIEdgeInsets ind = _scroll.verticalScrollIndicatorInsets;
+        ind.bottom = bottom;
+        _scroll.verticalScrollIndicatorInsets = ind;
+    }
+}
+
 - (void)setStatusText:(NSString *)text {
     if ([_status.text isEqualToString:text ?: @""] || (!text.length && !_status.text.length)) return;
     // Crossfaded in place; the line keeps its height whether there is a status or not.
@@ -545,7 +600,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     _line.textColor = dj.currentLine.length ? UIColor.whiteColor : kSecondary();
     [self setStatusText:dj.status];
 
-    _error.text = dj.error;
+    _error.text = dj.error.length ? [dj.error stringByAppendingString:@"\nDetails: Mirage settings → AI DJ → DJ debug log."] : nil;
     _error.hidden = !dj.error.length;
 
     if (dj.set != _shownSet && ![dj.set isEqualToArray:_shownSet ?: @[]]) [self rebuildRows:dj.set];
@@ -608,6 +663,7 @@ void MRGShowDJ(UIViewController *from) {
 // capsule of glass otherwise. Active (a set on or coming): Spotify's selected look, green with dark text.
 @interface MRGDJChip : UIControl
 @property (nonatomic) BOOL glassStyle;
+@property (nonatomic) CGFloat matchHeight;   // the height of what it sits beside (the redesign's 44pt pill), 0 for its own
 - (void)styleFrom:(UIView *)spotifyChip;
 @end
 
@@ -654,8 +710,9 @@ void MRGShowDJ(UIViewController *from) {
     _glassStyle = glass;
     [_material removeFromSuperview];
     _material = nil;
+    _label.font = [UIFont systemFontOfSize:glass ? 15 : 14 weight:glass ? UIFontWeightSemibold : UIFontWeightMedium];
     if (glass) {
-        _height = 36;
+        _height = self.matchHeight > 0 ? self.matchHeight : 36;
         _material = [[UIVisualEffectView alloc] initWithEffect:glassEffect(YES)];
         _material.userInteractionEnabled = NO;
         _material.clipsToBounds = YES;
@@ -690,11 +747,11 @@ void MRGShowDJ(UIViewController *from) {
 
 - (void)refresh {
     BOOL active = djActive();
-    UIColor *fg = active ? UIColor.blackColor : UIColor.whiteColor;
+    UIColor *fg = active ? MRGOnAccent() : UIColor.whiteColor;
     _label.textColor = fg;
     UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:_label.font.pointSize - 1 weight:UIImageSymbolWeightSemibold];
     _icon.image = [UIImage systemImageNamed:@"sparkles" withConfiguration:c];
-    _icon.tintColor = active ? UIColor.blackColor : kGreen();
+    _icon.tintColor = active ? MRGOnAccent() : kGreen();
     _fill.backgroundColor = active ? kGreen() : (_material ? UIColor.clearColor : _idleFill);
     self.accessibilityValue = active ? @"On" : nil;
     [self setNeedsLayout];
@@ -703,7 +760,9 @@ void MRGShowDJ(UIViewController *from) {
 - (CGSize)sizeThatFits:(CGSize)size {
     [_label sizeToFit];
     CGFloat icon = _label.font.pointSize;
-    return CGSizeMake(ceil(14 + icon + 5 + _label.bounds.size.width + 14), _height);
+    CGFloat h = _glassStyle && self.matchHeight > 0 ? self.matchHeight : _height;
+    CGFloat pad = h >= 40 ? 16 : 14;
+    return CGSizeMake(ceil(pad + icon + 5 + _label.bounds.size.width + pad), h);
 }
 
 - (void)layoutSubviews {
@@ -713,10 +772,11 @@ void MRGShowDJ(UIViewController *from) {
     _fill.frame = b;
     _fill.layer.cornerRadius = r;
     _material.frame = b;
-    _material.layer.cornerRadius = r;
+    shapeGlass(_material, r, YES);
     [_label sizeToFit];
     CGFloat icon = _label.font.pointSize;
-    _icon.frame = CGRectMake(14, round((b.size.height - icon) / 2), icon, icon);
+    CGFloat pad = b.size.height >= 40 ? 16 : 14;
+    _icon.frame = CGRectMake(pad, round((b.size.height - icon) / 2), icon, icon);
     _label.frame = CGRectMake(CGRectGetMaxX(_icon.frame) + 5, round((b.size.height - _label.bounds.size.height) / 2), _label.bounds.size.width, _label.bounds.size.height);
 }
 
@@ -836,6 +896,8 @@ void MRGDJPlaceHomeEntry(UIView *page) {
     if (redesignShown) {
         // Vitrine's redesign: the title row's glass pill (filter, avatar) at the trailing edge; the chip goes just before it,
         // as glass too, and rises and fades with it.
+        // As tall as the pill (44pt, the avatar's row), centered on it.
+        chip.matchHeight = round(redesign.bounds.size.height) ?: 44;
         chip.glassStyle = YES;
         CGSize s = [chip sizeThatFits:CGSizeZero];
         CGRect pill = CGRectMake(redesign.center.x - redesign.bounds.size.width / 2, redesign.center.y - redesign.bounds.size.height / 2,
@@ -932,101 +994,216 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 
 @end
 
-// The line on Now Playing while the DJ talks: a glass capsule with a green DJ badge, faded out a moment after.
-@interface MRGDJCaption : UIView
-@property (nonatomic, weak) UIView *anchor;   // the header row it sits under
+// Now Playing while a set is on: the DJ's bar over the bottom of the artwork (under the header when the artwork isn't
+// found), a glass capsule with a DJ badge, what the DJ is doing and a Switch it up button in the accent. While the DJ
+// talks it opens up to the line, and a soft glow in the accent breathes behind it; a moment after, it closes again.
+@interface MRGDJNowBar : UIView
+@property (nonatomic, weak) UIView *header;   // the header row (⌄ title ✦ ⋯)
+- (void)placeIn:(UIView *)root;
+- (void)refresh;
 @end
 
-@implementation MRGDJCaption {
+@implementation MRGDJNowBar {
+    UIView *_glow;
     UIVisualEffectView *_glass;
-    UILabel *_badge, *_text;
-    NSUInteger _shown;
+    UILabel *_badge, *_title, *_line;
+    MRGDJEqualizer *_eq;
+    UIButton *_switch;
+    BOOL _talking;
+    NSString *_spoken;
+    NSUInteger _token;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
-    self.userInteractionEnabled = NO;
     self.alpha = 0;
-    self.accessibilityElementsHidden = YES;
+    self.hidden = YES;
+    _glow = [UIView new];
+    _glow.userInteractionEnabled = NO;
+    _glow.backgroundColor = UIColor.clearColor;
+    _glow.layer.shadowOffset = CGSizeZero;
+    _glow.layer.shadowRadius = 22;
+    _glow.layer.shadowOpacity = 0;
+    [self addSubview:_glow];
     _glass = [[UIVisualEffectView alloc] initWithEffect:glassEffect(NO)];
-    _glass.clipsToBounds = YES;
     _glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     [self addSubview:_glass];
-    _badge = makeLabel(11, UIFontWeightHeavy, UIColor.blackColor, 1);
+    _badge = makeLabel(11, UIFontWeightHeavy, MRGOnAccent(), 1);
     _badge.text = @"DJ";
     _badge.textAlignment = NSTextAlignmentCenter;
-    _badge.backgroundColor = kGreen();
-    _badge.layer.cornerRadius = 9;
     _badge.clipsToBounds = YES;
-    _text = makeLabel(14, UIFontWeightSemibold, UIColor.whiteColor, 2);
-    [_glass.contentView addSubview:_badge];
-    [_glass.contentView addSubview:_text];
+    _badge.layer.cornerRadius = 10;
+    _eq = [MRGDJEqualizer new];
+    _title = makeLabel(14, UIFontWeightSemibold, UIColor.whiteColor, 1);
+    _line = makeLabel(14, UIFontWeightMedium, UIColor.whiteColor, 3);
+    _line.alpha = 0;
+    UIButtonConfiguration *c = [UIButtonConfiguration filledButtonConfiguration];
+    c.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    c.image = [UIImage systemImageNamed:@"shuffle" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightBold]];
+    c.imagePadding = 5;
+    c.title = @"Switch it up";
+    c.contentInsets = NSDirectionalEdgeInsetsMake(7, 12, 7, 12);
+    c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *a) {
+        NSMutableDictionary *m = [a mutableCopy];
+        m[NSFontAttributeName] = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
+        return m;
+    };
+    _switch = [UIButton buttonWithConfiguration:c primaryAction:nil];
+    _switch.accessibilityLabel = @"Switch it up";
+    [_switch addTarget:self action:@selector(switchItUp) forControlEvents:UIControlEventTouchUpInside];
+    for (UIView *v in @[_badge, _eq, _title, _line, _switch]) [_glass.contentView addSubview:v];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(openSheet)];
+    [_glass addGestureRecognizer:tap];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(speaking:) name:MRGDJSpeakingNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh) name:MRGDJChangedNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh) name:MRGPlayerTrackChangedNotification object:nil];
     return self;
 }
 
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 
-- (CGSize)sizeForWidth:(CGFloat)maxWidth {
-    CGFloat textMax = maxWidth - 16 - 30 - 10 - 16;
-    CGSize t = [_text sizeThatFits:CGSizeMake(textMax, CGFLOAT_MAX)];
-    t.height = MIN(t.height, ceil(_text.font.lineHeight * 2) + 1);
-    return CGSizeMake(MIN(maxWidth, ceil(16 + 30 + 10 + MIN(textMax, t.width) + 16)), MAX(40, ceil(t.height + 20)));
+- (void)openSheet { MRGShowDJ(controllerOf(self)); }
+- (void)switchItUp { [[UIImpactFeedbackGenerator new] impactOccurred]; [MRGDJ.shared startWithRequest:nil]; }
+
+- (BOOL)shouldShow { return MRGDJShowsPlayerButton() && MRGDJ.shared.state != MRGDJIdle; }
+
+- (void)refresh {
+    MRGDJ *dj = MRGDJ.shared;
+    UIColor *accent = kGreen();
+    _badge.backgroundColor = accent;
+    _badge.textColor = MRGOnAccent();
+    UIButtonConfiguration *c = _switch.configuration;
+    c.baseBackgroundColor = accent;
+    c.baseForegroundColor = MRGOnAccent();
+    _switch.configuration = c;
+    _switch.enabled = dj.state != MRGDJThinking;
+    _glow.layer.shadowColor = accent.CGColor;
+    NSString *title;
+    if (dj.state == MRGDJThinking) title = dj.status.length ? dj.status : @"Picking your next set…";
+    else if (dj.currentIndex >= 0 && dj.currentIndex < (NSInteger)dj.set.count && dj.set[dj.currentIndex].why.length)
+        title = [NSString stringWithFormat:@"Mirage DJ · %@", dj.set[dj.currentIndex].why];
+    else title = @"Mirage DJ";
+    _title.text = title;
+    _eq.hidden = !_talking;
+    BOOL show = [self shouldShow];
+    if (show == !self.hidden && self.alpha > 0.01) { [self setNeedsLayout]; return; }
+    if (show) {
+        self.hidden = NO;
+        [self.superview bringSubviewToFront:self];
+        [self placeIn:self.superview];
+        [UIView animateWithDuration:0.3 animations:^{ self.alpha = 1; }];
+    } else {
+        [UIView animateWithDuration:0.25 animations:^{ self.alpha = 0; } completion:^(BOOL f) { if (![self shouldShow]) self.hidden = YES; }];
+    }
+}
+
+// The cover the player shows: the biggest square picture under the header.
+static UIView *artworkUnder(UIView *root, CGFloat belowY) {
+    __block UIView *best = nil;
+    __block CGFloat bestArea = 160 * 160;
+    forEachView(root, ^(UIView *v, BOOL *stop) {
+        if (![v isKindOfClass:UIImageView.class] || !((UIImageView *)v).image || !visibleOnScreen(v)) return;
+        CGRect f = [v convertRect:v.bounds toView:root];
+        if (fabs(f.size.width - f.size.height) > 24 || f.origin.y < belowY - 4) return;
+        if (!CGRectIntersectsRect(f, root.bounds)) return;
+        CGFloat area = f.size.width * f.size.height;
+        if (area > bestArea) { bestArea = area; best = v; }
+    });
+    return best;
+}
+
+- (void)placeIn:(UIView *)root {
+    UIView *header = self.header;
+    if (!header || !root) return;
+    CGRect h = [header convertRect:header.bounds toView:root];
+    UIView *art = artworkUnder(root, CGRectGetMaxY(h));
+    CGFloat width = MIN(root.bounds.size.width - 32, 520);
+    CGRect a = art ? [art convertRect:art.bounds toView:root] : CGRectNull;
+    if (art) width = MIN(width, a.size.width - 20);
+    CGFloat height = _talking ? [self talkingHeightFor:width] : 48;
+    CGFloat x = round(art ? CGRectGetMidX(a) - width / 2 : (root.bounds.size.width - width) / 2);
+    CGFloat y = round(art ? CGRectGetMaxY(a) - 12 - height : CGRectGetMaxY(h) + 10);
+    CGRect frame = CGRectMake(x, y, width, height);
+    if (!CGRectEqualToRect(self.frame, frame)) self.frame = frame;
+}
+
+- (CGFloat)talkingHeightFor:(CGFloat)width {
+    CGFloat textWidth = width - 16 - 16;
+    CGFloat lineH = [_line sizeThatFits:CGSizeMake(textWidth, CGFLOAT_MAX)].height;
+    lineH = MIN(lineH, ceil(_line.font.lineHeight * 3) + 1);
+    return ceil(48 + lineH + 12);
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect b = self.bounds;
     _glass.frame = b;
-    _glass.layer.cornerRadius = MIN(20, b.size.height / 2);
-    _glass.layer.cornerCurve = kCACornerCurveContinuous;
-    _badge.frame = CGRectMake(14, round((b.size.height - 18) / 2), 30, 18);
-    _text.frame = CGRectMake(CGRectGetMaxX(_badge.frame) + 10, 10, b.size.width - CGRectGetMaxX(_badge.frame) - 10 - 16, b.size.height - 20);
+    shapeGlass(_glass, 24, NO);
+    _glow.frame = CGRectInset(b, 6, 6);
+    _glow.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:_glow.bounds cornerRadius:20].CGPath;
+    [_switch sizeToFit];
+    CGSize sw = _switch.bounds.size;
+    _switch.frame = CGRectMake(b.size.width - 8 - sw.width, round((48 - sw.height) / 2), sw.width, sw.height);
+    _badge.frame = CGRectMake(12, 14, 30, 20);
+    _eq.frame = CGRectMake(CGRectGetMaxX(_badge.frame) + 8, 17, 14, 14);
+    CGFloat titleX = (_eq.hidden ? CGRectGetMaxX(_badge.frame) : CGRectGetMaxX(_eq.frame)) + 8;
+    _title.frame = CGRectMake(titleX, 14, CGRectGetMinX(_switch.frame) - 8 - titleX, 20);
+    _line.frame = CGRectMake(16, 48, b.size.width - 32, MAX(0, b.size.height - 48 - 12));
 }
 
-- (void)placeIn:(UIView *)container {
-    UIView *anchor = self.anchor;
-    if (!anchor || !container) return;
-    CGRect a = [anchor convertRect:anchor.bounds toView:container];
-    CGFloat maxWidth = MIN(container.bounds.size.width - 32, 520);
-    CGSize s = [self sizeForWidth:maxWidth];
-    CGRect frame = CGRectMake(round((container.bounds.size.width - s.width) / 2), round(CGRectGetMaxY(a) + 10), s.width, s.height);
-    if (!CGRectEqualToRect(self.frame, frame)) self.frame = frame;
+- (void)breathe:(BOOL)on {
+    [_glow.layer removeAnimationForKey:@"breathe"];
+    if (!on) { _glow.layer.shadowOpacity = 0; return; }
+    _glow.layer.shadowOpacity = 0.55;
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"shadowOpacity"];
+    a.fromValue = @0.25;
+    a.toValue = @0.85;
+    a.duration = 1.1;
+    a.autoreverses = YES;
+    a.repeatCount = HUGE_VALF;
+    a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [_glow.layer addAnimation:a forKey:@"breathe"];
 }
 
 - (void)speaking:(NSNotification *)n {
     BOOL on = [n.userInfo[@"speaking"] boolValue];
     NSString *line = n.userInfo[@"line"];
-    NSUInteger token = ++_shown;
-    if (on && line.length && MRGDJShowsPlayerButton() && self.superview && visibleOnScreen(self.anchor)) {
-        _text.text = line;
-        [self placeIn:self.superview];
-        [self setNeedsLayout];
+    NSUInteger token = ++_token;
+    if (on && line.length) {
+        _talking = YES;
+        _line.text = line;
+        [self refresh];
+        if (self.hidden || !self.superview || !visibleOnScreen(self.header)) return;
         [self.superview bringSubviewToFront:self];
-        if (self.alpha < 0.01) self.transform = CGAffineTransformMakeTranslation(0, -8);
-        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            self.alpha = 1;
-            self.transform = CGAffineTransformIdentity;
+        [self breathe:YES];
+        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+            [self placeIn:self.superview];
+            [self layoutIfNeeded];
+            self->_line.alpha = 1;
         } completion:nil];
         return;
     }
     if (on) return;
-    // A beat after the voice ends, then away.
+    // A beat after the voice ends, the line folds away.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (token != self->_shown) return;
-        [UIView animateWithDuration:0.4 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            self.alpha = 0;
-            self.transform = CGAffineTransformMakeTranslation(0, -6);
+        if (token != self->_token) return;
+        self->_talking = NO;
+        [self breathe:NO];
+        [self refresh];
+        [UIView animateWithDuration:0.35 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+            self->_line.alpha = 0;
+            [self placeIn:self.superview];
+            [self layoutIfNeeded];
         } completion:nil];
     });
 }
 
 @end
 
-static char kPlayerButtonKey, kPlayerSpacerKey, kCaptionKey;
+static char kPlayerButtonKey, kPlayerSpacerKey, kNowBarKey;
 
-// The player's own root under the window's presentation views: the caption lives there, over the artwork, and goes
-// away with the player.
+// Now Playing's own root view under the window (the topmost ancestor that is the player's), so the bar sits over the
+// artwork and goes away with the player.
 static UIView *playerRoot(UIView *v) {
     UIView *root = v.superview ?: v;
     for (UIView *p = v.superview; p && p != v.window; p = p.superview) {
@@ -1049,11 +1226,11 @@ void MRGDJPlacePlayerButton(UIViewController *unit) {
     if (!host) return;
     MRGDJPlayerButton *button = objc_getAssociatedObject(unit, &kPlayerButtonKey);
     UIView *spacer = objc_getAssociatedObject(unit, &kPlayerSpacerKey);
-    MRGDJCaption *caption = objc_getAssociatedObject(unit, &kCaptionKey);
+    MRGDJNowBar *bar = objc_getAssociatedObject(unit, &kNowBarKey);
     if (!MRGDJShowsPlayerButton()) {
         [button removeFromSuperview];
         [spacer removeFromSuperview];
-        [caption removeFromSuperview];
+        [bar removeFromSuperview];
         return;
     }
     UIStackView *row = headerRow(host);
@@ -1082,11 +1259,14 @@ void MRGDJPlacePlayerButton(UIViewController *unit) {
     [button setCircleSide:moreGlass ? MAX(moreGlass.bounds.size.width, moreGlass.bounds.size.height) : 0];
 
     UIView *root = playerRoot(host);
-    if (!caption) {
-        caption = [MRGDJCaption new];
-        objc_setAssociatedObject(unit, &kCaptionKey, caption, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!bar) {
+        bar = [MRGDJNowBar new];
+        objc_setAssociatedObject(unit, &kNowBarKey, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    caption.anchor = row;
-    if (caption.superview != root) [root addSubview:caption];
-    if (caption.alpha > 0) [caption placeIn:root];
+    bar.header = row;
+    if (bar.superview != root) { [root addSubview:bar]; [bar refresh]; }
+    if (!bar.hidden) {
+        if (root.subviews.lastObject != bar) [root bringSubviewToFront:bar];
+        [bar placeIn:root];
+    }
 }
