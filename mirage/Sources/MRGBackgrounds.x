@@ -14,6 +14,7 @@
 // the background instead of a flat fill.
 #import "MRGPrefs.h"
 #import "MRGBackgroundView.h"
+#import "MRGClearing.h"
 #import <objc/runtime.h>
 
 static char kBackgroundKey, kClearedKey, kOriginalColorKey, kDarkOnlyKey;
@@ -396,8 +397,8 @@ static UIView *cellInTaggedList(UIView *view) {
     return nil;
 }
 
-static BOOL isDarkCG(CGColorRef color) {
-    if (!color || CGColorGetAlpha(color) <= 0.9) return NO;
+static BOOL isDarkCGAlpha(CGColorRef color, CGFloat minAlpha) {
+    if (!color || CGColorGetAlpha(color) <= minAlpha) return NO;
     size_t n = CGColorGetNumberOfComponents(color);
     const CGFloat *c = CGColorGetComponents(color);
     if (!c || n < 2) return NO;
@@ -405,6 +406,7 @@ static BOOL isDarkCG(CGColorRef color) {
     for (size_t i = 0; i + 1 < n; i++) hi = MAX(hi, c[i]);
     return hi < 0.22;
 }
+static BOOL isDarkCG(CGColorRef color) { return isDarkCGAlpha(color, 0.9); }
 
 static char kCellPendingKey;
 static void scheduleCellClear(UIView *cell) {
@@ -432,7 +434,7 @@ static BOOL dropsPaint(CALayer *layer, CGColorRef color) {
     if (![view isKindOfClass:UIView.class] || view.layer != layer) return NO;
     if (isCleared(view) && CGColorGetAlpha(color) > 0.01) {
         // A cell's fill was cleared for being near-black; a reused cell painted a real color keeps it.
-        if (objc_getAssociatedObject(view, &kDarkOnlyKey) && !isDarkCG(color)) {
+        if (objc_getAssociatedObject(view, &kDarkOnlyKey) && !isDarkCGAlpha(color, 0.5)) {
             objc_setAssociatedObject(view, &kClearedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(view, &kDarkOnlyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             return NO;
@@ -534,6 +536,27 @@ static void rerunHostOf(UIView *list) {
 - (void)reloadData { %orig; scheduleListClear(self, NO); }
 %end
 %end
+
+void MRGClearDarkPersistently(UIView *v) {
+    if (!v || [v isKindOfClass:UIImageView.class] || [v isKindOfClass:UIVisualEffectView.class]) return;
+    UIColor *c = v.backgroundColor;
+    if (!isDarkCGAlpha(c.CGColor, 0.5)) return;
+    sg_anyCleared = YES;
+    objc_setAssociatedObject(v, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(v, &kDarkOnlyKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(v, &kOriginalColorKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    v.backgroundColor = UIColor.clearColor;
+}
+
+void MRGAdoptList(UIScrollView *list) {
+    if (!list) return;
+    MRGClearDarkPersistently(list);
+    UIView *bgView = [list isKindOfClass:UICollectionView.class] ? ((UICollectionView *)list).backgroundView
+                   : [list isKindOfClass:UITableView.class] ? ((UITableView *)list).backgroundView : nil;
+    MRGClearDarkPersistently(bgView);
+    tagList(list);
+    clearCells(list);
+}
 
 #pragma mark - screens
 
