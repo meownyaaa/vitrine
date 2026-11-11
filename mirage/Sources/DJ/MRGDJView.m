@@ -1079,6 +1079,14 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 - (void)refresh;
 @end
 
+// The lyrics opened over the player: a visible Lyrics view taller than half of it.
+static BOOL lyricsOpen(UIView *root) {
+    UIView *l = findView(root, ^BOOL(UIView *v) {
+        return classNamed(v, @"Lyrics") && v.bounds.size.height > root.bounds.size.height * 0.5 && visibleOnScreen(v);
+    });
+    return l != nil;
+}
+
 @implementation MRGDJNowBar {
     UIView *_glow;
     UIVisualEffectView *_glass;
@@ -1088,6 +1096,8 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
     BOOL _talking;
     NSString *_spoken;
     NSUInteger _token;
+    CFTimeInterval _peekUntil;   // a short look after a track change, then it gets out of the way
+    NSString *_lastSlot;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -1132,7 +1142,7 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
     [_glass addGestureRecognizer:tap];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(speaking:) name:MRGDJSpeakingNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh) name:MRGDJChangedNotification object:nil];
-    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh) name:MRGPlayerTrackChangedNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(trackChanged) name:MRGPlayerTrackChangedNotification object:nil];
     return self;
 }
 
@@ -1141,7 +1151,21 @@ void MRGDJFollowHeaderButtons(UIView *buttons) {
 - (void)openSheet { MRGShowDJ(controllerOf(self)); }
 - (void)switchItUp { [[UIImpactFeedbackGenerator new] impactOccurred]; [MRGDJ.shared switchItUp]; }
 
-- (BOOL)shouldShow { return MRGDJShowsPlayerButton() && MRGDJ.shared.state != MRGDJIdle; }
+// 0.5.1: the bar no longer sits on the cover all the time. It shows while the DJ talks or picks a set, and for a few
+// seconds after a track change (with Switch it up), then fades; the ✦ in the header (in the accent while the DJ is on)
+// opens the DJ sheet any time. It also stays away while the lyrics fill the player.
+- (BOOL)shouldShow {
+    if (!MRGDJShowsPlayerButton() || MRGDJ.shared.state == MRGDJIdle) return NO;
+    if (self.superview && lyricsOpen(self.superview)) return NO;
+    return _talking || MRGDJ.shared.state == MRGDJThinking || CACurrentMediaTime() < _peekUntil;
+}
+
+- (void)trackChanged {
+    _peekUntil = CACurrentMediaTime() + 4;
+    [self refresh];
+    __weak typeof(self) weak = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [weak refresh]; });
+}
 
 - (void)refresh {
     MRGDJ *dj = MRGDJ.shared;
@@ -1188,19 +1212,49 @@ static UIView *artworkUnder(UIView *root, CGFloat belowY) {
     return best;
 }
 
+// The top of the first visible text under the cover (the lyric preview line, the title), so the bar never sits on it.
+static CGFloat textTopBelow(UIView *root, CGFloat y, MRGDJNowBar *except) {
+    __block CGFloat top = CGRectGetMaxY(root.bounds);
+    forEachView(root, ^(UIView *v, BOOL *stop) {
+        if (v == except || [v isDescendantOfView:except]) return;
+        BOOL text = [v isKindOfClass:UILabel.class] && ((UILabel *)v).text.length;
+        BOOL lyrics = classNamed(v, @"Lyrics") && v.bounds.size.height > 20;
+        if (!text && !lyrics) return;
+        if (!visibleOnScreen(v)) return;
+        CGRect f = [v convertRect:v.bounds toView:root];
+        if (f.origin.y >= y - 2 && f.origin.y < top) top = f.origin.y;
+    });
+    return top;
+}
+
 - (void)placeIn:(UIView *)root {
-    UIView *header = self.header;
-    if (!header || !root) return;
-    CGRect h = [header convertRect:header.bounds toView:root];
-    UIView *art = artworkUnder(root, CGRectGetMaxY(h));
-    CGFloat width = MIN(root.bounds.size.width - 32, 520);
-    CGRect a = art ? [art convertRect:art.bounds toView:root] : CGRectNull;
-    if (art) width = MIN(width, a.size.width - 20);
-    CGFloat height = _talking ? [self talkingHeightFor:width] : 48;
-    CGFloat x = round(art ? CGRectGetMidX(a) - width / 2 : (root.bounds.size.width - width) / 2);
-    CGFloat y = round(art ? CGRectGetMaxY(a) - 12 - height : CGRectGetMaxY(h) + 10);
-    CGRect frame = CGRectMake(x, y, width, height);
-    if (!CGRectEqualToRect(self.frame, frame)) self.frame = frame;
+    @try {
+        UIView *header = self.header;
+        if (!header || !root) return;
+        CGRect h = [header convertRect:header.bounds toView:root];
+        UIView *art = artworkUnder(root, CGRectGetMaxY(h));
+        CGRect a = art ? [art convertRect:art.bounds toView:root] : CGRectNull;
+        CGFloat width = MIN(root.bounds.size.width - 32, 520);
+        if (art) width = MIN(width, MAX(a.size.width, 260) - 8);
+        CGFloat height = _talking ? [self talkingHeightFor:width] : 48;
+        CGFloat x = round((art ? CGRectGetMidX(a) : CGRectGetMidX(root.bounds)) - width / 2);
+        x = MAX(16, MIN(x, root.bounds.size.width - 16 - width));
+        CGFloat y;
+        NSString *slot;
+        if (!art) { y = CGRectGetMaxY(h) + 8; slot = @"under the header"; }
+        else {
+            CGFloat above = CGRectGetMinY(a) - CGRectGetMaxY(h);          // free space between the header and the cover
+            CGFloat below = textTopBelow(root, CGRectGetMaxY(a), self) - CGRectGetMaxY(a);   // between the cover and the lyric line / title
+            if (above >= height + 8) { y = CGRectGetMaxY(h) + (above - height) / 2; slot = @"between the header and the cover"; }
+            else if (below >= height + 8) { y = CGRectGetMaxY(a) + (below - height) / 2; slot = @"between the cover and the text"; }
+            else { y = CGRectGetMaxY(h) + 6; slot = @"over the top of the cover (briefly)"; }
+        }
+        CGRect frame = CGRectMake(x, round(y), width, height);
+        if (!CGRectEqualToRect(self.frame, frame)) self.frame = frame;
+        if (![slot isEqualToString:_lastSlot]) { _lastSlot = slot; MRGDJLog(@"player bar: %@ (%.0fpt tall)", slot, height); }
+    } @catch (NSException *e) {
+        MRGDJLog(@"player bar: placing threw %@", e.reason);
+    }
 }
 
 - (CGFloat)talkingHeightFor:(CGFloat)width {
@@ -1354,6 +1408,7 @@ void MRGDJPlacePlayerButton(UIViewController *unit) {
     }
     bar.header = row;
     if (bar.superview != root) { [root addSubview:bar]; [bar refresh]; }
+    if (!bar.hidden && lyricsOpen(root)) [bar refresh];
     if (!bar.hidden) {
         if (root.subviews.lastObject != bar) [root bringSubviewToFront:bar];
         [bar placeIn:root];

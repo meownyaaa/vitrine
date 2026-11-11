@@ -95,15 +95,17 @@ NSArray<NSDictionary *> *MRGEdgeVoices(void) {
     dispatch_once(&once, ^{
         NSArray *raw = @[
             @[@"en-US-AvaMultilingualNeural", @"Ava", @"US · female · expressive, caring"],
-            @[@"en-US-EmmaMultilingualNeural", @"Emma", @"US · female · cheerful, conversational"],
+            @[@"en-US-AvaNeural", @"Ava (soft)", @"US · female · soft, intimate"],
+            @[@"en-US-EmmaMultilingualNeural", @"Emma", @"US · female · bright, cheerful"],
+            @[@"en-US-EmmaNeural", @"Emma (calm)", @"US · female · warm, calm"],
             @[@"en-US-JennyNeural", @"Jenny", @"US · female · friendly, comforting"],
             @[@"en-US-AriaNeural", @"Aria", @"US · female · positive, confident"],
             @[@"en-US-MichelleNeural", @"Michelle", @"US · female · pleasant"],
-            @[@"en-US-AnaNeural", @"Ana", @"US · female · young, cute"],
+            @[@"en-US-AnaNeural", @"Ana", @"US · child voice"],
             @[@"en-GB-SoniaNeural", @"Sonia", @"UK · female"],
             @[@"en-GB-MaisieNeural", @"Maisie", @"UK · female · young"],
             @[@"en-AU-NatashaNeural", @"Natasha", @"Australia · female"],
-            @[@"en-US-AndrewMultilingualNeural", @"Andrew", @"US · male · warm, confident"],
+            @[@"en-US-AndrewNeural", @"Andrew", @"US · male · warm, confident"],
             @[@"en-US-BrianMultilingualNeural", @"Brian", @"US · male · casual, sincere"],
             @[@"en-US-GuyNeural", @"Guy", @"US · male · passionate"],
             @[@"en-US-ChristopherNeural", @"Christopher", @"US · male · deep, authoritative"],
@@ -142,9 +144,38 @@ static NSString *hexID(void) { return [[NSUUID.UUID.UUIDString stringByReplacing
 
 static double sg_edgeSkew;   // server clock minus ours, learned from a refused handshake's Date header
 
+// 0.5.1: the websocket gets its own session with a delegate, and nothing is sent until the upgrade (HTTP 101) has
+// opened it. 0.5.0 sent speech.config and the SSML straight after -resume and read any receive error as a refusal,
+// printing the 101 of a socket that had in fact opened; Microsoft closes a socket with code 1007 and a reason when a
+// message is wrong (no speech.config first, bad SSML), and that reason is now logged.
+@interface MRGEdgeSocket : NSObject <NSURLSessionWebSocketDelegate>
+@property (nonatomic, copy) void (^opened)(void);
+@property (nonatomic, copy) void (^closed)(NSInteger code, NSString *reason);
+@property (nonatomic, copy) void (^failed)(NSError *error);   // the task ended (a handshake refused before opening)
+@end
+@implementation MRGEdgeSocket
+- (void)URLSession:(NSURLSession *)session webSocketTask:(NSURLSessionWebSocketTask *)task didOpenWithProtocol:(NSString *)protocol {
+    void (^b)(void) = self.opened; self.opened = nil;
+    if (b) b();
+}
+- (void)URLSession:(NSURLSession *)session webSocketTask:(NSURLSessionWebSocketTask *)task didCloseWithCode:(NSURLSessionWebSocketCloseCode)code reason:(NSData *)reason {
+    void (^b)(NSInteger, NSString *) = self.closed; self.closed = nil;
+    NSString *why = reason.length ? [[NSString alloc] initWithData:reason encoding:NSUTF8StringEncoding] : nil;
+    if (b) b(code, why);
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    void (^b)(NSError *) = self.failed; self.failed = nil;
+    if (b) b(error);
+}
+@end
+
+static NSString *edgeClosedText(NSInteger code, NSString *reason) {
+    return [NSString stringWithFormat:@"Microsoft closed the free voice (code %ld%@%@)", (long)code, reason.length ? @": " : @"", reason ?: @""];
+}
+
 // One synthesis per connection, as Edge does: speech.config, then the SSML; binary "Path:audio" frames carry the MP3
 // (a 2-byte big-endian header length, the header, the audio), "Path:turn.end" closes it.
-static void edgeRun(NSString *text, NSString *voice, double speed, double pitch, BOOL retried, void (^done)(NSData *, NSString *)) {
+static void edgeRun(NSString *text, NSString *voice, double speed, double pitch, double volume, int attempt, void (^done)(NSData *, NSString *)) {
     NSString *url = [NSString stringWithFormat:@"wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=%@&ConnectionId=%@&Sec-MS-GEC=%@&Sec-MS-GEC-Version=%@",
                      kEdgeToken, hexID(), MRGEdgeToken(NSDate.date.timeIntervalSince1970 + sg_edgeSkew), kEdgeVersion];
     NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
@@ -158,178 +189,136 @@ static void edgeRun(NSString *text, NSString *voice, double speed, double pitch,
     NSMutableString *mu = [NSMutableString string];
     for (int i = 0; i < 16; i++) [mu appendFormat:@"%02X", muid[i]];
     [r setValue:[NSString stringWithFormat:@"muid=%@;", mu] forHTTPHeaderField:@"Cookie"];
-    NSURLSessionWebSocketTask *task = [NSURLSession.sharedSession webSocketTaskWithRequest:r];
+    r.HTTPShouldHandleCookies = NO;
+
+    MRGEdgeSocket *socket = [MRGEdgeSocket new];
+    NSURLSessionConfiguration *cfg = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    cfg.HTTPCookieStorage = nil;
+    cfg.URLCache = nil;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg delegate:socket delegateQueue:NSOperationQueue.mainQueue];
+    NSURLSessionWebSocketTask *task = [session webSocketTaskWithRequest:r];
+    task.maximumMessageSize = 4 * 1024 * 1024;
     __block BOOL over = NO;
+    __block NSInteger closeCode = 0;
+    __block NSString *closeReason = nil;
     __block void (^receive)(void) = nil;   // keeps itself alive until the turn ends
+    __block void (^onError)(NSError *) = nil;
     NSMutableData *audio = [NSMutableData data];
     void (^end)(NSString *) = ^(NSString *error) {
         if (over) return;
         over = YES;
         receive = nil;
+        onError = nil;
+        socket.opened = nil;
+        socket.closed = nil;
+        socket.failed = nil;
         [task cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+        [session finishTasksAndInvalidate];   // breaks the session → delegate retain
         NSData *d = audio.length ? [audio copy] : nil;
         NSString *e = d ? nil : (error ?: @"Microsoft's free voice sent no audio");
+        if (e) MRGDJLog(@"voice: Edge %@ (attempt %d, HTTP %ld)", e, attempt, (long)([task.response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)task.response).statusCode : 0));
         dispatch_async(dispatch_get_main_queue(), ^{ done(d, e); });
     };
+    void (^retry)(NSString *) = ^(NSString *why) {
+        if (over) return;
+        over = YES;
+        receive = nil;
+        onError = nil;
+        socket.opened = nil;
+        socket.closed = nil;
+        socket.failed = nil;
+        [task cancel];
+        [session finishTasksAndInvalidate];
+        MRGDJLog(@"voice: Edge %@, trying once more", why);
+        dispatch_async(dispatch_get_main_queue(), ^{ edgeRun(text, voice, speed, pitch, volume, attempt + 1, done); });
+    };
+    socket.closed = ^(NSInteger code, NSString *reason) { closeCode = code; closeReason = reason; };
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (!over) end(@"Microsoft's free voice timed out"); });
+    onError = ^(NSError *error) {
+        NSHTTPURLResponse *resp = [task.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)task.response : nil;
+        NSInteger st = resp.statusCode;
+        NSInteger code = closeCode ?: task.closeCode;
+        NSString *reason = closeReason ?: (task.closeReason.length ? [[NSString alloc] initWithData:task.closeReason encoding:NSUTF8StringEncoding] : nil);
+        if (st == 403 && attempt == 0) {
+            // Usually a clock off by minutes: the token is per 5-minute window. Once more with the server's time.
+            NSString *date = resp.allHeaderFields[@"Date"];
+            NSDateFormatter *f = [NSDateFormatter new];
+            f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+            f.dateFormat = @"EEE, dd MMM yyyy HH:mm:ss zzz";
+            NSDate *server = date ? [f dateFromString:date] : nil;
+            if (server) sg_edgeSkew = server.timeIntervalSince1970 - NSDate.date.timeIntervalSince1970;
+            retry([NSString stringWithFormat:@"refused the handshake (HTTP 403)%@", server ? [NSString stringWithFormat:@", server clock %.0fs off", sg_edgeSkew] : @""]);
+            return;
+        }
+        if (st == 101 || code > 0) {
+            // The socket opened and Microsoft closed it: its reason says why.
+            NSString *why = code > 0 ? edgeClosedText(code, reason) : [NSString stringWithFormat:@"Microsoft's free voice dropped the connection (%@ %ld)", error.domain ?: @"?", (long)error.code];
+            if (attempt == 0 && !audio.length) { retry(why); return; }
+            end(why);
+            return;
+        }
+        end(st ? [NSString stringWithFormat:@"Microsoft's free voice refused the connection (HTTP %ld)%@", (long)st, st == 403 ? @"; Microsoft may have changed it" : @""]
+               : [NSString stringWithFormat:@"Microsoft's free voice: %@ (%@ %ld)", error.localizedDescription ?: @"connection failed", error.domain ?: @"?", (long)error.code]);
+        return;
+    };
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-retain-cycles"
+    // The cycle is on purpose: the reader keeps itself alive until end()/retry() set it to nil.
     receive = ^{
         [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *msg, NSError *error) {
-            if (over) return;
-            if (error || !msg) {
-                NSHTTPURLResponse *resp = [task.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)task.response : nil;
-                NSInteger st = resp.statusCode;
-                if (st == 403 && !retried) {
-                    // Usually a clock off by minutes: the token is per 5-minute window. Once more with the server's time.
-                    NSString *date = resp.allHeaderFields[@"Date"];
-                    NSDateFormatter *f = [NSDateFormatter new];
-                    f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-                    f.dateFormat = @"EEE, dd MMM yyyy HH:mm:ss zzz";
-                    NSDate *server = date ? [f dateFromString:date] : nil;
-                    if (server) sg_edgeSkew = server.timeIntervalSince1970 - NSDate.date.timeIntervalSince1970;
-                    over = YES;
-                    receive = nil;
-                    MRGDJLog(@"voice: Microsoft refused the free voice (HTTP 403), trying once more%@", server ? [NSString stringWithFormat:@" with the server clock (%.0fs off)", sg_edgeSkew] : @"");
-                    dispatch_async(dispatch_get_main_queue(), ^{ edgeRun(text, voice, speed, pitch, YES, done); });
-                    return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (over) return;
+                if (error || !msg) { void (^f)(NSError *) = onError; if (f) f(error); return; }
+                if (msg.type == NSURLSessionWebSocketMessageTypeString) {
+                    if ([msg.string containsString:@"Path:turn.end"]) { end(nil); return; }
+                } else if (msg.data.length >= 2) {
+                    const uint8_t *b = msg.data.bytes;
+                    NSUInteger hl = ((NSUInteger)b[0] << 8) | b[1];
+                    if (2 + hl <= msg.data.length) {
+                        NSString *head = [[NSString alloc] initWithData:[msg.data subdataWithRange:NSMakeRange(2, hl)] encoding:NSUTF8StringEncoding];
+                        if ([head containsString:@"Path:audio"] && 2 + hl < msg.data.length)
+                            [audio appendData:[msg.data subdataWithRange:NSMakeRange(2 + hl, msg.data.length - 2 - hl)]];
+                    }
                 }
-                end(st ? [NSString stringWithFormat:@"Microsoft's free voice refused the connection (HTTP %ld)%@", (long)st, st == 403 ? @"; Microsoft may have changed it" : @""]
-                       : [NSString stringWithFormat:@"Microsoft's free voice: %@", error.localizedDescription ?: @"connection failed"]);
-                return;
-            }
-            if (msg.type == NSURLSessionWebSocketMessageTypeString) {
-                if ([msg.string containsString:@"Path:turn.end"]) { end(nil); return; }
-            } else if (msg.data.length >= 2) {
-                const uint8_t *b = msg.data.bytes;
-                NSUInteger hl = ((NSUInteger)b[0] << 8) | b[1];
-                if (2 + hl <= msg.data.length) {
-                    NSString *head = [[NSString alloc] initWithData:[msg.data subdataWithRange:NSMakeRange(2, hl)] encoding:NSUTF8StringEncoding];
-                    if ([head containsString:@"Path:audio"] && 2 + hl < msg.data.length)
-                        [audio appendData:[msg.data subdataWithRange:NSMakeRange(2 + hl, msg.data.length - 2 - hl)]];
-                }
-            }
-            void (^next)(void) = receive;
-            if (next) next();
+                void (^next)(void) = receive;
+                if (next) next();
+            });
         }];
     };
-    [task resume];
+#pragma clang diagnostic pop
     NSString *config = [NSString stringWithFormat:@"X-Timestamp:%@\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"
         @"{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n", jsDate()];
     long rate = lround((MIN(1.5, MAX(0.6, speed)) - 1.0) * 100.0);
-    long hz = lround((MIN(1.5, MAX(0.75, pitch)) - 1.0) * 60.0);
-    NSString *ssml = [NSString stringWithFormat:@"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='%@'><prosody pitch='%+ldHz' rate='%+ld%%' volume='+0%%'>%@</prosody></voice></speak>",
-                      voice, hz, rate, xmlEscaped(text)];
+    long pct = lround((MIN(1.5, MAX(0.75, pitch)) - 1.0) * 100.0);
+    long vol = lround((MIN(1.0, MAX(0.3, volume)) - 1.0) * 100.0);
+    // Prosody only: Microsoft's free endpoint refuses mstts:express-as styles and <break> ("SSML is invalid", tested).
+    NSString *ssml = [NSString stringWithFormat:@"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='%@'><prosody pitch='%+ld%%' rate='%+ld%%' volume='%+ld%%'>%@</prosody></voice></speak>",
+                      voice, pct, rate, vol, xmlEscaped(text)];
     NSString *say = [NSString stringWithFormat:@"X-RequestId:%@\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:%@Z\r\nPath:ssml\r\n\r\n%@", hexID(), jsDate(), ssml];
-    [task sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:config] completionHandler:^(NSError *e1) {
-        if (e1) { end([@"Microsoft's free voice: " stringByAppendingString:e1.localizedDescription ?: @"send failed"]); return; }
-        [task sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:say] completionHandler:^(NSError *e2) {
-            if (e2) end([@"Microsoft's free voice: " stringByAppendingString:e2.localizedDescription ?: @"send failed"]);
+    socket.opened = ^{
+        if (over) return;
+        if (receive) receive();
+        [task sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:config] completionHandler:^(NSError *e1) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (over) return;
+                if (e1) { end([@"Microsoft's free voice: " stringByAppendingString:e1.localizedDescription ?: @"send failed"]); return; }
+                [task sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:say] completionHandler:^(NSError *e2) {
+                    if (e2) dispatch_async(dispatch_get_main_queue(), ^{ end([@"Microsoft's free voice: " stringByAppendingString:e2.localizedDescription ?: @"send failed"]); });
+                }];
+            });
         }];
-    }];
-    if (receive) receive();
+    };
+    [task resume];
+    // A handshake that fails never opens; the task's completion reports it (403, no network).
+    socket.failed = ^(NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{ if (over) return; void (^f)(NSError *) = onError; if (f) f(error); });
+    };
 }
 
 void MRGEdgeSpeech(NSString *text, NSString *voice, double speed, double pitch, void (^done)(NSData *, NSString *)) {
     if (!text.length) { done(nil, @"Nothing to say"); return; }
-    @try { edgeRun(text, voice.length ? voice : MRGEdgeVoice(), speed, pitch, NO, done); }
+    id v = [NSUserDefaults.standardUserDefaults objectForKey:@"mirage.dj.edgeVolume"];
+    double volume = [v isKindOfClass:NSNumber.class] ? [v doubleValue] : 1.0;
+    @try { edgeRun(text, voice.length ? voice : MRGEdgeVoice(), speed, pitch, volume, 0, done); }
     @catch (NSException *e) { done(nil, [NSString stringWithFormat:@"Microsoft's free voice: %@", e.reason ?: @"failed"]); }
-}
-
-#pragma mark - Qwen (DashScope intl)
-
-static NSString *const kQwen = @"dashscope-key";
-static NSString *const kQwenURL = @"https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
-
-BOOL MRGQwenHasKey(void) { return MRGKeychainGet(kQwen).length > 0; }
-
-NSArray<NSDictionary *> *MRGQwenVoices(void) {
-    static NSArray *list;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        NSArray *raw = @[
-            @[@"Serena", @"female · gentle"], @[@"Seren", @"female · soothing, sleepy"], @[@"Mia", @"female · soft, gentle"],
-            @[@"Maia", @"female · gentle, smart"], @[@"Cherry", @"female · sunny, friendly"], @[@"Chelsie", @"female · sweet, girlfriend"],
-            @[@"Bella", @"female · playful, bubbly"], @[@"Momo", @"female · playful, mischievous"], @[@"Vivian", @"female · confident, feisty"],
-            @[@"Jennifer", @"female · cinematic American"], @[@"Katerina", @"female · mature"], @[@"Sonrisa", @"female · cheerful"],
-            @[@"Ethan", @"male · warm, energetic"], @[@"Ryan", @"male · dramatic, rhythmic"], @[@"Aiden", @"male · young American"],
-            @[@"Kai", @"male · soothing"], @[@"Andre", @"male · steady, magnetic"], @[@"Neil", @"male · news anchor"], @[@"Vincent", @"male · raspy"],
-        ];
-        NSMutableArray *a = [NSMutableArray array];
-        for (NSArray *r in raw) [a addObject:@{@"id": r[0], @"name": r[0], @"detail": r[1]}];
-        list = a;
-    });
-    return list;
-}
-NSString *MRGQwenVoice(void) { return [D() stringForKey:@"mirage.dj.qwenVoice"] ?: @"Serena"; }
-void MRGQwenSetVoice(NSString *v) { if (v.length) [D() setObject:v forKey:@"mirage.dj.qwenVoice"]; }
-
-static NSString *qwenError(NSInteger status, NSData *data, NSError *error) {
-    if (error) return [@"Qwen: " stringByAppendingString:error.localizedDescription ?: @"network error"];
-    id j = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-    NSString *code = [j isKindOfClass:NSDictionary.class] && [j[@"code"] isKindOfClass:NSString.class] ? j[@"code"] : nil;
-    NSString *message = [j isKindOfClass:NSDictionary.class] && [j[@"message"] isKindOfClass:NSString.class] ? j[@"message"] : nil;
-    NSString *body = data.length ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-    MRGDJLog(@"voice: Qwen HTTP %ld body: %@", (long)status, body.length > 500 ? [body substringToIndex:500] : body);
-    NSString *lower = [[NSString stringWithFormat:@"%@ %@", code ?: @"", message ?: @""] lowercaseString];
-    NSString *meaning = status == 401 || [lower containsString:@"invalidapikey"] ? @"the key was refused (a Singapore / international Model Studio key is needed)"
-        : [lower containsString:@"arrearage"] || [lower containsString:@"overdue"] || [lower containsString:@"quota"] || [lower containsString:@"free"] ? @"the free quota is used up or the account needs billing"
-        : status == 429 ? @"too many requests for now" : nil;
-    return [NSString stringWithFormat:@"Qwen: %@%@ (HTTP %ld%@)", meaning ?: @"request refused", message ? [@". " stringByAppendingString:message] : @"", (long)status, code ? [@", " stringByAppendingString:code] : @""];
-}
-
-static void qwenCall(NSString *key, NSString *model, NSString *text, NSString *voice, NSString *instructions, void (^done)(NSString *url, NSInteger status, NSString *error)) {
-    NSMutableDictionary *input = [@{@"text": text, @"voice": voice, @"language_type": @"English"} mutableCopy];
-    if (instructions.length) { input[@"instructions"] = instructions.length > 600 ? [instructions substringToIndex:600] : instructions; input[@"optimize_instructions"] = @YES; }
-    NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:kQwenURL]];
-    r.HTTPMethod = @"POST";
-    r.timeoutInterval = 30;
-    [r setValue:[@"Bearer " stringByAppendingString:key] forHTTPHeaderField:@"Authorization"];
-    [r setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    r.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"model": model, @"input": input} options:0 error:nil];
-    [[NSURLSession.sharedSession dataTaskWithRequest:r completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
-        NSInteger st = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
-        id j = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        id out = [j isKindOfClass:NSDictionary.class] ? j[@"output"] : nil;
-        id audio = [out isKindOfClass:NSDictionary.class] ? out[@"audio"] : nil;
-        NSString *url = [audio isKindOfClass:NSDictionary.class] && [audio[@"url"] isKindOfClass:NSString.class] ? audio[@"url"] : nil;
-        NSString *err = (error || st < 200 || st >= 300 || !url.length) ? qwenError(st, data, error) : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{ done(err ? nil : url, st, err); });
-    }] resume];
-}
-
-void MRGQwenSpeech(NSString *text, NSString *voice, NSString *instructions, void (^done)(NSData *, NSString *)) {
-    NSString *key = MRGKeychainGet(kQwen);
-    if (!key.length) { done(nil, @"Qwen: no DashScope key saved"); return; }
-    NSString *v = voice.length ? voice : MRGQwenVoice();
-    void (^fetch)(NSString *) = ^(NSString *url) {
-        // The answer is a link to the WAV (kept 24 hours): fetched right away.
-        [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:url] completionHandler:^(NSData *d, NSURLResponse *resp, NSError *e) {
-            NSInteger st = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
-            BOOL ok = d.length > 44 && st >= 200 && st < 300;
-            dispatch_async(dispatch_get_main_queue(), ^{ done(ok ? d : nil, ok ? nil : [NSString stringWithFormat:@"Qwen: couldn't download the audio (HTTP %ld)", (long)st]); });
-        }] resume];
-    };
-    BOOL instruct = instructions.length && ![D() boolForKey:@"mirage.dj.qwenNoInstruct"];
-    qwenCall(key, instruct ? @"qwen3-tts-instruct-flash" : @"qwen3-tts-flash", text, v, instruct ? instructions : nil, ^(NSString *url, NSInteger st, NSString *err) {
-        if (url) { fetch(url); return; }
-        if (instruct && (st == 400 || st == 403 || st == 404)) {
-            // The instruct model isn't open to every account or region: the plain model, without the style.
-            MRGDJLog(@"voice: Qwen instruct model refused (%@), using qwen3-tts-flash without the style", err);
-            if (st == 404 || [err.lowercaseString containsString:@"model"]) [D() setBool:YES forKey:@"mirage.dj.qwenNoInstruct"];
-            qwenCall(key, @"qwen3-tts-flash", text, v, nil, ^(NSString *u2, NSInteger s2, NSString *e2) { if (u2) fetch(u2); else done(nil, e2); });
-            return;
-        }
-        done(nil, err);
-    });
-}
-
-void MRGQwenSetKey(NSString *raw, void (^done)(BOOL, NSString *)) {
-    NSString *key = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (!key.length) { MRGKeychainSet(kQwen, nil); done(YES, @"DashScope key removed."); return; }
-    // Checked with a one-word synthesis on the plain model (a character or two of the quota).
-    qwenCall(key, @"qwen3-tts-flash", @"Hi.", @"Cherry", nil, ^(NSString *url, NSInteger st, NSString *err) {
-        if (!url) { done(NO, err); return; }
-        if (!MRGKeychainSet(kQwen, key)) { done(NO, @"Couldn't save the key on this phone."); return; }
-        [D() removeObjectForKey:@"mirage.dj.qwenNoInstruct"];
-        done(YES, @"DashScope key saved. Qwen voices are ready.");
-    });
 }

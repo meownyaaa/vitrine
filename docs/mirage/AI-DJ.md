@@ -2,6 +2,25 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.5.1 (free voices fixed, Vinyl stays, DJ bar out of the way)
+
+- **Free voices fixed.** 0.5.0 sent its messages before the websocket had opened and read any error as a refusal
+  ("refused the connection (HTTP 101)": 101 is the success code). The socket now has its own session, waits for the
+  upgrade, then sends speech.config and the SSML; when Microsoft closes it, the log has its close code and reason,
+  and it tries once more. Every preset now speaks with the free voices (an iPhone voice you picked stays).
+- **Preset voices** (Microsoft Edge, unofficial): Soft & Soothing Jenny, Soft & Close Ava (soft, slower, a touch lower,
+  quieter), Classic Whisper Ava Multilingual (slow, low and quiet: there's no real whisper), Playful Spark Emma
+  Multilingual (bright, a little faster and higher), Hype Guy, Late Night Christopher, Chill Narrator Brian, Classic
+  Andrew. Microsoft's free endpoint takes only speed, pitch and loudness; whisper/cheerful styles and pauses as
+  `<break>` are refused ("SSML is invalid"), so pauses are "...".
+- **Qwen removed** (its account needed a $1 card check). No preset sets up a Groq voice (Groq's need their terms accepted).
+- **Vinyl stays on.** 0.5.0 moved the cover's wrapper, and gave up when the lyric preview loaded into that wrapper a
+  second later. Now the cover itself is scaled (left alone while Spotify tilts it), and it's put back on every
+  layout pass of the cover and its cell, when the player opens and on track changes.
+- **DJ bar on Now Playing** no longer sits on the cover, the lyric line or the title: it goes in free space when
+  there is some, shows only while the DJ talks or picks, and for 4 seconds after a track change, and stays away while
+  the lyrics are open. The ✦ in the header opens the DJ (and Switch it up) any time.
+
 ## What's new in 0.5.0 (song requests, free voices, Addon Shop)
 
 - **Song requests.** "play orula by victor mendivil" (or "play orula") finds that exact track with a Spotify search
@@ -14,7 +33,7 @@ Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what 
 - **Free voices.** The default engine is now **Free (Microsoft Edge voices, unofficial)**: the read-aloud voices from
   Microsoft Edge, no key, no account. It is unofficial: Microsoft can change or block it at any time, it has no
   whisper or emotion styles, and if it fails the DJ says so and uses the iPhone voice.
-- **Qwen TTS** (Alibaba Cloud Model Studio, international/Singapore) with your own DashScope key. New accounts get a
+- (Removed in 0.5.1.) **Qwen TTS** (Alibaba Cloud Model Studio, international/Singapore) with your own DashScope key. New accounts get a
   free quota (10,000 characters for 90 days at the time of writing); after that it is about $0.10 per 10,000
   characters and **it bills automatically unless you turn on "Free quota only"** in the Model Studio console. Mirage
   uses the instruct model (style control) when the key allows it, else qwen3-tts-flash.

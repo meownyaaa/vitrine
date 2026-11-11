@@ -91,10 +91,10 @@ static NSString *sampleLine(void) {
 
 // "Who speaks", in the order shown: the free voices first.
 static NSArray<NSNumber *> *engineRows(void) {
-    return @[@(MRGVoiceEngineFree), @(MRGVoiceEngineQwen), @(MRGVoiceEngineEleven), @(MRGVoiceEngineProvider), @(MRGVoiceEnginePhone), @(MRGVoiceEngineOff)];
+    return @[@(MRGVoiceEngineFree), @(MRGVoiceEngineEleven), @(MRGVoiceEngineProvider), @(MRGVoiceEnginePhone), @(MRGVoiceEngineOff)];
 }
-// Voice lists with the same shape (id, name, detail): the free voices and Qwen.
-static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVoiceEngineFree ? MRGEdgeVoices() : e == MRGVoiceEngineQwen ? MRGQwenVoices() : nil; }
+// The free voices' list (id, name, detail).
+static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVoiceEngineFree ? MRGEdgeVoices() : nil; }
 
 // Sections: 0 presets, 1 engine, 2 sound (sliders, voice style, preview), 3 voices of the engine, 4 ElevenLabs key.
 // Sound rows by id: speed, pitch, warmth, breath, pause, style, [stability, similarity with ElevenLabs], preview.
@@ -139,10 +139,9 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
     if (s == 0) return MRGVoicePresets().count;
     if (s == 1) return engineRows().count;
     if (s == 2) return [self soundRows].count;
-    if (s == 4) return 2 + (MRGElevenHasKey() && MRGElevenNeedsAdd() ? 1 : 0);
+    if (s == 4) return 1 + (MRGElevenHasKey() && MRGElevenNeedsAdd() ? 1 : 0);
     switch (MRGVoiceGetEngine()) {
         case MRGVoiceEngineFree: return MRGEdgeVoices().count;
-        case MRGVoiceEngineQwen: return MRGQwenHasKey() ? MRGQwenVoices().count : 0;
         case MRGVoiceEnginePhone: return _phone.count + 1 + ([self personalVoiceAsk] ? 1 : 0);
         case MRGVoiceEngineProvider: return MRGProviderHasTTS(MRGAIProvider()) ? MAX((NSInteger)_provider.count, 1) : 0;
         case MRGVoiceEngineEleven: return MRGElevenHasKey() ? MAX((NSInteger)MRGElevenVoices().count, 1) : 0;
@@ -162,7 +161,6 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
     if (s == 4) return @"Keys";
     switch (MRGVoiceGetEngine()) {
         case MRGVoiceEngineFree: return @"Free voices (Microsoft Edge, unofficial; tap to hear)";
-        case MRGVoiceEngineQwen: return MRGQwenHasKey() ? @"Qwen voices (tap to hear)" : nil;
         case MRGVoiceEnginePhone: return @"iPhone voices, speaking now (tap to hear)";
         case MRGVoiceEngineProvider: return [NSString stringWithFormat:@"%@ voices (tap to hear)", MRGProviderName(MRGAIProvider())];
         case MRGVoiceEngineEleven: return @"Your ElevenLabs voices (tap to hear)";
@@ -180,11 +178,11 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
         if (_testLine.length) [f appendFormat:@"\n%@", _testLine];
         NSString *last = MRGVoiceSpeaker.shared.lastResult;
         if (last.length) [f appendFormat:@"\nLast test: %@", last];
-        [f appendString:@"\n\nA preset sets speed, pitch, warmth, breathiness, pauses, a voice style and a fitting voice for every engine, and speaks with Qwen when you've added a DashScope key, otherwise with the free voices (an engine you picked yourself below stays). It only changes the voice, never the music or the DJ's persona."];
+        [f appendString:@"\n\nA preset sets speed, pitch, warmth, breathiness, pauses, a voice style and a fitting voice for every engine, and speaks with the free voices (the iPhone voice stays if you picked it below). It only changes the voice, never the music or the DJ's persona."];
         return f;
     }
     if (s == 0) return @"A preset sets speed, pitch, warmth, breathiness, pauses, a voice style and a fitting voice for every engine. It only changes the voice, never the music or the DJ's persona. Change anything after and it becomes your own.";
-    if (s == 1) return @"Free: Microsoft Edge's read-aloud voices, no key and no account. It's unofficial, so Microsoft can change or block it; it follows speed, pitch and pauses, not the style words. If it fails, the iPhone voice speaks and the line above says why.\nQwen: Alibaba Cloud Model Studio (international / Singapore) with your DashScope key; follows the voice style (whispers too). A free quota for new accounts, then about $0.10 per 10,000 characters.\nElevenLabs and Qwen never swap to another voice when they fail: you see their error instead. AI provider voice: OpenAI, Gemini, xAI and Groq keys (Groq's needs its terms accepted in the Groq console).";
+    if (s == 1) return @"Free: Microsoft Edge's read-aloud voices, no key and no account. It's unofficial, so Microsoft can change or block it; it follows speed, pitch, loudness and pauses, not the style words (Microsoft's free voices have no whisper or emotion styles). If it fails, the iPhone voice speaks and the line above says why.\nElevenLabs never swaps to another voice when they fail: you see their error instead. AI provider voice: OpenAI, Gemini, xAI and Groq keys (Groq's needs its terms accepted in the Groq console).";
     if (s == 2) return @"Warmth, breathiness, pitch and Voice style are speaking instructions: OpenAI (gpt-4o-mini-tts) and Gemini voices follow them. iPhone voices use speed, pitch and pauses. ElevenLabs uses speed, pauses (as breaks), stability and similarity. xAI uses speed; Groq and xAI get pauses as ellipses.";
     if (s == 3 && MRGVoiceGetEngine() == MRGVoiceEnginePhone)
         return @"Want a better voice? iOS Settings → Accessibility → Spoken Content → Voices → English, and download an Enhanced or Premium voice (Ava, Zoe, Evan, Nathan…). It shows up here after. A Personal Voice you made in Accessibility can be used once you allow it.";
@@ -192,7 +190,7 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
         NSDictionary *n = MRGElevenNeedsAdd();
         return n[@"error"] ?: [NSString stringWithFormat:@"%@ isn't in your ElevenLabs voices yet. Mirage uses it by ID (works on paid ElevenLabs plans); if it fails, add it in ElevenLabs → Voice Library or tap Add to my ElevenLabs.", n[@"name"]];
     }
-    if (s == 4) return @"Optional keys. ElevenLabs: elevenlabs.io → Developers → API keys (library voices like Arabella need a paid plan through the API). DashScope (Qwen): Alibaba Cloud Model Studio, Singapore region → API keys. Keys stay in this phone's keychain; only the lines the DJ says are sent.";
+    if (s == 4) return @"Optional keys. ElevenLabs: elevenlabs.io → Developers → API keys (library voices like Arabella need a paid plan through the API). Keys stay in this phone's keychain; only the lines the DJ says are sent.";
     return nil;
 }
 
@@ -228,14 +226,14 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
     }
     if (ip.section == 1) {
         MRGVoiceEngine e = [engineRows()[ip.row] integerValue];
-        NSDictionary *titles = @{@(MRGVoiceEngineFree): @"Free voices", @(MRGVoiceEngineQwen): @"Qwen", @(MRGVoiceEngineEleven): @"ElevenLabs",
+        NSDictionary *titles = @{@(MRGVoiceEngineFree): @"Free voices", @(MRGVoiceEngineEleven): @"ElevenLabs",
                                  @(MRGVoiceEngineProvider): @"AI provider voice", @(MRGVoiceEnginePhone): @"iPhone voice", @(MRGVoiceEngineOff): @"Off (captions only)"};
-        NSDictionary *symbols = @{@(MRGVoiceEngineFree): @"gift.fill", @(MRGVoiceEngineQwen): @"waveform.circle.fill", @(MRGVoiceEngineEleven): @"waveform",
+        NSDictionary *symbols = @{@(MRGVoiceEngineFree): @"gift.fill", @(MRGVoiceEngineEleven): @"waveform",
                                   @(MRGVoiceEngineProvider): @"sparkles", @(MRGVoiceEnginePhone): @"iphone", @(MRGVoiceEngineOff): @"speaker.slash.fill"};
         BOOL enabled = e == MRGVoiceEngineFree || e == MRGVoiceEnginePhone || e == MRGVoiceEngineOff || (e == MRGVoiceEngineProvider && MRGProviderHasTTS(MRGAIProvider())) ||
-                       (e == MRGVoiceEngineEleven && MRGElevenHasKey()) || (e == MRGVoiceEngineQwen && MRGQwenHasKey());
+                       (e == MRGVoiceEngineEleven && MRGElevenHasKey());
         NSString *detail = e == MRGVoiceEngineFree ? @"no key · unofficial" : e == MRGVoiceEngineProvider && !MRGProviderHasTTS(MRGAIProvider()) ? @"not with this key"
-                         : (e == MRGVoiceEngineEleven && !MRGElevenHasKey()) || (e == MRGVoiceEngineQwen && !MRGQwenHasKey()) ? @"add a key below" : nil;
+                         : (e == MRGVoiceEngineEleven && !MRGElevenHasKey()) ? @"add a key below" : nil;
         UITableViewCell *c = [self cell:titles[@(e)] detail:detail symbol:symbols[@(e)]];
         c.accessoryType = engine == e ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         c.textLabel.alpha = enabled ? 1 : 0.4;
@@ -262,11 +260,6 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
         return c;
     }
     if (ip.section == 4 && ip.row == 1) {
-        UITableViewCell *c = [self cell:@"DashScope key (Qwen)" detail:MRGQwenHasKey() ? @"saved" : @"Add" symbol:@"key.fill"];
-        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        return c;
-    }
-    if (ip.section == 4 && ip.row == 2) {
         NSDictionary *n = MRGElevenNeedsAdd();
         UITableViewCell *c = [self cell:[NSString stringWithFormat:@"Add %@ to my ElevenLabs", n[@"name"] ?: @"this voice"] detail:nil symbol:@"plus.circle.fill"];
         c.textLabel.textColor = MRGAccent();
@@ -279,7 +272,7 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
     }
     if (listVoices(engine)) {
         NSDictionary *v = listVoices(engine)[ip.row];
-        NSString *chosen = engine == MRGVoiceEngineFree ? MRGEdgeVoice() : MRGQwenVoice();
+        NSString *chosen = MRGEdgeVoice();
         UITableViewCell *c = [self cell:v[@"name"] detail:v[@"detail"] symbol:nil];
         c.accessoryType = [chosen isEqualToString:v[@"id"]] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         return c;
@@ -363,8 +356,7 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
         else if ([row isEqualToString:@"style"]) [self editStyle];
         return;
     }
-    if (ip.section == 4 && ip.row == 1) { [self editQwenKey]; return; }
-    if (ip.section == 4 && ip.row == 2) {
+    if (ip.section == 4 && ip.row == 1) {
         NSDictionary *n = MRGElevenNeedsAdd();
         if (!n) { [t reloadData]; return; }
         MRGElevenAddShared(n[@"id"], n[@"name"], ^(BOOL ok, NSString *message) {
@@ -378,7 +370,7 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
     if (ip.section == 4) { [self editElevenKey]; return; }
     if (listVoices(engine)) {
         NSString *ident = listVoices(engine)[ip.row][@"id"];
-        if (engine == MRGVoiceEngineFree) MRGEdgeSetVoice(ident); else MRGQwenSetVoice(ident);
+        MRGEdgeSetVoice(ident);
         [t reloadData];
         [self preview:engine voice:ident];
         return;
@@ -442,32 +434,6 @@ static NSArray<NSDictionary *> *listVoices(MRGVoiceEngine e) { return e == MRGVo
         MRGVoiceMarkCustom();
         [self.tableView reloadData];
         [self preview:-1 voice:nil];
-    }]];
-    [self presentViewController:a animated:YES completion:nil];
-}
-
-- (void)editQwenKey {
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"DashScope key (Qwen)" message:@"Paste an Alibaba Cloud Model Studio API key from the Singapore (international) region. Mirage checks it with a one-word line." preferredStyle:UIAlertControllerStyleAlert];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f) {
-        f.placeholder = @"sk-…";
-        f.secureTextEntry = YES;
-        f.autocorrectionType = UITextAutocorrectionTypeNo;
-        f.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    }];
-    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    if (MRGQwenHasKey()) [a addAction:[UIAlertAction actionWithTitle:@"Remove key" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) {
-        MRGQwenSetKey(nil, ^(BOOL ok, NSString *m) { if (MRGVoiceGetEngine() == MRGVoiceEngineQwen) MRGVoiceSetEngine(MRGVoiceEngineFree); [self.tableView reloadData]; });
-    }]];
-    [a addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
-        NSString *key = a.textFields.firstObject.text;
-        if (!key.length) return;
-        [self.spinner startAnimating];
-        MRGQwenSetKey(key, ^(BOOL ok, NSString *message) {
-            [self.spinner stopAnimating];
-            if (ok) MRGVoiceChooseEngine(MRGVoiceEngineQwen);
-            [self.tableView reloadData];
-            [self alert:ok ? @"Ready" : @"Couldn't use that key" message:message];
-        });
     }]];
     [self presentViewController:a animated:YES completion:nil];
 }

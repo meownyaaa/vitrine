@@ -5,7 +5,7 @@
 //
 // Spotify's tree (from Vitrine's notes): CoverArtCellImpl > UIView > UIView > CoverArtTiltView (≥200pt in the player,
 // 40pt in the bar). Spotify gives the tilt view its own transform when the cover is inspected, so it is left alone:
-// the scale and shift go on the tilt view's wrapper when that wrapper holds only the cover, else nothing changes.
+// the scale and shift go on the tilt view itself, and only while Spotify isn't tilting it.
 // Every step checks the class and view it needs; when one is missing Now Playing stays stock.
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -120,6 +120,7 @@ static void MRGVinylLayout(UIView *cell);
     [self.layer addSublayer:_sheen];
     _turn = MRGVinylSecondsPerTurn();
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(settingsChanged) name:MRGSettingsChangedNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(trackChanged) name:MRGPlayerTrackChangedNotification object:nil];
     return self;
 }
 
@@ -224,6 +225,13 @@ static void MRGVinylLayout(UIView *cell);
     if (cell) [cell setNeedsLayout];
 }
 
+- (void)trackChanged {
+    _shownImage = nil;   // the next tick reads the new cover
+    _shownURL = nil;
+    UIView *cell = self.cell;
+    if (cell) [cell setNeedsLayout];
+}
+
 - (void)tick {
     @try {
         if (!self.window) return;
@@ -258,19 +266,30 @@ static void MRGVinylLayout(UIView *cell);
 
 #pragma mark - placing it
 
-// The view that gets scaled: the tilt view's wrapper when the cover is all it holds, so Spotify's own tilt transform
-// on the cover is never overwritten.
-static UIView *movable(UIView *tilt) {
-    UIView *w = tilt.superview;
-    if (!w || !w.superview) return nil;
-    for (UIView *s in w.subviews) if (s != tilt && !s.hidden && s.alpha > 0.01 && s.bounds.size.width > 40 && ![s isKindOfClass:MRGVinylView.class]) return nil;
-    return w;
+// 0.5.1: the scale and shift go on the tilt view itself. 0.5.0 moved the tilt view's wrapper, and only while the cover
+// was all the wrapper held: when the lyric preview loaded into that wrapper a second later, the wrapper no longer
+// qualified and Now Playing went back to stock. Spotify sets the tilt view's transform only while the cover is
+// inspected (press and tilt); then it is left alone and taken back once Spotify returns it to identity.
+static Class cellClass(void) {
+    static Class c;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ c = NSClassFromString(@"_TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl"); });
+    return c;
+}
+
+static void logState(NSString *state) {
+    static NSString *last;
+    if ([state isEqualToString:last]) return;
+    last = [state copy];
+    MRGDJLog(@"vinyl: %@", state);
 }
 
 static void restore(UIView *cell) {
     MRGVinylView *vinyl = objc_getAssociatedObject(cell, &kVinylKey);
     UIView *moved = objc_getAssociatedObject(cell, &kMovedKey);
-    if (moved) moved.transform = CGAffineTransformIdentity;
+    NSValue *mine = moved ? objc_getAssociatedObject(moved, &kMovedKey) : nil;
+    if (moved && mine && CGAffineTransformEqualToTransform(moved.transform, mine.CGAffineTransformValue)) moved.transform = CGAffineTransformIdentity;
+    if (moved) objc_setAssociatedObject(moved, &kMovedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [vinyl removeFromSuperview];
     objc_setAssociatedObject(cell, &kVinylKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(cell, &kMovedKey, nil, OBJC_ASSOCIATION_ASSIGN);
@@ -279,21 +298,22 @@ static void restore(UIView *cell) {
 static void MRGVinylLayout(UIView *cell) {
     @try {
         BOOL on = MRGAddonInstalled(@"vinyl");
-        if (!on) { if (objc_getAssociatedObject(cell, &kVinylKey) || objc_getAssociatedObject(cell, &kMovedKey)) restore(cell); return; }
+        if (!on) {
+            if (objc_getAssociatedObject(cell, &kVinylKey) || objc_getAssociatedObject(cell, &kMovedKey)) { restore(cell); logState(@"off, Now Playing is stock again"); }
+            return;
+        }
         UIView *tilt = findTilt(cell, 0);
-        UIView *box = tilt ? movable(tilt) : nil;
-        UIView *host = box.superview;
-        if (!box || !host) {
-            static dispatch_once_t once;
-            dispatch_once(&once, ^{ MRGDJLog(@"vinyl: player cover not found (tilt %@, wrapper %@), Now Playing stays stock", tilt ? @"yes" : @"no", box ? @"yes" : @"no"); });
-            if (objc_getAssociatedObject(cell, &kVinylKey)) restore(cell);
+        UIView *host = tilt.superview;
+        if (!tilt || !host) {
+            // A pass before Spotify has sized the cover: the next pass (or the record's own timer) tries again.
+            if (objc_getAssociatedObject(cell, &kVinylKey)) logState([NSString stringWithFormat:@"cover gone from a cell (tilt %@), waiting for it", tilt ? @"without a parent" : @"not found"]);
             return;
         }
         UIView *before = objc_getAssociatedObject(cell, &kMovedKey);
-        if (before && before != box) restore(cell);
+        if (before && before != tilt) restore(cell);
 
-        CGSize S = box.bounds.size;
-        CGPoint C = box.center;
+        CGSize S = tilt.bounds.size;
+        CGPoint C = tilt.center;
         CGFloat side = MIN(S.width, S.height);
         if (side < 150) return;
         CGFloat cover = side * kCoverScale, disc = cover * 0.95, peek = cover * 0.36;
@@ -302,15 +322,19 @@ static void MRGVinylLayout(UIView *cell) {
         CGFloat whole = cover + peek;
         CGFloat coverX = C.x - dir * (whole / 2 - cover / 2);
         CGAffineTransform t = CGAffineTransformMake(kCoverScale, 0, 0, kCoverScale, coverX - C.x, 0);
-        if (!CGAffineTransformEqualToTransform(box.transform, t)) box.transform = t;
-        objc_setAssociatedObject(cell, &kMovedKey, box, OBJC_ASSOCIATION_ASSIGN);
+        NSValue *mine = objc_getAssociatedObject(tilt, &kMovedKey);
+        CGAffineTransform now = tilt.transform;
+        BOOL ours = CGAffineTransformIsIdentity(now) || (mine && CGAffineTransformEqualToTransform(now, mine.CGAffineTransformValue));
+        if (ours && CATransform3DIsAffine(tilt.layer.transform)) {
+            if (!CGAffineTransformEqualToTransform(now, t)) tilt.transform = t;
+            objc_setAssociatedObject(tilt, &kMovedKey, [NSValue valueWithCGAffineTransform:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }   // else Spotify is tilting the cover right now: left alone, taken back on a later pass
+        objc_setAssociatedObject(cell, &kMovedKey, tilt, OBJC_ASSOCIATION_ASSIGN);
 
         MRGVinylView *vinyl = objc_getAssociatedObject(cell, &kVinylKey);
         if (!vinyl) {
             vinyl = [MRGVinylView new];
             objc_setAssociatedObject(cell, &kVinylKey, vinyl, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            static dispatch_once_t once;
-            dispatch_once(&once, ^{ MRGDJLog(@"vinyl: on, cover %.0fpt in %@, record on the %@", side, NSStringFromClass(host.class), dir > 0 ? @"right" : @"left"); });
         }
         vinyl.cover = tilt;
         vinyl.cell = cell;
@@ -318,13 +342,20 @@ static void MRGVinylLayout(UIView *cell) {
         if (!CGRectEqualToRect(vinyl.bounds, bounds)) vinyl.bounds = bounds;
         CGPoint center = CGPointMake(coverX + dir * (cover / 2 + peek - disc / 2), C.y);
         if (!CGPointEqualToPoint(vinyl.center, center)) vinyl.center = center;
-        NSUInteger vi = [host.subviews indexOfObjectIdenticalTo:vinyl], bi = [host.subviews indexOfObjectIdenticalTo:box];
-        if (vinyl.superview != host || vi == NSNotFound || vi > bi) [host insertSubview:vinyl belowSubview:box];
-        vinyl.hidden = box.hidden || box.alpha < 0.01;
+        NSUInteger vi = [host.subviews indexOfObjectIdenticalTo:vinyl], ti = [host.subviews indexOfObjectIdenticalTo:tilt];
+        if (vinyl.superview != host || vi == NSNotFound || vi > ti) [host insertSubview:vinyl belowSubview:tilt];
+        vinyl.hidden = tilt.hidden || tilt.alpha < 0.01;
+        logState([NSString stringWithFormat:@"on, cover %.0fpt in %@, record on the %@", side, NSStringFromClass(host.class), dir > 0 ? @"right" : @"left"]);
     } @catch (NSException *e) {
         MRGDJLog(@"vinyl: layout threw %@, Now Playing stays stock", e.reason);
         @try { restore(cell); } @catch (NSException *e2) {}
     }
+}
+
+static UIView *cellAbove(UIView *v) {
+    Class c = cellClass();
+    for (UIView *p = v.superview; p && c; p = p.superview) if ([p isKindOfClass:c]) return p;
+    return nil;
 }
 
 %group MRGVinylHooks
@@ -333,9 +364,24 @@ static void MRGVinylLayout(UIView *cell) {
     %orig;
     MRGVinylLayout((UIView *)self);
 }
+- (void)didMoveToWindow {
+    %orig;
+    if (((UIView *)self).window) MRGVinylLayout((UIView *)self);
+}
+%end
+
+// The cover's own passes (a new size, a new image, Vitrine's paused shrink) put it back right away.
+%hook _TtC35CreativeWorkCommons_CoverArtTiltKit16CoverArtTiltView
+- (void)layoutSubviews {
+    %orig;
+    UIView *tilt = (UIView *)self;
+    if (tilt.bounds.size.width < 200 || !MRGAddonInstalled(@"vinyl")) return;
+    UIView *cell = cellAbove(tilt);
+    if (cell) MRGVinylLayout(cell);
+}
 %end
 %end
 
 %ctor {
-    if (NSClassFromString(@"_TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl") && tiltClass()) %init(MRGVinylHooks);
+    if (cellClass() && tiltClass()) %init(MRGVinylHooks);
 }

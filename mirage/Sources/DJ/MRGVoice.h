@@ -8,7 +8,7 @@ typedef NS_ENUM(NSInteger, MRGVoiceEngine) {
     MRGVoiceEngineProvider = 1,   // the AI provider's speech (OpenAI, Gemini, xAI, Groq)
     MRGVoiceEngineEleven = 2,     // ElevenLabs, with its own key
     MRGVoiceEngineOff = 3,
-    MRGVoiceEngineQwen = 4,       // Qwen3-TTS (Alibaba Cloud Model Studio), with the listener's DashScope key
+    // 4 was Qwen (0.5.0); removed in 0.5.1 and read as Free.
     MRGVoiceEngineFree = 5,       // Microsoft Edge's read-aloud voices: free, no key, unofficial (the default)
 };
 NSString *MRGVoiceEngineName(MRGVoiceEngine e);

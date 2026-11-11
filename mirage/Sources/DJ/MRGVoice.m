@@ -12,7 +12,7 @@ NSString *const MRGVoiceResultNotification = @"MirageVoiceResult";
 MRGVoiceEngine MRGVoiceGetEngine(void) {
     id v = [D() objectForKey:@"mirage.dj.voiceEngine"];
     if (![v isKindOfClass:NSNumber.class]) v = nil;
-    if (v) { NSInteger e = [v integerValue]; return (e >= 0 && e <= 5) ? e : MRGVoiceEngineFree; }
+    if (v) { NSInteger e = [v integerValue]; return (e >= 0 && e <= 5 && e != 4) ? e : MRGVoiceEngineFree; }   // 4 was Qwen (0.5.0), gone in 0.5.1
     // 0.2.x kept 0 phone, 1 provider, 2 off; nothing saved: the free voices.
     id old = [D() objectForKey:@"mirage.dj.voice"];
     if (![old isKindOfClass:NSNumber.class]) return MRGVoiceEngineFree;
@@ -25,7 +25,6 @@ NSString *MRGVoiceEngineName(MRGVoiceEngine e) {
         case MRGVoiceEnginePhone: return @"iPhone";
         case MRGVoiceEngineProvider: return MRGProviderName(MRGAIProvider());
         case MRGVoiceEngineEleven: return @"ElevenLabs";
-        case MRGVoiceEngineQwen: return @"Qwen";
         case MRGVoiceEngineFree: return @"Free (Microsoft Edge voices, unofficial)";
         default: return @"Off";
     }
@@ -96,22 +95,22 @@ NSArray<NSDictionary *> *MRGVoicePresets(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         list = @[
-            @{@"edge": @"en-US-JennyNeural", @"qwen": @"Seren", @"id": @"soothing", @"name": @"Soft & Soothing", @"blurb": @"Slow, warm, soothing female voice, close and calm.",
+            @{@"edge": @"en-US-JennyNeural", @"edgeVol": @0.9, @"id": @"soothing", @"name": @"Soft & Soothing", @"blurb": @"Slow, warm, soothing female voice, close and calm.",
               @"speed": @0.85, @"pitch": @0.92, @"warmth": @0.95, @"breath": @0.55, @"pause": @0.6, @"persona": @6,
               @"style": @"A soft, soothing, warm female voice: slow, gentle and intimate, close to the mic, calm and reassuring, with a hint of a smile. Never loud, never rushed.",
               @"openai": @"shimmer", @"gemini": @"Achernar", @"groq": @"diana", @"xai": @"ara",
               @"eleven": @[@"Sarah", @"Lily", @"Matilda", @"Alice", @"Jessica", @"Laura", @"Charlotte", @"Rachel"], @"gender": @"female",
               @"stability": @0.7, @"similarity": @0.8, @"elStyle": @0.15},
             // Alex's pick for his first sample: ElevenLabs "Ivy" (low, soft, slow, close-mic, calm, a bit caring and bossy).
-            @{@"edge": @"en-US-AvaMultilingualNeural", @"qwen": @"Serena", @"id": @"velvet", @"name": @"Soft & Close", @"blurb": @"Low, soft and slow, right at the mic; calm, caring, a little bossy (ElevenLabs Ivy).",
-              @"speed": @0.82, @"pitch": @0.95, @"warmth": @1.0, @"breath": @0.6, @"pause": @0.8,
+            @{@"edge": @"en-US-AvaNeural", @"edgeVol": @0.85, @"id": @"velvet", @"name": @"Soft & Close", @"blurb": @"Low, soft and slow, right at the mic; calm, caring, a little bossy (ElevenLabs Ivy).",
+              @"speed": @0.84, @"pitch": @0.95, @"warmth": @1.0, @"breath": @0.6, @"pause": @0.8,
               @"style": @"A low, soft, slow female voice right at the mic: calm and caring with a gentle, slightly bossy confidence, short phrases with unhurried pauses, a narrow calm melody and a soft smile. Never loud, never bright, never rushed.",
               @"openai": @"shimmer", @"gemini": @"Sulafat", @"groq": @"autumn", @"xai": @"ara",
               @"elevenID": @"KhpuFRhu6kfNvpalcYtz", @"elevenIDName": @"Ivy",
               @"phone": @[@"Ava", @"Zoe", @"Samantha"], @"gender": @"female",
               @"stability": @0.75, @"similarity": @0.8, @"elStyle": @0.1},
             // ElevenLabs' classic "Nicole": a soft, breathy, intimate whisper.
-            @{@"edge": @"en-US-AvaMultilingualNeural", @"qwen": @"Mia", @"id": @"whisper", @"name": @"Classic Whisper", @"blurb": @"Soft, breathy, intimate whisper (ElevenLabs Nicole).",
+            @{@"edge": @"en-US-AvaMultilingualNeural", @"edgeVol": @0.7, @"edgeSpeed": @0.8, @"edgePitch": @0.94, @"id": @"whisper", @"name": @"Classic Whisper", @"blurb": @"Soft, breathy, intimate whisper (ElevenLabs Nicole).",
               @"speed": @0.88, @"pitch": @1.05, @"warmth": @0.8, @"breath": @0.95, @"pause": @0.6,
               @"style": @"Whisper the whole time: a soft, breathy, intimate ASMR whisper, light and high, very close to the mic, calm, gentle and hushed, every word unhurried. Never use a normal speaking voice.",
               @"openai": @"shimmer", @"gemini": @"Achernar", @"groq": @"diana", @"xai": @"ara",
@@ -119,32 +118,32 @@ NSArray<NSDictionary *> *MRGVoicePresets(void) {
               @"phone": @[@"Zoe", @"Ava", @"Samantha"], @"gender": @"female",
               @"stability": @0.6, @"similarity": @0.8, @"elStyle": @0.0},
             // Modeled on Alex's second sample (ElevenLabs "Arabella" v3 demo: young bright American female, very expressive).
-            @{@"edge": @"en-US-EmmaMultilingualNeural", @"qwen": @"Bella", @"id": @"spark", @"name": @"Playful Spark", @"blurb": @"Young, bright and super expressive; laughs, whispers, big swings.",
-              @"speed": @1.05, @"pitch": @1.03, @"warmth": @0.6, @"breath": @0.25, @"pause": @0.35, @"persona": @0,
+            @{@"edge": @"en-US-EmmaMultilingualNeural", @"edgeVol": @1.0, @"id": @"spark", @"name": @"Playful Spark", @"blurb": @"Young, bright and super expressive; laughs, whispers, big swings.",
+              @"speed": @1.06, @"pitch": @1.05, @"warmth": @0.6, @"breath": @0.25, @"pause": @0.35, @"persona": @0,
               @"style": @"A young, bright American female voice, playful and very expressive: big pitch swings, quick excited delivery that drops to a conspiratorial whisper, little laughs and giggles, dramatic pauses before the reveal, sounds amazed by everything, like a friend gushing about a song.",
               @"openai": @"coral", @"gemini": @"Zephyr", @"groq": @"hannah", @"xai": @"eve",
               @"elevenID": @"Z3R5wn05IrDiVCyEkUrK", @"elevenIDName": @"Arabella",
               @"phone": @[@"Zoe", @"Ava", @"Nicky"], @"gender": @"female",
               @"stability": @0.3, @"similarity": @0.75, @"elStyle": @0.55},
-            @{@"edge": @"en-US-GuyNeural", @"qwen": @"Ryan", @"id": @"hype", @"name": @"Hype Radio DJ", @"blurb": @"Loud, fast, big energy.",
+            @{@"edge": @"en-US-GuyNeural", @"id": @"hype", @"name": @"Hype Radio DJ", @"blurb": @"Loud, fast, big energy.",
               @"speed": @1.15, @"pitch": @1.05, @"warmth": @0.4, @"breath": @0.0, @"pause": @0.15, @"persona": @2,
               @"style": @"A high-energy radio DJ: punchy, excited and confident, big smile, hits the artist names hard, fast pace.",
               @"openai": @"ash", @"gemini": @"Fenrir", @"groq": @"troy", @"xai": @"rex",
               @"eleven": @[@"Liam", @"Charlie", @"Will", @"Chris", @"Josh", @"Adam"], @"gender": @"male",
               @"stability": @0.3, @"similarity": @0.75, @"elStyle": @0.45},
-            @{@"edge": @"en-US-ChristopherNeural", @"qwen": @"Andre", @"id": @"latenight", @"name": @"Late Night", @"blurb": @"Low, smooth and slow, like 2 a.m. radio.",
+            @{@"edge": @"en-US-ChristopherNeural", @"id": @"latenight", @"name": @"Late Night", @"blurb": @"Low, smooth and slow, like 2 a.m. radio.",
               @"speed": @0.9, @"pitch": @0.93, @"warmth": @0.85, @"breath": @0.35, @"pause": @0.5, @"persona": @1,
               @"style": @"A late-night radio host: low, smooth, velvety and relaxed, like it's 2 a.m.; slow, intimate, quiet confidence.",
               @"openai": @"onyx", @"gemini": @"Algieba", @"groq": @"daniel", @"xai": @"leo",
               @"eleven": @[@"Brian", @"Daniel", @"George", @"Bill", @"Eric"], @"gender": @"male",
               @"stability": @0.6, @"similarity": @0.8, @"elStyle": @0.2},
-            @{@"edge": @"en-US-BrianMultilingualNeural", @"qwen": @"Neil", @"id": @"narrator", @"name": @"Chill Narrator", @"blurb": @"Calm, clear and easygoing.",
+            @{@"edge": @"en-US-BrianMultilingualNeural", @"id": @"narrator", @"name": @"Chill Narrator", @"blurb": @"Calm, clear and easygoing.",
               @"speed": @0.95, @"pitch": @1.0, @"warmth": @0.6, @"breath": @0.1, @"pause": @0.4, @"persona": @4,
               @"style": @"A calm, clear, friendly narrator: easygoing and even, like a documentary voice-over by someone who loves music.",
               @"openai": @"sage", @"gemini": @"Callirrhoe", @"groq": @"austin", @"xai": @"sal",
               @"eleven": @[@"George", @"Alice", @"Matilda", @"Brian"], @"gender": @"",
               @"stability": @0.6, @"similarity": @0.75, @"elStyle": @0.1},
-            @{@"edge": @"en-US-AndrewMultilingualNeural", @"qwen": @"Ethan", @"id": @"classic", @"name": @"Classic Spotify DJ", @"blurb": @"Friendly, casual, like Spotify's own DJ.",
+            @{@"edge": @"en-US-AndrewNeural", @"id": @"classic", @"name": @"Classic Spotify DJ", @"blurb": @"Friendly, casual, like Spotify's own DJ.",
               @"speed": @1.0, @"pitch": @1.0, @"warmth": @0.6, @"breath": @0.0, @"pause": @0.3, @"persona": @0,
               @"style": @"A friendly, casual music host like Spotify's DJ: upbeat but relaxed, warm and genuine, conversational, like a friend who knows your taste.",
               @"openai": @"ash", @"gemini": @"Puck", @"groq": @"troy", @"xai": @"eve",
@@ -184,7 +183,9 @@ NSString *MRGVoiceApplyPreset(NSString *pid) {
     NSMutableArray *what = [NSMutableArray array];
     MRGProvider prov = MRGAIProvider();
     NSString *key = prov == MRGProviderOpenAI ? @"openai" : prov == MRGProviderGemini ? @"gemini" : prov == MRGProviderGroq ? @"groq" : prov == MRGProviderXAI ? @"xai" : nil;
-    if (key && MRGProviderHasTTS(prov)) { MRGVoiceSetProviderVoice(p[key]); [what addObject:[NSString stringWithFormat:@"%@ voice %@", MRGProviderName(prov), p[key]]]; }
+    // Groq's voices (Orpheus) need their terms accepted in the Groq console first (HTTP 400 otherwise), so a preset
+    // never sets one up; the provider voice stays what the listener picked.
+    if (key && prov != MRGProviderGroq && MRGProviderHasTTS(prov)) { MRGVoiceSetProviderVoice(p[key]); [what addObject:[NSString stringWithFormat:@"%@ voice %@", MRGProviderName(prov), p[key]]]; }
     BOOL elevenSet = NO;
     [D() removeObjectForKey:@"mirage.dj.elevenNeedsAdd"];
     NSDictionary *override = [D() dictionaryForKey:[@"mirage.dj.presetVoice." stringByAppendingString:pid]];
@@ -194,15 +195,17 @@ NSString *MRGVoiceApplyPreset(NSString *pid) {
         if ([override[@"name"] isKindOfClass:NSString.class]) m[@"elevenIDName"] = override[@"name"];
         p = m;
     }
-    // The free and Qwen voices of the preset.
-    if ([p[@"edge"] length]) { MRGEdgeSetVoice(p[@"edge"]); [what addObject:[@"Free voice " stringByAppendingString:[[p[@"edge"] componentsSeparatedByString:@"-"].lastObject stringByReplacingOccurrencesOfString:@"MultilingualNeural" withString:@""]]]; }
-    if ([p[@"qwen"] length]) { MRGQwenSetVoice(p[@"qwen"]); if (MRGQwenHasKey()) [what addObject:[@"Qwen " stringByAppendingString:p[@"qwen"]]]; }
-    // Which engine speaks: one the listener picked by hand (ElevenLabs, Qwen, their provider, the iPhone) stays; otherwise
-    // Qwen with a DashScope key, else the free voices. (0.4.4 switched to ElevenLabs, which a free ElevenLabs plan refuses
-    // for library voices: HTTP 402.)
+    // The free voice of the preset, with its own loudness (and for the whisper a slower, lower read: Microsoft's free
+    // voices have no whisper style, so it is quiet, slow and a touch lower instead).
+    if ([p[@"edge"] length]) { MRGEdgeSetVoice(p[@"edge"]); [what addObject:[@"Free voice " stringByAppendingString:[[p[@"edge"] componentsSeparatedByString:@"-"].lastObject stringByReplacingOccurrencesOfString:@"Neural" withString:@""]]]; }
+    [D() setDouble:p[@"edgeVol"] ? [p[@"edgeVol"] doubleValue] : 1.0 forKey:@"mirage.dj.edgeVolume"];
+    if (p[@"edgeSpeed"]) MRGVoiceSetSpeed([p[@"edgeSpeed"] doubleValue]);
+    if (p[@"edgePitch"]) MRGVoiceSetPitch([p[@"edgePitch"] doubleValue]);
+    // 0.5.1: every preset speaks with the free voices; only the iPhone voice, if the listener picked it, stays (paid
+    // engines failed for Alex: ElevenLabs' free plan refuses library voices, Qwen wants a $1 card check).
     MRGVoiceEngine current = MRGVoiceGetEngine();
-    BOOL keep = [D() boolForKey:@"mirage.dj.engineChosen"] && current != MRGVoiceEngineOff && current != MRGVoiceEngineFree;
-    if (!keep) MRGVoiceSetEngine(MRGQwenHasKey() ? MRGVoiceEngineQwen : MRGVoiceEngineFree);
+    BOOL keep = [D() boolForKey:@"mirage.dj.engineChosen"] && current == MRGVoiceEnginePhone;
+    if (!keep) MRGVoiceSetEngine(MRGVoiceEngineFree);
     if ([p[@"elevenID"] length] && MRGKeychainGet(kEleven).length) {
         // The voice Alex picked, by its ID: never silently swapped for another. Shared-library voices that aren't in his
         // ElevenLabs voices yet work by ID on paid plans; otherwise the voice page offers "Add to my ElevenLabs".
@@ -528,10 +531,6 @@ static NSString *engineSummary(void) {
             for (NSDictionary *v in MRGEdgeVoices()) if ([v[@"id"] isEqualToString:vid]) return [@"Free · " stringByAppendingString:v[@"name"]];
             return [@"Free · " stringByAppendingString:vid];
         }
-        case MRGVoiceEngineQwen: {
-            if (!MRGQwenHasKey()) return @"Qwen · no key";
-            return [@"Qwen · " stringByAppendingString:MRGQwenVoice()];
-        }
         case MRGVoiceEngineEleven: {
             if (!MRGElevenHasKey()) break;
             NSString *vid = MRGElevenVoice();
@@ -638,19 +637,14 @@ static NSString *withPauses(NSString *text, NSString *mark) {
         if (audio) {
             self->_audio = [[AVAudioPlayer alloc] initWithData:audio error:nil];
             self->_audio.delegate = self;
-            if (self->_audio && [self->_audio play]) { [self report:[NSString stringWithFormat:@"✓ %@ spoke", engine == MRGVoiceEngineEleven ? engineSummary() : what] failed:NO]; if (started) started(); return; }
+            BOOL playing = self->_audio && [self->_audio play];
+            if (playing && [what hasPrefix:@"Free"]) { static BOOL said; if (!said) { said = YES; MRGDJLog(@"voice: %@ spoke (%lu KB from Microsoft's free voice)", what, (unsigned long)(audio.length / 1024)); } }
+            if (playing) { [self report:[NSString stringWithFormat:@"✓ %@ spoke", engine == MRGVoiceEngineEleven ? engineSummary() : what] failed:NO]; if (started) started(); return; }
         }
         if (engine == MRGVoiceEngineEleven) {
             // Never Samantha in place of an ElevenLabs voice the listener picked: the error is shown instead.
             NSString *msg = error ?: @"ElevenLabs sent audio that couldn't be played";
             MRGDJLog(@"voice: ElevenLabs failed, not falling back to the phone voice: %@", msg);
-            [self report:[@"✗ " stringByAppendingString:msg] failed:YES];
-            [self finish];
-            return;
-        }
-        if (engine == MRGVoiceEngineQwen) {
-            NSString *msg = error ?: @"Qwen sent audio that couldn't be played";
-            MRGDJLog(@"voice: Qwen failed, not falling back: %@", msg);
             [self report:[@"✗ " stringByAppendingString:msg] failed:YES];
             [self finish];
             return;
@@ -671,8 +665,13 @@ static NSString *withPauses(NSString *text, NSString *mark) {
             });
             return;
         }
-        MRGDJLog(@"voice: %@ failed (%@), phone voice instead", what, error ?: @"unplayable audio");
-        [self report:[NSString stringWithFormat:@"✗ %@ failed (%@); the iPhone voice spoke instead", what, error ?: @"unplayable audio"] failed:YES];
+        // The free voice failing: the iPhone voice speaks, and the reason is shown (and logged) once, not on every line.
+        static NSString *shownReason;
+        NSString *why = error ?: @"unplayable audio";
+        if ([what hasPrefix:@"Free"] && [shownReason isEqualToString:why]) { [self speakOnPhone:text voice:nil started:started]; return; }
+        if ([what hasPrefix:@"Free"]) shownReason = [why copy];
+        MRGDJLog(@"voice: %@ failed (%@), phone voice instead", what, why);
+        [self report:[NSString stringWithFormat:@"✗ %@ failed (%@); the iPhone voice spoke instead", what, why] failed:YES];
         [self speakOnPhone:text voice:nil started:started];
     };
     double pause = MRGVoicePause();
@@ -688,12 +687,6 @@ static NSString *withPauses(NSString *text, NSString *mark) {
         NSString *v = voice ?: MRGEdgeVoice(), *vname = v;
         for (NSDictionary *x in MRGEdgeVoices()) if ([x[@"id"] isEqualToString:v]) vname = x[@"name"];
         MRGEdgeSpeech(said, v, speed, MRGVoicePitch(), ^(NSData *audio, NSString *error) { play(audio, error, [@"Free · " stringByAppendingString:vname]); });
-        return;
-    }
-    if (engine == MRGVoiceEngineQwen) {
-        if (!MRGQwenHasKey()) { [self report:@"✗ Qwen is picked but there's no DashScope key" failed:YES]; [self finish]; return; }
-        NSString *v = voice ?: MRGQwenVoice();
-        MRGQwenSpeech(text, v, MRGVoiceInstructions(), ^(NSData *audio, NSString *error) { play(audio, error, [@"Qwen · " stringByAppendingString:v]); });
         return;
     }
     if (engine == MRGVoiceEngineEleven && MRGElevenHasKey()) {
