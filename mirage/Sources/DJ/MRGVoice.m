@@ -6,6 +6,7 @@
 
 static NSUserDefaults *D(void) { return NSUserDefaults.standardUserDefaults; }
 static NSString *const kEleven = @"elevenlabs-key";
+NSString *const MRGVoiceResultNotification = @"MirageVoiceResult";
 
 MRGVoiceEngine MRGVoiceGetEngine(void) {
     id v = [D() objectForKey:@"mirage.dj.voiceEngine"];
@@ -173,7 +174,17 @@ NSString *MRGVoiceApplyPreset(NSString *pid) {
     if (key && MRGProviderHasTTS(prov)) { MRGVoiceSetProviderVoice(p[key]); [what addObject:[NSString stringWithFormat:@"%@ voice %@", MRGProviderName(prov), p[key]]]; }
     BOOL elevenSet = NO;
     [D() removeObjectForKey:@"mirage.dj.elevenNeedsAdd"];
+    NSDictionary *override = [D() dictionaryForKey:[@"mirage.dj.presetVoice." stringByAppendingString:pid]];
+    if ([override[@"id"] isKindOfClass:NSString.class]) {
+        NSMutableDictionary *m = [p mutableCopy];
+        m[@"elevenID"] = override[@"id"];
+        if ([override[@"name"] isKindOfClass:NSString.class]) m[@"elevenIDName"] = override[@"name"];
+        p = m;
+    }
     if ([p[@"elevenID"] length] && MRGKeychainGet(kEleven).length) {
+        // 0.4.3 wrote the ElevenLabs voice but left the engine on the iPhone voice, so these presets spoke as Samantha.
+        // A preset built around an ElevenLabs voice now makes ElevenLabs the engine.
+        MRGVoiceSetEngine(MRGVoiceEngineEleven);
         // The voice Alex picked, by its ID: never silently swapped for another. Shared-library voices that aren't in his
         // ElevenLabs voices yet work by ID on paid plans; otherwise the voice page offers "Add to my ElevenLabs".
         NSString *vid = p[@"elevenID"], *vname = p[@"elevenIDName"] ?: vid;
@@ -274,14 +285,32 @@ static NSMutableURLRequest *elevenRequest(NSString *path, NSString *key, NSDicti
     return r;
 }
 
+// ElevenLabs' errors are {"detail": {"type", "code", "status", "message"}} (or a string / validation list). The text
+// says what it means in plain words, then ElevenLabs' own message, status code and code; the full body is logged.
 static NSString *elevenError(NSInteger status, NSData *data, NSError *error) {
-    if (error) return error.localizedDescription;
+    if (error) return [@"ElevenLabs: " stringByAppendingString:error.localizedDescription ?: @"network error"];
     id j = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-    NSString *detail = nil;
+    NSString *detail = nil, *code = nil;
     id d = [j isKindOfClass:NSDictionary.class] ? j[@"detail"] : nil;
-    if ([d isKindOfClass:NSDictionary.class] && [d[@"message"] isKindOfClass:NSString.class]) detail = d[@"message"];
-    else if ([d isKindOfClass:NSString.class]) detail = d;
-    return [NSString stringWithFormat:@"ElevenLabs answered HTTP %ld%@", (long)status, detail ? [@": " stringByAppendingString:detail] : @"."];
+    if ([d isKindOfClass:NSDictionary.class]) {
+        if ([d[@"message"] isKindOfClass:NSString.class]) detail = d[@"message"];
+        if ([d[@"status"] isKindOfClass:NSString.class]) code = d[@"status"];
+        else if ([d[@"code"] isKindOfClass:NSString.class]) code = d[@"code"];
+    } else if ([d isKindOfClass:NSString.class]) detail = d;
+    else if ([d isKindOfClass:NSArray.class] && [[d firstObject] isKindOfClass:NSDictionary.class] && [[d firstObject][@"msg"] isKindOfClass:NSString.class]) detail = [d firstObject][@"msg"];
+    NSString *body = data.length ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+    MRGDJLog(@"voice: ElevenLabs HTTP %ld body: %@", (long)status, body.length > 600 ? [body substringToIndex:600] : body);
+    NSString *lower = [[NSString stringWithFormat:@"%@ %@", code ?: @"", detail ?: @""] lowercaseString];
+    NSString *meaning = nil;
+    if (status == 402 || [lower containsString:@"paid_plan"] || [lower containsString:@"free_users"] || [lower containsString:@"payment"])
+        meaning = @"library voices need a paid ElevenLabs plan through the API";
+    else if (status == 404 || [lower containsString:@"voice_not_found"] || [lower containsString:@"not found"])
+        meaning = @"this voice isn't available to your account (add it in ElevenLabs → Voice Library, or it was retired)";
+    else if (status == 401) meaning = @"the key was refused (check it, and its Text to Speech permission)";
+    else if (status == 429) meaning = @"too many requests or out of credits for now";
+    else if ([lower containsString:@"quota"] || [lower containsString:@"credits"]) meaning = @"out of credits";
+    return [NSString stringWithFormat:@"ElevenLabs: %@%@ (HTTP %ld%@)", meaning ?: @"request refused", detail ? [@". " stringByAppendingString:detail] : @"",
+            (long)status, code ? [@", " stringByAppendingString:code] : @""];
 }
 
 BOOL MRGElevenHasKey(void) { return MRGKeychainGet(kEleven).length > 0; }
@@ -346,39 +375,84 @@ NSDictionary *MRGElevenNeedsAdd(void) {
     return n;
 }
 
-// Adds a shared Voice Library voice to the user's ElevenLabs voices with their own key: GET /v1/shared-voices?search=
-// finds its public_owner_id, then POST /v1/voices/add/{public_owner_id}/{voice_id}. Only when the user taps.
-void MRGElevenAddShared(NSString *voiceID, NSString *name, void (^done)(BOOL ok, NSString *message)) {
+// GET /v1/shared-voices (needs a key; filters are refused when logged out): the library's voices for a search.
+static void sharedSearch(NSString *query, NSString *extra, void (^done)(NSArray<NSDictionary *> *voices, NSString *error)) {
     NSString *key = MRGKeychainGet(kEleven);
-    if (!key.length || !voiceID.length) { done(NO, @"Add your ElevenLabs key first."); return; }
-    NSString *q = [name ?: voiceID stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
-    NSString *path = [NSString stringWithFormat:@"/v1/shared-voices?page_size=100&search=%@", q];
+    if (!key.length) { done(nil, @"Add your ElevenLabs key first."); return; }
+    NSString *q = [query stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet] ?: @"";
+    NSString *path = [NSString stringWithFormat:@"/v1/shared-voices?page_size=100&search=%@%@", q, extra ?: @""];
     [[NSURLSession.sharedSession dataTaskWithRequest:elevenRequest(path, key, nil) completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
         NSInteger status = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
         id j = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        NSString *owner = nil;
+        NSMutableArray *out = [NSMutableArray array];
         id list = [j isKindOfClass:NSDictionary.class] ? j[@"voices"] : nil;
-        for (id v in [list isKindOfClass:NSArray.class] ? list : @[])
-            if ([v isKindOfClass:NSDictionary.class] && [v[@"voice_id"] isEqual:voiceID] && [v[@"public_owner_id"] isKindOfClass:NSString.class]) owner = v[@"public_owner_id"];
+        for (id v in [list isKindOfClass:NSArray.class] ? list : @[]) if ([v isKindOfClass:NSDictionary.class] && [v[@"voice_id"] isKindOfClass:NSString.class]) [out addObject:v];
+        NSString *err = (error || status < 200 || status >= 300) ? elevenError(status, data, error) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{ done(err ? nil : out, err); });
+    }] resume];
+}
+
+// POST /v1/voices/add/{public_user_id}/{voice_id} with {"new_name"}: the voice goes into the account's voices.
+static void addShared(NSString *owner, NSString *voiceID, NSString *name, void (^done)(BOOL ok, NSString *message)) {
+    NSString *key = MRGKeychainGet(kEleven);
+    NSString *addPath = [NSString stringWithFormat:@"/v1/voices/add/%@/%@", owner, voiceID];
+    [[NSURLSession.sharedSession dataTaskWithRequest:elevenRequest(addPath, key, @{@"new_name": name ?: voiceID}) completionHandler:^(NSData *d2, NSURLResponse *r2, NSError *e2) {
+        NSInteger s2 = [r2 isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)r2).statusCode : 0;
+        BOOL ok = !e2 && s2 >= 200 && s2 < 300;
+        NSString *msg = ok ? [NSString stringWithFormat:@"%@ was added to your ElevenLabs voices.", name ?: voiceID] : elevenError(s2, d2, e2);
+        MRGDJLog(@"voice: add %@ (%@) → HTTP %ld %@", name, voiceID, (long)s2, ok ? @"added" : msg);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!ok) { done(NO, msg); return; }
+            [D() removeObjectForKey:@"mirage.dj.elevenNeedsAdd"];
+            MRGElevenRefreshVoices(^(NSArray<NSDictionary *> *voices, NSString *err) { done(YES, msg); });
+        });
+    }] resume];
+}
+
+// Adds a shared Voice Library voice to the user's ElevenLabs voices with their own key: finds its public_owner_id with
+// a shared-voices search for its name, then adds it. Only on the user's own choice (a preset tap or the Add button).
+void MRGElevenAddShared(NSString *voiceID, NSString *name, void (^done)(BOOL ok, NSString *message)) {
+    if (!MRGElevenHasKey() || !voiceID.length) { done(NO, @"Add your ElevenLabs key first."); return; }
+    sharedSearch(name ?: voiceID, nil, ^(NSArray<NSDictionary *> *voices, NSString *error) {
+        if (error) { done(NO, error); return; }
+        NSString *owner = nil;
+        for (NSDictionary *v in voices) if ([v[@"voice_id"] isEqualToString:voiceID] && [v[@"public_owner_id"] isKindOfClass:NSString.class]) owner = v[@"public_owner_id"];
         if (!owner) {
-            NSString *msg = status >= 200 && status < 300 ? [NSString stringWithFormat:@"Couldn't find %@ in ElevenLabs' Voice Library. Add it on elevenlabs.io → Voices → Explore.", name ?: voiceID] : elevenError(status, data, error);
-            MRGDJLog(@"voice: add %@ (%@): %@", name, voiceID, msg);
-            dispatch_async(dispatch_get_main_queue(), ^{ done(NO, msg); });
+            NSString *msg = [NSString stringWithFormat:@"%@ (%@) isn't in ElevenLabs' Voice Library (retired or private).", name ?: voiceID, voiceID];
+            MRGDJLog(@"voice: add: %@", msg);
+            done(NO, msg);
             return;
         }
-        NSString *addPath = [NSString stringWithFormat:@"/v1/voices/add/%@/%@", owner, voiceID];
-        [[NSURLSession.sharedSession dataTaskWithRequest:elevenRequest(addPath, key, @{@"new_name": name ?: voiceID}) completionHandler:^(NSData *d2, NSURLResponse *r2, NSError *e2) {
-            NSInteger s2 = [r2 isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)r2).statusCode : 0;
-            BOOL ok = !e2 && s2 >= 200 && s2 < 300;
-            NSString *msg = ok ? [NSString stringWithFormat:@"%@ was added to your ElevenLabs voices.", name ?: voiceID] : elevenError(s2, d2, e2);
-            MRGDJLog(@"voice: add %@ (%@) → HTTP %ld %@", name, voiceID, (long)s2, ok ? @"added" : msg);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (!ok) { done(NO, msg); return; }
-                [D() removeObjectForKey:@"mirage.dj.elevenNeedsAdd"];
-                MRGElevenRefreshVoices(^(NSArray<NSDictionary *> *voices, NSString *err) { done(YES, msg); });
+        addShared(owner, voiceID, name, done);
+    });
+}
+
+// Before a preset's first line: if its ElevenLabs voice isn't in the account, add it (the tap is the user's choice).
+// Nicole (piTKgcLEGmPE4e6mEKli) is one of ElevenLabs' old default voices, which are being retired: when the library
+// doesn't have her, the closest current whisper voice from a shared-voices search takes her place for that preset.
+void MRGVoicePreparePreset(NSString *pid, void (^done)(NSString *message)) {
+    NSDictionary *p = nil;
+    for (NSDictionary *x in MRGVoicePresets()) if ([x[@"id"] isEqualToString:pid]) p = x;
+    NSDictionary *need = MRGElevenNeedsAdd();
+    if (!p || !need || !MRGElevenHasKey() || MRGVoiceGetEngine() != MRGVoiceEngineEleven) { done(nil); return; }
+    MRGElevenAddShared(need[@"id"], need[@"name"], ^(BOOL ok, NSString *message) {
+        if (ok || ![pid isEqualToString:@"whisper"] || ![message containsString:@"isn't in ElevenLabs' Voice Library"]) { done(message); return; }
+        sharedSearch(@"whisper", @"&gender=female&language=en", ^(NSArray<NSDictionary *> *voices, NSString *error) {
+            NSDictionary *pick = nil;
+            for (NSDictionary *v in voices) {
+                NSString *text = [[NSString stringWithFormat:@"%@ %@ %@", v[@"name"] ?: @"", v[@"description"] ?: @"", v[@"descriptive"] ?: @""] lowercaseString];
+                if ([v[@"public_owner_id"] isKindOfClass:NSString.class] && ([text containsString:@"whisper"] || [text containsString:@"asmr"])) { pick = v; break; }
+            }
+            if (!pick) { done([message stringByAppendingFormat:@" No current whisper voice found to replace her%@.", error ? [@" (" stringByAppendingFormat:@"%@)", error] : @""]); return; }
+            NSString *name = [pick[@"name"] isKindOfClass:NSString.class] ? pick[@"name"] : @"Whisper";
+            MRGDJLog(@"voice: Nicole is retired; Classic Whisper uses %@ (%@) from the Voice Library instead", name, pick[@"voice_id"]);
+            [D() setObject:@{@"id": pick[@"voice_id"], @"name": name} forKey:@"mirage.dj.presetVoice.whisper"];
+            MRGVoiceApplyPreset(pid);
+            addShared(pick[@"public_owner_id"], pick[@"voice_id"], name, ^(BOOL ok2, NSString *m2) {
+                done([NSString stringWithFormat:@"Nicole is retired; using %@ instead. %@", name, m2 ?: @""]);
             });
-        }] resume];
-    }] resume];
+        });
+    });
 }
 
 static void elevenSpeech(NSString *text, NSString *voice, double speed, void (^done)(NSData *, NSString *)) {
@@ -433,8 +507,10 @@ static NSString *engineSummary(void) {
         case MRGVoiceEngineEleven: {
             if (!MRGElevenHasKey()) break;
             NSString *vid = MRGElevenVoice();
-            for (NSDictionary *v in MRGElevenVoices()) if ([v[@"id"] isEqualToString:vid]) return [@"ElevenLabs · " stringByAppendingString:v[@"name"]];
-            return @"ElevenLabs";
+            for (NSDictionary *v in MRGElevenVoices()) if ([v[@"id"] isEqualToString:vid]) return [@"ElevenLabs · " stringByAppendingString:[v[@"name"] componentsSeparatedByString:@" - "].firstObject];
+            NSDictionary *need = [D() dictionaryForKey:@"mirage.dj.elevenNeedsAdd"];
+            if ([need[@"id"] isEqual:vid] && [need[@"name"] isKindOfClass:NSString.class]) return [NSString stringWithFormat:@"ElevenLabs · %@ (by ID)", need[@"name"]];
+            return vid.length ? [NSString stringWithFormat:@"ElevenLabs · %@", vid] : @"ElevenLabs";
         }
         default: break;
     }
@@ -497,6 +573,13 @@ static NSString *withPauses(NSString *text, NSString *mark) {
 
 - (BOOL)isSpeaking { return _synth.isSpeaking || _audio.isPlaying; }
 
+// The last line's result ("✓ ElevenLabs · Arabella spoke" or "✗ ElevenLabs: … (HTTP 402, …)"), for the voice page and
+// the DJ sheet.
+- (void)report:(NSString *)result failed:(BOOL)failed {
+    _lastResult = [result copy];
+    [NSNotificationCenter.defaultCenter postNotificationName:MRGVoiceResultNotification object:self userInfo:@{@"result": result ?: @"", @"failed": @(failed)}];
+}
+
 - (void)finish {
     void (^f)(void) = _finished;
     _finished = nil;
@@ -522,9 +605,18 @@ static NSString *withPauses(NSString *text, NSString *mark) {
         if (audio) {
             self->_audio = [[AVAudioPlayer alloc] initWithData:audio error:nil];
             self->_audio.delegate = self;
-            if (self->_audio && [self->_audio play]) { if (started) started(); return; }
+            if (self->_audio && [self->_audio play]) { [self report:[NSString stringWithFormat:@"✓ %@ spoke", engine == MRGVoiceEngineEleven ? MRGVoiceSummary() : what] failed:NO]; if (started) started(); return; }
+        }
+        if (engine == MRGVoiceEngineEleven) {
+            // Never Samantha in place of an ElevenLabs voice the listener picked: the error is shown instead.
+            NSString *msg = error ?: @"ElevenLabs sent audio that couldn't be played";
+            MRGDJLog(@"voice: ElevenLabs failed, not falling back to the phone voice: %@", msg);
+            [self report:[@"✗ " stringByAppendingString:msg] failed:YES];
+            [self finish];
+            return;
         }
         MRGDJLog(@"voice: %@ failed (%@), phone voice instead", what, error ?: @"unplayable audio");
+        [self report:[NSString stringWithFormat:@"✗ %@ failed (%@); the iPhone voice spoke instead", what, error ?: @"unplayable audio"] failed:YES];
         [self speakOnPhone:text voice:nil started:started];
     };
     double pause = MRGVoicePause();
@@ -540,6 +632,13 @@ static NSString *withPauses(NSString *text, NSString *mark) {
         elevenSpeech(said, voice ?: MRGElevenVoice(), speed, ^(NSData *audio, NSString *error) { play(audio, error, @"ElevenLabs"); });
         return;
     }
+    if (engine == MRGVoiceEngineEleven && !MRGElevenHasKey()) {
+        [self report:@"✗ ElevenLabs is picked but there's no ElevenLabs key" failed:YES];
+        [self finish];
+        return;
+    }
+    AVSpeechSynthesisVoice *pv = (engine == MRGVoiceEnginePhone && voice ? [AVSpeechSynthesisVoice voiceWithIdentifier:voice] : nil) ?: MRGVoicePhoneVoice();
+    [self report:[NSString stringWithFormat:@"✓ iPhone · %@ spoke", pv.name ?: @"voice"] failed:NO];
     [self speakOnPhone:text voice:(engine == MRGVoiceEnginePhone ? voice : nil) started:started];
 }
 

@@ -2,6 +2,22 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.4.4 (ElevenLabs presets)
+
+- **Why Arabella sounded like Samantha**: picking a preset wrote the ElevenLabs voice but never switched the engine to
+  ElevenLabs, so the iPhone voice (Samantha) kept speaking; and when ElevenLabs refused a line, Mirage quietly spoke it
+  with the iPhone voice. Shared Voice Library voices also need a paid ElevenLabs plan through the API (free keys get
+  HTTP 402 `paid_plan_required`; only premade voices work for free).
+- Presets built on an ElevenLabs voice now switch the engine to ElevenLabs. If ElevenLabs refuses, nothing is spoken by
+  the phone instead: the DJ sheet and the voice page show ElevenLabs' error in plain words with its status and code
+  (and the full response body goes to the log).
+- Picking such a preset adds its voice to your ElevenLabs voices when it isn't there yet (`GET /v1/shared-voices`, then
+  `POST /v1/voices/add/{public_user_id}/{voice_id}` with `new_name`), then tests it. Nicole is one of ElevenLabs' old
+  default voices being retired; if the library no longer has her, Classic Whisper takes the closest current female
+  whisper voice from a library search.
+- The Presets section says what is speaking now ("ElevenLabs · Arabella") and the last test's result ("✓ … spoke" or
+  "✗ <the exact error>").
+
 ## What's new in 0.4.3 (bug fixes)
 
 - **Crash when tapping a song** ("Assertion failure: tracks, SPTPlayerQueueWrapperImpl.m:174"): Spotify's queue wrapper

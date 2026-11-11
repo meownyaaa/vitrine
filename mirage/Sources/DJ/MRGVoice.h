@@ -59,9 +59,13 @@ void MRGElevenAddShared(NSString *voiceID, NSString *name, void (^done)(BOOL ok,
 // A short summary for the settings row ("Ava (Premium)", "OpenAI · ash", "Off").
 NSString *MRGVoiceSummary(void);
 
+extern NSString *const MRGVoiceResultNotification;   // userInfo: result, failed
+// A preset's ElevenLabs voice missing from the account is added (only call on the user's tap); done(nil) if nothing to do.
+void MRGVoicePreparePreset(NSString *presetID, void (^done)(NSString *message));
 @interface MRGVoiceSpeaker : NSObject
 + (instancetype)shared;
 @property (nonatomic, readonly, getter=isSpeaking) BOOL speaking;
+@property (nonatomic, readonly, copy) NSString *lastResult;   // "✓ … spoke" or "✗ <exact error>"
 // Says `text` with the current settings; `engine`/`voice` override them for previews (pass -1 / nil to use settings).
 - (void)speak:(NSString *)text engine:(NSInteger)engine voice:(NSString *)voice started:(void (^)(void))started finished:(void (^)(void))finished;
 - (void)stop;

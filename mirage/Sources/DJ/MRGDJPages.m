@@ -93,6 +93,7 @@ static NSString *sampleLine(void) {
 @implementation MRGVoicePageController {
     NSArray<AVSpeechSynthesisVoice *> *_phone;
     NSArray<NSDictionary *> *_provider;
+    NSString *_testLine;   // what happened adding a preset's voice
 }
 
 - (void)viewDidLoad {
@@ -102,6 +103,13 @@ static NSString *sampleLine(void) {
     _provider = @[];
     if (MRGProviderHasTTS(MRGAIProvider())) MRGAIProviderVoices(^(NSArray<NSDictionary *> *voices) { self->_provider = voices ?: @[]; [self.tableView reloadData]; });
     if (MRGElevenHasKey()) MRGElevenRefreshVoices(^(NSArray *v, NSString *e) { [self.tableView reloadData]; });
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(voiceResult:) name:MRGVoiceResultNotification object:nil];
+}
+
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+
+- (void)voiceResult:(NSNotification *)n {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (self.isViewLoaded) [self.tableView reloadData]; });
 }
 
 - (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; [MRGVoiceSpeaker.shared stop]; }
@@ -143,7 +151,7 @@ static NSString *sampleLine(void) {
     if (s == 2) return MRGVoicePresetID() ? @"Sound" : @"Sound (custom)";
     if (s == 4) return @"ElevenLabs";
     switch (MRGVoiceGetEngine()) {
-        case MRGVoiceEnginePhone: return @"Voices on this iPhone (tap to hear)";
+        case MRGVoiceEnginePhone: return @"iPhone voices, speaking now (tap to hear)";
         case MRGVoiceEngineProvider: return [NSString stringWithFormat:@"%@ voices (tap to hear)", MRGProviderName(MRGAIProvider())];
         case MRGVoiceEngineEleven: return @"Your ElevenLabs voices (tap to hear)";
         default: return nil;
@@ -155,6 +163,14 @@ static NSString *sampleLine(void) {
 }
 
 - (NSString *)mrg_footerIn:(UITableView *)t section:(NSInteger)s {
+    if (s == 0) {
+        NSMutableString *f = [NSMutableString stringWithFormat:@"Speaking now: %@", MRGVoiceSummary()];
+        if (_testLine.length) [f appendFormat:@"\n%@", _testLine];
+        NSString *last = MRGVoiceSpeaker.shared.lastResult;
+        if (last.length) [f appendFormat:@"\nLast test: %@", last];
+        [f appendString:@"\n\nA preset sets speed, pitch, warmth, breathiness, pauses, a voice style and a fitting voice for every engine; presets built on an ElevenLabs voice switch to ElevenLabs. It only changes the voice, never the music or the DJ's persona."];
+        return f;
+    }
     if (s == 0) return @"A preset sets speed, pitch, warmth, breathiness, pauses, a voice style and a fitting voice for every engine. It only changes the voice, never the music or the DJ's persona. Change anything after and it becomes your own.";
     if (s == 1) return @"AI provider voice works with OpenAI, Gemini, xAI and Groq keys and costs a little per line on your provider's bill. If a network voice fails, the phone's voice speaks instead.";
     if (s == 2) return @"Warmth, breathiness, pitch and Voice style are speaking instructions: OpenAI (gpt-4o-mini-tts) and Gemini voices follow them. iPhone voices use speed, pitch and pauses. ElevenLabs uses speed, pauses (as breaks), stability and similarity. xAI uses speed; Groq and xAI get pauses as ellipses.";
@@ -285,8 +301,22 @@ static NSString *sampleLine(void) {
     if (ip.section == 0) {
         NSDictionary *p = MRGVoicePresets()[ip.row];
         NSString *picked = MRGVoiceApplyPreset(p[@"id"]);
-        [t reloadData];
         if (picked) MRGDJLog(@"voice: preset picked %@", picked);
+        _testLine = nil;
+        if (MRGElevenNeedsAdd() && MRGVoiceGetEngine() == MRGVoiceEngineEleven) {
+            // Picking the preset is the choice: its library voice is added to his ElevenLabs voices, then tested.
+            _testLine = [NSString stringWithFormat:@"Adding %@ to your ElevenLabs voices…", MRGElevenNeedsAdd()[@"name"] ?: @"the voice"];
+            [t reloadData];
+            [self.spinner startAnimating];
+            MRGVoicePreparePreset(p[@"id"], ^(NSString *message) {
+                [self.spinner stopAnimating];
+                self->_testLine = message;
+                [self.tableView reloadData];
+                [self preview:-1 voice:nil];
+            });
+            return;
+        }
+        [t reloadData];
         [self preview:-1 voice:nil];
         return;
     }

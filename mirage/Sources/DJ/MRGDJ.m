@@ -230,7 +230,21 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode, BOOL *plain
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(trackChanged:) name:MRGPlayerTrackChangedNotification object:nil];
     // Spotify's queue can change under the set (the listener edits it, a play wipes it): checked every 25 s while a set is on.
     [NSTimer scheduledTimerWithTimeInterval:25 target:self selector:@selector(syncTick) userInfo:nil repeats:YES];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(voiceResult:) name:MRGVoiceResultNotification object:nil];
     return self;
+}
+
+// An ElevenLabs line that failed is shown on the DJ sheet with ElevenLabs' own error (never spoken as Samantha).
+- (void)voiceResult:(NSNotification *)n {
+    if (![n.userInfo[@"failed"] boolValue]) return;
+    NSString *r = n.userInfo[@"result"];
+    if (![r isKindOfClass:NSString.class] || ![r containsString:@"ElevenLabs"]) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_error = [[r stringByReplacingOccurrencesOfString:@"✗ " withString:@""] copy];
+        if (self->_speaking) [self setSpeaking:NO line:nil];
+        MRGDuckMusic(NO);
+        [self changed];
+    });
 }
 
 - (void)changed { [NSNotificationCenter.defaultCenter postNotificationName:MRGDJChangedNotification object:self]; }
