@@ -16,7 +16,7 @@
 #import "MRGBackgroundView.h"
 #import <objc/runtime.h>
 
-static char kBackgroundKey, kClearedKey, kOriginalColorKey;
+static char kBackgroundKey, kClearedKey, kOriginalColorKey, kDarkOnlyKey;
 
 static BOOL isCleared(UIView *v) { return objc_getAssociatedObject(v, &kClearedKey) != nil; }
 
@@ -24,7 +24,9 @@ static BOOL isVisibleColor(UIColor *c) { return c && CGColorGetAlpha(c.CGColor) 
 
 // Called on every layout pass of the host, so a color Spotify (or Vitrine) sets again later is taken
 // off at the next pass and remembered as the one to put back. No UIView-wide setBackgroundColor: hook.
+static BOOL sg_anyCleared;
 static void clearView(UIView *v) {
+    sg_anyCleared = YES;
     UIColor *c = v.backgroundColor;
     if (!isCleared(v)) {
         objc_setAssociatedObject(v, &kOriginalColorKey, c ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -62,7 +64,11 @@ static void clearDarkFill(UIView *v) {
     if (!v || [v isKindOfClass:UIVisualEffectView.class] || [v isKindOfClass:UIImageView.class]) return;
     UIColor *c = v.backgroundColor;
     if (!isDarkFill(c)) return;
-    if (!isCleared(v)) objc_setAssociatedObject(v, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    sg_anyCleared = YES;
+    if (!isCleared(v)) {
+        objc_setAssociatedObject(v, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(v, &kDarkOnlyKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     objc_setAssociatedObject(v, &kOriginalColorKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.backgroundColor = UIColor.clearColor;
 }
@@ -80,11 +86,16 @@ static void clearCell(UIView *cell) {
     if (content != cell) clearDarkFill(content);
     // The cell-sized fills inside it (row containers, tile plates), two levels down.
     CGSize size = cell.bounds.size;
+    // Three levels: Library's cells are swipeable containers with the row or card a level further in.
     for (UIView *a in content.subviews) {
-        if (a.bounds.size.width < size.width * 0.9 || a.bounds.size.height < size.height * 0.9) continue;
+        if (a.bounds.size.width < size.width * 0.9 || a.bounds.size.height < size.height * 0.8) continue;
         clearDarkFill(a);
-        for (UIView *b in a.subviews)
-            if (b.bounds.size.width >= size.width * 0.9 && b.bounds.size.height >= size.height * 0.9) clearDarkFill(b);
+        for (UIView *b in a.subviews) {
+            if (b.bounds.size.width < size.width * 0.9 || b.bounds.size.height < size.height * 0.8) continue;
+            clearDarkFill(b);
+            for (UIView *c in b.subviews)
+                if (c.bounds.size.width >= size.width * 0.9 && c.bounds.size.height >= size.height * 0.8) clearDarkFill(c);
+        }
     }
 }
 
@@ -123,6 +134,7 @@ static void restoreView(UIView *v) {
     if (!isCleared(v)) return;
     id original = objc_getAssociatedObject(v, &kOriginalColorKey);
     objc_setAssociatedObject(v, &kClearedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(v, &kDarkOnlyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.backgroundColor = original == NSNull.null ? nil : original;
     if ([v isKindOfClass:UICollectionView.class]) ((UICollectionView *)v).backgroundView.alpha = 1;
     if ([v isKindOfClass:UITableView.class]) ((UITableView *)v).backgroundView.alpha = 1;
@@ -350,11 +362,124 @@ static void scheduleListClear(UIScrollView *list, BOOL afterAnimation) {
     }
 }
 
+// A page-sized list that is not tagged yet (the grid and the list can be separate collection views, and the
+// new one comes in after the page's last walk) is adopted on its own layout pass, once per size.
+static char kCheckedSizeKey;
+static void adoptListIfPage(UIScrollView *list) {
+    if (!sg_taggedLists || isTaggedList(list) || !list.window || !MRGClearPages()) return;
+    NSValue *checked = objc_getAssociatedObject(list, &kCheckedSizeKey);
+    if (checked && CGSizeEqualToSize(checked.CGSizeValue, list.bounds.size)) return;
+    objc_setAssociatedObject(list, &kCheckedSizeKey, [NSValue valueWithCGSize:list.bounds.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIView *host = backgroundHostOf(list);
+    if (!host || list.bounds.size.width < host.bounds.size.width * 0.9 || list.bounds.size.height < host.bounds.size.height * 0.4) return;
+    clearView(list);
+    tagList(list);
+    clearCells(list);
+}
+
+// The cell a view belongs to, if that cell sits in a tagged list (cells are the list's direct subviews).
+static UIView *cellInTaggedList(UIView *view) {
+    UIView *v = view;
+    for (int i = 0; v && i < 8; i++, v = v.superview) {
+        UIView *list = v.superview;
+        if (([list isKindOfClass:UICollectionView.class] || [list isKindOfClass:UITableView.class]) &&
+            ([v isKindOfClass:UICollectionReusableView.class] || [v isKindOfClass:UITableViewCell.class] ||
+             [v isKindOfClass:UITableViewHeaderFooterView.class]))
+            return isTaggedList(list) ? v : nil;
+    }
+    return nil;
+}
+
+static BOOL isDarkCG(CGColorRef color) {
+    if (!color || CGColorGetAlpha(color) <= 0.9) return NO;
+    size_t n = CGColorGetNumberOfComponents(color);
+    const CGFloat *c = CGColorGetComponents(color);
+    if (!c || n < 2) return NO;
+    CGFloat hi = 0;
+    for (size_t i = 0; i + 1 < n; i++) hi = MAX(hi, c[i]);
+    return hi < 0.22;
+}
+
+static char kCellPendingKey;
+static void scheduleCellClear(UIView *cell) {
+    if (objc_getAssociatedObject(cell, &kCellPendingKey)) return;
+    objc_setAssociatedObject(cell, &kCellPendingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weakCell = cell;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIView *c = weakCell;
+        if (!c) return;
+        objc_setAssociatedObject(c, &kCellPendingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (cellInTaggedList(c) == c) clearCell(c);
+    });
+}
+
+// The paint itself. Grid/list switches, reuse and Spotify's cell configuration paint cells after any pass of
+// ours, which is why the list stayed black until a scroll. So while any list is tagged:
+//  - a view Mirage cleared keeps its paint off: a new color is remembered as the one to put back;
+//  - an opaque near-black paint inside a tagged list's cell is dropped if it is the cell, its content or
+//    background view, or a view about the cell's size; a view not sized yet gets its cell cleared right after.
+// Anything else is painted as asked, so artwork placeholders, badges and every other screen are untouched.
+
+static BOOL dropsPaint(CALayer *layer, CGColorRef color) {
+    if (!color || !sg_anyCleared) return NO;
+    UIView *view = (UIView *)layer.delegate;
+    if (![view isKindOfClass:UIView.class] || view.layer != layer) return NO;
+    if (isCleared(view) && CGColorGetAlpha(color) > 0.01) {
+        // A cell's fill was cleared for being near-black; a reused cell painted a real color keeps it.
+        if (objc_getAssociatedObject(view, &kDarkOnlyKey) && !isDarkCG(color)) {
+            objc_setAssociatedObject(view, &kClearedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(view, &kDarkOnlyKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            return NO;
+        }
+        objc_setAssociatedObject(view, &kOriginalColorKey, [UIColor colorWithCGColor:color], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return YES;
+    }
+    if (!sg_taggedLists || !isDarkCG(color)) return NO;
+    if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UIVisualEffectView.class]) return NO;
+    UIView *cell = cellInTaggedList(view);
+    if (!cell) return NO;
+    CGSize cs = cell.bounds.size, vs = view.bounds.size;
+    BOOL sized = cs.width > 0 && vs.width > 0;
+    BOOL cellish = view == cell || view.superview == cell ||
+                   (sized && vs.width >= cs.width * 0.9 && vs.height >= cs.height * 0.8);
+    if (!cellish) {
+        if (!sized) {
+            if (NSThread.isMainThread) scheduleCellClear(cell);
+            else { __weak UIView *weakCell = cell; dispatch_async(dispatch_get_main_queue(), ^{ if (weakCell) scheduleCellClear(weakCell); }); }
+        }
+        return NO;
+    }
+    objc_setAssociatedObject(view, &kClearedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &kDarkOnlyKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, &kOriginalColorKey, [UIColor colorWithCGColor:color], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return YES;
+}
+
 %group MRGLists
+%hook CALayer
+- (void)setBackgroundColor:(CGColorRef)color {
+    if (dropsPaint(self, color)) color = UIColor.clearColor.CGColor;
+    %orig(color);
+}
+%end
+
+// A cell clears itself as it comes on screen or takes its place in a new layout, scroll or not.
+%hook UICollectionReusableView
+- (void)didMoveToWindow { %orig; if (self.window && sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); }
+- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)attributes {
+    %orig;
+    if (sg_taggedLists && cellInTaggedList(self) == self) clearCell(self);
+}
+%end
+%hook UITableViewCell
+- (void)didMoveToWindow { %orig; if (self.window && sg_taggedLists && cellInTaggedList(self) == self) clearCell(self); }
+%end
+
 %hook UICollectionView
 - (void)layoutSubviews {
     %orig;
     if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
+    else adoptListIfPage(self);
 }
 - (void)reloadData { %orig; scheduleListClear(self, NO); }
 - (void)setCollectionViewLayout:(UICollectionViewLayout *)layout animated:(BOOL)animated {
@@ -384,6 +509,7 @@ static void scheduleListClear(UIScrollView *list, BOOL afterAnimation) {
 - (void)layoutSubviews {
     %orig;
     if (isTaggedList(self)) { clearCells(self); scheduleListClear(self, NO); }
+    else adoptListIfPage(self);
 }
 - (void)reloadData { %orig; scheduleListClear(self, NO); }
 %end
