@@ -275,6 +275,8 @@ static NSDictionary *artistOut(NSDictionary *it) {
     NSString *img = artistImage(it);
     if (img) d[@"image"] = img;
     if ([it[@"popularity"] isKindOfClass:NSNumber.class]) d[@"popularity"] = it[@"popularity"];
+    id followers = [it[@"followers"] isKindOfClass:NSDictionary.class] ? it[@"followers"][@"total"] : nil;
+    if ([followers isKindOfClass:NSNumber.class]) d[@"followers"] = followers;
     if ([it[@"genres"] isKindOfClass:NSArray.class]) {
         NSMutableArray *g = [NSMutableArray array];
         for (id x in it[@"genres"]) if ([x isKindOfClass:NSString.class]) [g addObject:x];

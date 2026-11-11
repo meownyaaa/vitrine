@@ -328,7 +328,59 @@ static NSString *longDate(NSDate *d) {
     if ([type isEqualToString:@"playlist"]) return [self playlist:c];
     if ([type isEqualToString:@"confirm_delete"]) return [self confirm:i];
     if ([type isEqualToString:@"list"]) return [self list:c];
+    if ([type isEqualToString:@"info"]) return [self info:c[@"info"]];
     return nil;
+}
+
+// Artist / song facts (MRGInfo): picture, name, numbers, genres, Wikipedia or web summary, top tracks, sources.
+- (UIView *)info:(NSDictionary *)info {
+    if (![info isKindOfClass:NSDictionary.class]) return nil;
+    BOOL artist = info[@"name"] != nil;
+    UIImageView *pic = art(64, artist, artist ? @"person.fill" : @"music.note");
+    loadInto(pic, info[@"image"]);
+    UILabel *cap = label(11, UIFontWeightBold, MRGAccent(), 1);
+    cap.text = artist ? @"ARTIST" : @"SONG";
+    UILabel *name = label(18, UIFontWeightBold, UIColor.whiteColor, 2);
+    name.text = artist ? info[@"name"] : [NSString stringWithFormat:@"%@ — %@", info[@"title"] ?: @"", info[@"artist"] ?: @""];
+    NSMutableArray *bits = [NSMutableArray array];
+    if (info[@"monthlyListeners"]) [bits addObject:[NSString stringWithFormat:@"%@ monthly listeners", info[@"monthlyListeners"]]];
+    if ([info[@"followers"] isKindOfClass:NSNumber.class]) {
+        double f = [info[@"followers"] doubleValue];
+        [bits addObject:f >= 1e6 ? [NSString stringWithFormat:@"%.1fM followers", f / 1e6] : f >= 1e3 ? [NSString stringWithFormat:@"%.0fK followers", f / 1e3] : [NSString stringWithFormat:@"%.0f followers", f]];
+    }
+    if (!artist && info[@"album"]) [bits addObject:info[@"album"]];
+    if (!artist && [info[@"released"] length] >= 4) [bits addObject:[info[@"released"] substringToIndex:4]];
+    if ([info[@"popularity"] isKindOfClass:NSNumber.class]) [bits addObject:[NSString stringWithFormat:@"popularity %@/100", info[@"popularity"]]];
+    UILabel *stats = label(12, UIFontWeightMedium, kDim(), 2);
+    stats.text = [bits componentsJoinedByString:@" · "];
+    UILabel *genres = label(12, UIFontWeightRegular, kDim(), 1);
+    genres.text = [info[@"genres"] isKindOfClass:NSArray.class] ? [info[@"genres"] componentsJoinedByString:@", "] : nil;
+    UIStackView *texts = [[UIStackView alloc] initWithArrangedSubviews:@[cap, name, stats, genres]];
+    texts.axis = UILayoutConstraintAxisVertical;
+    texts.spacing = 2;
+    UIStackView *head = [[UIStackView alloc] initWithArrangedSubviews:@[pic, texts]];
+    head.spacing = 14;
+    head.alignment = UIStackViewAlignmentCenter;
+    NSMutableArray *rows = [NSMutableArray arrayWithObject:head];
+    NSString *about = info[@"wiki"][@"extract"] ?: info[@"web"][@"text"];
+    if ([about isKindOfClass:NSString.class] && about.length) {
+        UILabel *a = label(13, UIFontWeightRegular, UIColor.whiteColor, 6);
+        a.text = about;
+        [rows addObject:a];
+    }
+    NSArray *top = [info[@"topTracks"] isKindOfClass:NSArray.class] ? info[@"topTracks"] : nil;
+    for (NSUInteger i = 0; i < MIN(top.count, (NSUInteger)3); i++) if ([top[i] isKindOfClass:NSDictionary.class]) [rows addObject:[self trackRow:top[i]]];
+    NSMutableArray *names = [NSMutableArray array];
+    for (NSDictionary *src in [info[@"sources"] isKindOfClass:NSArray.class] ? info[@"sources"] : @[]) if ([src[@"title"] isKindOfClass:NSString.class]) [names addObject:src[@"title"]];
+    if (names.count) {
+        UILabel *src = label(11, UIFontWeightRegular, kDim(), 2);
+        src.text = [@"Sources: " stringByAppendingString:[names componentsJoinedByString:@" · "]];
+        [rows addObject:src];
+    }
+    UIStackView *s = [[UIStackView alloc] initWithArrangedSubviews:rows];
+    s.axis = UILayoutConstraintAxisVertical;
+    s.spacing = 10;
+    return cardBox(s);
 }
 
 - (UIView *)firstPlayed:(NSDictionary *)c {

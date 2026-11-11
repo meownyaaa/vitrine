@@ -13,7 +13,8 @@ Vitrine's own:
   (iPhone, provider, ElevenLabs), personas, a chat that answers from your listening history and makes playlists. Since 0.4.0:
   artist-aware sets, taste from what you actually play, talks like you, player controls and likes, its own settings page. Since 0.4.1:
   an artist plays their whole catalog then similar artists, labels/crews ("yvl"), playlists/albums/Liked Songs, the queue is replaced
-  on every new request, and voice presets with fine controls.
+  on every new request, and voice presets with fine controls. Since 0.4.2: the set is checked against Spotify's real queue and
+  repaired, picks stay near your seeds, the vibe box answers questions, artist/song info cards with sources, two new voice presets.
   See [docs/mirage/AI-DJ.md](docs/mirage/AI-DJ.md).
 - Coming next: an **Addon Shop**.
 

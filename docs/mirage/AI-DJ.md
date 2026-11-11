@@ -2,6 +2,30 @@
 
 Mirage DJ, added in 0.2.0, plans a set and picks about 15 tracks that suit what you've been listening to and what you ask for, and plays them in Spotify's own player. Between tracks it says a short line, the way a radio DJ would, in the persona you choose. Since 0.3.0 you can also chat with it: ask about your listening, have it play or queue songs, and create or change playlists. The words come from an AI provider you choose, using your own API key.
 
+## What's new in 0.4.2
+
+- **Queue sync**: Spotify can accept a queue command and not apply it, and a play can wipe the queue, so the set sheet no
+  longer trusts commands. After queueing, after every track change and every 25 s, Spotify's real queue is read back
+  (`SPTPlayerQueueWrapperImpl fetchQueue`, tracks with provider `queue`) and compared with what's left of the set. Each
+  row says *pending…*, *in queue* or *not queued · Mirage plays it*. Missing songs: the queue's set songs are cleared and
+  the rest of the set re-sent in order (songs you queued yourself are kept after them), twice per set at most; after that,
+  step mode (Mirage plays each next song itself when the last one ends). If you reorder the queue in Spotify, the set
+  follows your order. Log lines start with `sync:`.
+- **On-topic picks**: every set has concrete seeds (the artist you asked for; otherwise what's playing and your most played
+  artists lately). Their Spotify related artists (or a genre search when related-artists is closed), scored by how many
+  seeds share them, plus your own repeats, form a pool the model must pick from. With no request or an artist request
+  at most 3 picks may come from outside the pool; the rest are thrown out and replaced. `picks:` lines.
+- **The vibe box answers questions**: "who is clairo", "what's this song", "why is this called shoegaze?" are answered (DJ
+  card, spoken, and in the chat) without touching the music. Anything that asks for music, or reads like a vibe, still
+  plays music. `vibe box: "…" → music | artist question | song question | question`.
+- **Artist and song info** (`artist_info` in the chat, and the vibe box): Spotify (picture, followers, genres,
+  popularity, top tracks, monthly listeners from the public artist page when it answers), Wikipedia's REST summary (only a
+  music page), and with Gemini also Google Search grounding. The card lists its sources; answers use only those facts.
+  `info:` lines.
+- **Two new voice presets**: *Warm Velvet* (very soft, slow, close and caring) and *Playful Spark* (young, bright, very
+  expressive). When the matching ElevenLabs voice isn't in your account, the preset uses the shared-library voice by ID
+  (Mia, Arabella; paid ElevenLabs plans can do that).
+
 ## What's new in 0.4.1
 
 - **One artist resolver for every entry point** (the sheet's "Ask for a vibe", the chat, play_artist, start_dj_set):

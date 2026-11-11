@@ -646,6 +646,53 @@ void MRGClearQueue(void (^done)(NSUInteger removed, NSString *error)) {
     }
 }
 
+// Reads Spotify's actual queue back (SPTPlayerQueueWrapperImpl fetchQueue → SPTPlayerQueue nextTracks). `queued` are the
+// tracks whose provider is "queue" (what was queued, in order), `upNext` everything after the current track, each as
+// {uri, title, artist, provider}. Answers within 4 seconds; error is set when the queue couldn't be read.
+void MRGFetchQueue(void (^done)(NSArray<NSDictionary *> *queued, NSArray<NSDictionary *> *upNext, NSString *error)) {
+    __block BOOL answered = NO;
+    void (^finish)(NSArray *, NSArray *, NSString *) = ^(NSArray *q, NSArray *u, NSString *e) {
+        if (answered) return;
+        answered = YES;
+        if (done) done(q, u, e);
+    };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ finish(nil, nil, @"Spotify didn't answer in time"); });
+    @try {
+        id player = playingPlayer();
+        Class wrapper = objc_getClass("SPTPlayerQueueWrapperImpl");
+        if (!player) { finish(nil, nil, @"no player captured yet"); return; }
+        if (![wrapper instancesRespondToSelector:@selector(initWithPlayer:)] || ![wrapper instancesRespondToSelector:@selector(fetchQueue)]) { finish(nil, nil, @"the queue wrapper has no fetchQueue"); return; }
+        id w = [[wrapper alloc] initWithPlayer:player];
+        id task = [w fetchQueue];
+        if (![task respondsToSelector:@selector(addCallback:on:)] || ![task respondsToSelector:@selector(addErrorCallback:on:)]) {
+            finish(nil, nil, [NSString stringWithFormat:@"fetchQueue gave %@", task ? NSStringFromClass([task class]) : @"nothing"]);
+            return;
+        }
+        [task addCallback:^(id q) {
+            (void)w;
+            @try {
+                if (!q || ![q respondsToSelector:@selector(nextTracks)]) { finish(nil, nil, @"the queue came back empty"); return; }
+                NSArray *next = [q nextTracks];
+                NSMutableArray *queued = [NSMutableArray array], *up = [NSMutableArray array];
+                for (id t in [next isKindOfClass:NSArray.class] ? next : @[]) {
+                    NSDictionary *info = infoOf(t) ?: @{};
+                    NSString *provider = [t respondsToSelector:@selector(provider)] ? sget(t, @"provider") : nil;
+                    if (![provider isKindOfClass:NSString.class]) provider = @"";
+                    NSMutableDictionary *d = [info mutableCopy];
+                    d[@"provider"] = provider;
+                    if (![d[@"uri"] length]) continue;
+                    [up addObject:d];
+                    if ([provider isEqualToString:@"queue"]) [queued addObject:d];
+                }
+                finish(queued, up, nil);
+            } @catch (NSException *e) { finish(nil, nil, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]); }
+        } on:dispatch_get_main_queue()];
+        [task addErrorCallback:^(NSError *e) { finish(nil, nil, e.localizedDescription ?: @"fetchQueue failed"); } on:dispatch_get_main_queue()];
+    } @catch (NSException *e) {
+        finish(nil, nil, [NSString stringWithFormat:@"%@: %@", e.name, e.reason]);
+    }
+}
+
 BOOL MRGOpenSpotifyURI(NSString *uri) {
     id d = sg_linkDispatcher;
     SEL sel = @selector(navigateToURI:options:reason:completionHandler:resultHandler:);

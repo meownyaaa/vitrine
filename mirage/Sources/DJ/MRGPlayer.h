@@ -26,6 +26,8 @@ void MRGPlayContextURI(NSString *uri, NSString *startTrack, void (^done)(BOOL ok
 void MRGPlayContext(NSString *uri, NSString *startTrack, NSNumber *shuffle, void (^done)(BOOL ok, NSString *error));   // shuffle nil: unchanged
 void MRGClearQueue(void (^done)(NSUInteger removed, NSString *error));   // Spotify's own queue (provider "queue"), main queue
 void MRGQueueTracks(NSArray<NSString *> *uris, void (^done)(BOOL ok, NSString *error));
+// Spotify's actual queue read back: `queued` (provider "queue", in order) and everything up next; main queue.
+void MRGFetchQueue(void (^done)(NSArray<NSDictionary *> *queued, NSArray<NSDictionary *> *upNext, NSString *error));
 // Hands a spotify: URI to Spotify's own link dispatcher, as a tapped link would (opens its page). NO when not captured.
 BOOL MRGOpenSpotifyURI(NSString *uri);
 // Waits until the player is on one of the tracks or in the context, not paused; `seen` says what it saw instead.

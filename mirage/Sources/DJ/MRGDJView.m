@@ -225,6 +225,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
 @property (nonatomic) NSInteger index;
 - (void)showTrack:(MRGDJTrack *)t;
 - (void)setPlaying:(BOOL)playing past:(BOOL)past;
+- (void)showQueueState:(MRGDJTrack *)t playing:(BOOL)playing;
 @end
 
 @implementation MRGDJRow {
@@ -312,6 +313,19 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     [_whyPill invalidateIntrinsicContentSize];
     loadImage(_art, t.image, notePlaceholder(16));
     self.accessibilityLabel = [NSString stringWithFormat:@"%@, %@", t.title ?: @"", t.artist ?: @""];
+}
+
+// The truth from the last queue read-back, after the artist: never claims "queued" unless Spotify's queue had it.
+- (void)showQueueState:(MRGDJTrack *)t playing:(BOOL)playing {
+    NSString *tag = nil;
+    if (!playing) switch (t.queueState) {
+        case MRGDJQueuePending: tag = @"pending…"; break;
+        case MRGDJQueueQueued: tag = @"in queue"; break;
+        case MRGDJQueueMissing: tag = @"not queued · Mirage plays it"; break;
+        default: break;
+    }
+    NSString *text = tag ? [NSString stringWithFormat:@"%@ · %@", t.artist ?: @"", tag] : (t.artist ?: @"");
+    if (![_artist.text isEqualToString:text]) _artist.text = text;
 }
 
 - (void)setPlaying:(BOOL)playing past:(BOOL)past {
@@ -617,7 +631,10 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     _error.hidden = !dj.error.length;
 
     if (dj.set != _shownSet && ![dj.set isEqualToArray:_shownSet ?: @[]]) [self rebuildRows:dj.set];
-    for (MRGDJRow *row in _rows) [row setPlaying:row.index == dj.currentIndex past:dj.currentIndex >= 0 && row.index < dj.currentIndex];
+    for (MRGDJRow *row in _rows) {
+        [row setPlaying:row.index == dj.currentIndex past:dj.currentIndex >= 0 && row.index < dj.currentIndex];
+        if (row.index < (NSInteger)dj.set.count) [row showQueueState:dj.set[row.index] playing:row.index == dj.currentIndex];
+    }
     BOOL hasSet = dj.set.count > 0;
     _list.hidden = !hasSet;
     _empty.hidden = hasSet;
@@ -654,7 +671,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, UIColor *color, NSIntege
     if (!text.length) return;
     _field.text = nil;
     [self.view endEditing:YES];
-    [MRGDJ.shared startWithRequest:text];
+    [MRGDJ.shared handleInput:text];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)tf { [self sendRequest]; return YES; }

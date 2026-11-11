@@ -6,6 +6,7 @@
 #import "MRGPlayer.h"
 #import "MRGSpotifyWeb.h"
 #import "MRGDJLog.h"
+#import "MRGInfo.h"
 
 NSString *const MRGChatChangedNotification = @"MirageChatChanged";
 
@@ -86,6 +87,8 @@ static NSArray<NSDictionary *> *tools(void) {
             tool(@"add_to_playlist", @"Add tracks to a playlist. The playlist can be a spotify:playlist: URI or link, the name of one Mirage made, or 'current' for the playlist playing now. Without uris it adds the song playing now.", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs (optional: the song playing now)")}, @[@"playlist"]),
             tool(@"remove_from_playlist", @"Remove tracks from a playlist (URI, link, name of one Mirage made, or 'current').", @{@"playlist": S(@"URI, link, name or 'current'"), @"uris": A(@"spotify:track: URIs")}, @[@"playlist", @"uris"]),
             tool(@"delete_playlist", @"Ask to delete (remove from the library) a playlist. This does NOT delete it: it shows the listener a Delete button to confirm. Tell them to tap it.", @{@"playlist": S(@"URI, link, name of one Mirage made, or 'current'")}, @[@"playlist"]),
+            tool(@"artist_info", @"Real facts about an artist (or, with track, a song): Spotify's image, followers, monthly listeners, genres, popularity, top tracks, Wikipedia's summary and (with Gemini) Google Search, with sources. It shows the listener an info card. Use it for any 'who is X', 'tell me about X', 'what is this song' question, and answer only from what it returns.",
+                 @{@"artist": S(@"the artist's name (for a song: its artist, optional)"), @"track": S(@"a song title, only for questions about a song")}, @[]),
             tool(@"list_playlists", @"The playlists in the listener's library (name, uri, whether they own it), plus ones Mirage made and the one playing now.", @{@"filter": S(@"optional: only names containing this")}, @[]),
         ];
     });
@@ -149,6 +152,7 @@ static NSArray<NSDictionary *> *tools(void) {
         @"- \"play my liked songs\"/\"my likes\" → play_context target 'liked'. \"play <playlist or album>\" → play_context with its name (their own playlists are found by name) or a URI from search; \"shuffle\" → shuffle true.\n"
         @"- An artist (\"play yvl\", \"run uzi\") → play_artist: it plays their whole catalog, then similar artists. Any new set, artist or playlist replaces the queue.\n"
         @"- \"throwbacks\", \"old stuff i used to play\" → dj_segment throwbacks; \"what i've been playing\" → on_repeat; \"something new\" → discover; \"switch it up\" → switch_it_up; a vibe, genre or mood → start_dj_set with their words.\n\n"
+        @"- \"who is X\", \"tell me about X\", \"what's this song\" → artist_info, then answer in 2-3 sentences from its facts only (no made-up facts; if something isn't in them, say you don't know). Questions are answered, not turned into music.\n\n"
         @"Rules:\n"
         @"- You can play anything: tracks, artists, playlists, albums, Liked Songs. NEVER tell the listener to tap, open or play something in Spotify themselves; do it with a tool, and if it fails say what failed.\n"
         @"- Use the function-calling tools to act. NEVER write a tool call, a function name, JSON or a spotify: URI in your reply text; the listener only sees your words and the cards.\n"
@@ -165,6 +169,16 @@ static NSArray<NSDictionary *> *tools(void) {
     NSString *custom = MRGDJCustomPrompt();
     if (custom) [p appendFormat:@"\n\nThe listener's own instructions for you:\n%@", custom];
     return p;
+}
+
+- (void)noteQuestion:(NSString *)question answer:(NSString *)answer card:(NSDictionary *)card {
+    if (!question.length) return;
+    [self add:[MRGChatItem kind:@"user" text:question card:nil]];
+    if (card) [self add:[MRGChatItem kind:@"card" text:nil card:card]];
+    if (answer.length) [self add:[MRGChatItem kind:@"dj" text:answer card:nil]];
+    [_transcript addObject:@{@"role": @"user", @"content": question}];
+    [_transcript addObject:@{@"role": @"assistant", @"content": answer ?: @""}];
+    [self trim];
 }
 
 - (void)send:(NSString *)raw {
@@ -272,7 +286,7 @@ static NSArray<NSDictionary *> *tools(void) {
                         @"top_listening": @"Checking your history…", @"history_overview": @"Checking your history…",
                         @"create_playlist": @"Creating the playlist…", @"add_to_playlist": @"Adding songs…", @"remove_from_playlist": @"Removing songs…",
                         @"play_artist": @"Finding the artist…", @"play_context": @"Starting it…", @"list_playlists": @"Reading your playlists…", @"dj_segment": @"Starting a set…", @"switch_it_up": @"Switching it up…",
-                        @"player_control": @"On it…", @"like_track": @"Saving…", @"taste_profile": @"Checking your history…"};
+                        @"player_control": @"On it…", @"artist_info": @"Looking them up…", @"like_track": @"Saving…", @"taste_profile": @"Checking your history…"};
     return m[tool] ?: @"Working…";
 }
 
@@ -353,6 +367,23 @@ static BOOL meansLiked(NSString *t) {
 }
 
 - (void)run:(NSString *)name args:(NSDictionary *)args answer:(void (^)(id))answer {
+    if ([name isEqualToString:@"artist_info"]) {
+        NSString *artist = str(args[@"artist"]), *track = str(args[@"track"]);
+        NSDictionary *now = MRGNowPlaying();
+        if (!artist.length && !track.length) { artist = now[@"artist"]; track = now[@"title"]; }
+        void (^got)(NSDictionary *) = ^(NSDictionary *info) {
+            if (!info[@"error"]) [self add:[MRGChatItem kind:@"card" text:nil card:MRGInfoCard(info)]];
+            [self remember:info[@"topTracks"] ?: @[]];
+            NSMutableArray *src = [NSMutableArray array];
+            for (NSDictionary *x in info[@"sources"]) [src addObject:[NSString stringWithFormat:@"%@ <%@>", x[@"title"], x[@"url"]]];
+            answer(info[@"error"] ? @{@"error": info[@"error"]} : @{@"facts": MRGInfoFacts(info), @"sources": src,
+                                                                  @"note": @"Answer only from these facts. The card already shows the numbers and sources."});
+        };
+        if (track.length) MRGTrackInfo(track, artist, got);
+        else if (artist.length) MRGArtistInfo(artist, got);
+        else answer(@{@"error": @"no artist or song given and nothing is playing"});
+        return;
+    }
     if ([name isEqualToString:@"search"]) {
         NSString *type = str(args[@"type"]) ?: @"track";
         NSInteger limit = [args[@"limit"] respondsToSelector:@selector(integerValue)] ? [args[@"limit"] integerValue] : 5;

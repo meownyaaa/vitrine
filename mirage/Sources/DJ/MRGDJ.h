@@ -21,7 +21,18 @@ typedef NS_ENUM(NSInteger, MRGDJState) {
 @property (nonatomic, copy) NSString *image;   // cover URL (https), when Spotify's search gave one
 @property (nonatomic, copy) NSString *why;     // the model's 1-4 word reason ("deep cut", "fresh find"), optional
 @property (nonatomic) NSInteger popularity;    // Spotify's 0-100 from search, -1 when unknown
+// Where the track stands in Spotify's real queue, from the last read-back (MRGDJQueueState).
+@property (nonatomic) NSInteger queueState;
+@property (nonatomic) NSInteger requeues;      // how often the sync put it back
 @end
+
+typedef NS_ENUM(NSInteger, MRGDJQueueState) {
+    MRGDJQueueUnknown = 0,  // not checked yet
+    MRGDJQueuePending,      // sent to Spotify, not confirmed yet
+    MRGDJQueueQueued,       // confirmed in Spotify's queue
+    MRGDJQueueMissing,      // not in Spotify's queue: Mirage plays it itself when its turn comes (step mode)
+    MRGDJQueuePlayed,       // played (or skipped past)
+};
 
 @interface MRGDJ : NSObject
 + (instancetype)shared;
@@ -35,6 +46,9 @@ typedef NS_ENUM(NSInteger, MRGDJState) {
 @property (nonatomic, readonly, getter=isSpeaking) BOOL speaking;
 - (void)playFromIndex:(NSInteger)index;          // jumps to a track of the set (a new context from it)
 - (void)startWithRequest:(NSString *)request;   // nil: just play something for me
+// The vibe box: a music request starts a set; a question (or chat) is answered (DJ card, spoken, and in the chat)
+// without touching the music.
+- (void)handleInput:(NSString *)text;
 - (void)switchItUp;                              // a new set in a clearly different direction from the last plan
 // Plays these tracks (dictionaries with uri, title, artist, optional image/line) as a DJ set, for the chat.
 - (void)playTracks:(NSArray<NSDictionary *> *)tracks intro:(NSString *)intro;

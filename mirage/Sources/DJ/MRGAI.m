@@ -466,6 +466,33 @@ static NSDictionary *openAIBody(MRGProvider p, NSString *model, NSString *system
     return b;
 }
 
+// A web-grounded answer where the provider has search built in: Gemini's google_search tool (sources from
+// groundingMetadata.groundingChunks[].web). Other providers answer done(nil, nil, nil) right away (nothing grounded).
+void MRGAIGrounded(NSString *question, void (^done)(NSString *text, NSArray<NSDictionary *> *sources, NSString *error)) {
+    MRGProvider p = MRGAIProvider();
+    NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();
+    if (p != MRGProviderGemini || !key || !model) { done(nil, nil, nil); return; }
+    NSDictionary *body = @{@"contents": @[@{@"role": @"user", @"parts": @[@{@"text": question}]}],
+                           @"tools": @[@{@"google_search": @{}}],
+                           @"generationConfig": @{@"temperature": @0.2}};
+    NSString *path = [NSString stringWithFormat:@"/models/%@:generateContent", model];
+    send(p, request(p, key, path, body), ^(id j, NSData *d, NSInteger s, NSString *e) {
+        NSString *text = e ? nil : textFromGemini(j);
+        NSMutableArray *sources = [NSMutableArray array];
+        @try {
+            id cand = [dictGet(j, @"candidates") isKindOfClass:NSArray.class] ? [dictGet(j, @"candidates") firstObject] : nil;
+            id chunks = dictGet(dictGet(cand, @"groundingMetadata"), @"groundingChunks");
+            for (id c in [chunks isKindOfClass:NSArray.class] ? chunks : @[]) {
+                id web = dictGet(c, @"web");
+                NSString *uri = dictGet(web, @"uri"), *title = dictGet(web, @"title");
+                if ([uri isKindOfClass:NSString.class] && sources.count < 4)
+                    [sources addObject:@{@"url": uri, @"title": [title isKindOfClass:NSString.class] ? title : @"web"}];
+            }
+        } @catch (__unused NSException *x) {}
+        dispatch_async(dispatch_get_main_queue(), ^{ done(text, sources, e); });
+    });
+}
+
 void MRGAIChat(NSString *system, NSString *user, BOOL json, void (^done)(NSString *, NSString *)) {
     MRGProvider p = MRGAIProvider();
     NSString *key = MRGKeychainAPIKey(), *model = MRGAIModel();

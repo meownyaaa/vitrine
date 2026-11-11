@@ -23,6 +23,8 @@ extern NSString *const MRGChatChangedNotification;   // main queue
 @property (nonatomic, readonly, getter=isBusy) BOOL busy;
 @property (nonatomic, readonly, copy) NSString *busyText;
 - (void)send:(NSString *)text;
+// A question answered from the DJ sheet's vibe box: shown (and remembered) in the chat too, with its card.
+- (void)noteQuestion:(NSString *)question answer:(NSString *)answer card:(NSDictionary *)card;
 - (void)confirmDelete:(MRGChatItem *)card;
 - (void)cancelDelete:(MRGChatItem *)card;
 - (void)playTrack:(NSDictionary *)track;      // from a card's play button

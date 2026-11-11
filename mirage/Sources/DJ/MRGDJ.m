@@ -6,6 +6,8 @@
 #import "MRGDJLog.h"
 #import "MRGVoice.h"
 #import "MRGHistory.h"
+#import "MRGInfo.h"
+#import "MRGChat.h"
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -198,6 +200,15 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode, BOOL *plain
     NSInteger _focusMode;                  // 1 artist and neighbours, 2 only them, 3 like them, 4 after their catalog: similar only
     NSArray<NSDictionary *> *_focusCrew;   // a label or crew: its artists (the first is _focus); nil for one artist
     BOOL _focusPlain;                      // the request was just the artist: play their catalog
+    BOOL _syncing;                         // a queue read-back is on its way
+    NSInteger _rebuilds;                   // queue rebuilds for this set (at most 2, then step mode)
+    NSUInteger _syncToken;                 // debounces syncQueueSoon
+    CFTimeInterval _lastSync;
+    NSDictionary<NSString *, NSNumber *> *_pool;  // on-topic artists (lowercased name → closeness 1-3) for this set, or nil
+    NSArray<NSString *> *_poolSeeds;              // the seeds the pool came from (display names)
+    NSString *_poolKey;                           // which seeds it was built for
+    CFTimeInterval _poolTime;
+    BOOL _poolHard;                               // off-pool picks are capped (no request, or an artist request)
 }
 
 + (instancetype)shared {
@@ -215,6 +226,8 @@ static NSString *artistCandidate(NSString *request, NSInteger *mode, BOOL *plain
     // Speech goes through MRGVoiceSpeaker, on the system's own speech session (never Spotify's; a deactivation under
     // Spotify's running audio would stop the music). The music is lowered by MRGDuckMusic.
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(trackChanged:) name:MRGPlayerTrackChangedNotification object:nil];
+    // Spotify's queue can change under the set (the listener edits it, a play wipes it): checked every 25 s while a set is on.
+    [NSTimer scheduledTimerWithTimeInterval:25 target:self selector:@selector(syncTick) userInfo:nil repeats:YES];
     return self;
 }
 
@@ -330,6 +343,13 @@ static NSInteger popularityCap(NSString *request) {
         else if (_focusMode == 3) [p appendFormat:@"\nThey want music LIKE %@: 2-3 by %@, the rest by artists with the same sound and scene.", name, name];
         else [p appendFormat:@"\nAt least 7 tracks must be by %@ (the per-artist limit doesn't apply to them), the rest by artists right next to them in sound and scene. Nothing outside that lane.", name];
     }
+    if (_pool.count) {
+        NSArray *names = [_pool keysSortedByValueUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [b compare:a]; }];
+        if (names.count > 40) names = [names subarrayWithRange:NSMakeRange(0, 40)];
+        [p appendFormat:@"\n\nSeeds: %@. Spotify's related artists of these seeds and the listener's own history (closest first): %@.", [_poolSeeds componentsJoinedByString:@", "], [names componentsJoinedByString:@", "]];
+        if (_poolHard) [p appendString:@"\nPick at least 12 of the 15 tracks by these artists or the seeds themselves; picks by artists outside this list are thrown out after 3. No generic indie or playlist filler that merely shares a mood."];
+        else [p appendString:@"\nWhen they fit the request, prefer these artists over generic picks."];
+    }
     NSInteger cap = popularityCap(request);
     if (cap) [p appendFormat:@"\n\nThis is an underground request: picks Spotify rates above %ld/100 popularity will be thrown out, so choose genuinely lesser-known songs.", (long)cap];
     return p;
@@ -343,10 +363,110 @@ static NSDictionary *parseJSON(NSString *text) {
     return [json isKindOfClass:NSDictionary.class] ? json : nil;
 }
 
+#pragma mark - on-topic pool
+
+static NSString *firstArtist(NSString *a) {
+    NSString *s = a ?: @"";
+    for (NSString *sep in @[@", ", @" & ", @" feat", @" x "]) { NSRange r = [s rangeOfString:sep]; if (r.location != NSNotFound && r.location > 0) s = [s substringToIndex:r.location]; }
+    return [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+}
+
+- (BOOL)inPool:(NSString *)artist {
+    if (!_pool.count) return YES;
+    for (NSString *one in [[artist ?: @"" lowercaseString] componentsSeparatedByString:@", "]) {
+        NSString *a = [one stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (_pool[a]) return YES;
+        for (NSString *k in _pool) if (MRGNamesMatch(k, a)) return YES;
+    }
+    return NO;
+}
+
+// Concrete seeds (the requested artist, else what's playing and the most played artists Mirage saw), their related
+// artists on Spotify (scored by how many seeds share them; a seed's genre search when related-artists is empty), plus
+// the listener's own history artists. Time-boxed to 6 s; cached 10 min per seed list.
+- (void)poolFor:(NSString *)request generation:(NSUInteger)gen done:(void (^)(void))done {
+    NSMutableArray<NSString *> *seeds = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSNumber *> *counts = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, NSString *> *display = [NSMutableDictionary dictionary];
+    if (_focus[@"name"]) [seeds addObject:_focus[@"name"]];
+    for (NSDictionary *a in _focusCrew) if ([a[@"name"] length] && ![seeds containsObject:a[@"name"]]) [seeds addObject:a[@"name"]];
+    if (!_focus) {
+        NSString *now = firstArtist(MRGNowPlaying()[@"artist"]);
+        if (now.length) [seeds addObject:now];
+        for (NSDictionary *h in [MRGRecentHistory() subarrayWithRange:NSMakeRange(0, MIN(MRGRecentHistory().count, (NSUInteger)40))]) {
+            NSString *a = firstArtist(h[@"artist"]);
+            if (!a.length) continue;
+            counts[a.lowercaseString] = @(counts[a.lowercaseString].integerValue + 1);
+            display[a.lowercaseString] = a;
+        }
+        NSArray *top = [counts keysSortedByValueUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [b compare:a]; }];
+        for (NSString *k in top) {
+            if (seeds.count >= 3) break;
+            BOOL have = NO;
+            for (NSString *x in seeds) if ([x.lowercaseString isEqualToString:k]) have = YES;
+            if (!have && display[k]) [seeds addObject:display[k]];
+        }
+    }
+    if (seeds.count > 3) [seeds removeObjectsInRange:NSMakeRange(3, seeds.count - 3)];
+    _poolHard = _focus != nil || !request.length;
+    NSString *key = [[seeds componentsJoinedByString:@"|"] lowercaseString];
+    if (!seeds.count) { _pool = nil; _poolSeeds = nil; done(); return; }
+    if ([key isEqualToString:_poolKey] && _pool.count && CACurrentMediaTime() - _poolTime < 600) { done(); return; }
+    NSMutableDictionary<NSString *, NSNumber *> *pool = [NSMutableDictionary dictionary];
+    for (NSString *k in counts) if (counts[k].integerValue >= 2) pool[k] = @2;   // their own repeats
+    for (NSString *sd in seeds) pool[sd.lowercaseString] = @3;
+    __block BOOL finished = NO;
+    void (^finish)(NSString *) = ^(NSString *why) {
+        if (finished) return;
+        finished = YES;
+        if (gen != self->_generation) return;
+        self->_pool = pool.count > seeds.count ? [pool copy] : nil;
+        self->_poolSeeds = [seeds copy];
+        self->_poolKey = key;
+        self->_poolTime = CACurrentMediaTime();
+        MRGDJLog(@"picks: seeds %@ → %lu artists in the pool%@ (%@)", [seeds componentsJoinedByString:@", "], (unsigned long)pool.count, self->_poolHard ? @", strict" : @", soft", why);
+        done();
+    };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ finish(@"time box"); });
+    dispatch_group_t g = dispatch_group_create();
+    for (NSString *sd in seeds) {
+        dispatch_group_enter(g);
+        void (^withArtist)(NSDictionary *) = ^(NSDictionary *artist) {
+            if (!artist) { dispatch_group_leave(g); return; }
+            MRGWebRelatedArtists(artist, ^(NSArray<NSDictionary *> *related) {
+                if (related.count) {
+                    for (NSDictionary *r in related) {
+                        NSString *n = [r[@"name"] lowercaseString];
+                        if (n.length && pool[n].integerValue < 3) pool[n] = @(MIN(pool[n].integerValue + 1, 2));
+                    }
+                    dispatch_group_leave(g);
+                    return;
+                }
+                NSArray *genres = [artist[@"genres"] isKindOfClass:NSArray.class] ? artist[@"genres"] : nil;
+                if (!genres.count) { dispatch_group_leave(g); return; }
+                MRGWebSearch([NSString stringWithFormat:@"genre:\"%@\"", genres.firstObject], @"artist", 10, ^(NSArray<NSDictionary *> *results, NSString *error) {
+                    for (NSDictionary *r in results) { NSString *n = [r[@"name"] lowercaseString]; if (n.length && !pool[n]) pool[n] = @1; }
+                    dispatch_group_leave(g);
+                });
+            });
+        };
+        if (self->_focus && [sd isEqualToString:self->_focus[@"name"]]) withArtist(self->_focus);
+        else MRGWebFindArtist(sd, ^(NSDictionary *artist, NSString *how) { withArtist(artist); });
+    }
+    dispatch_group_notify(g, dispatch_get_main_queue(), ^{ finish(@"done"); });
+}
+
 // Asks for a set and finds its tracks; `done` gets the found tracks in order (or an error) and the intro. For an
 // underground request picks above the popularity cap are dropped, and when fewer than 8 are left the model is asked
 // once more for replacements.
 - (void)buildSetWithRequest:(NSString *)request generation:(NSUInteger)gen done:(void (^)(NSArray<MRGDJTrack *> *, NSString *intro, NSString *error))done {
+    [self poolFor:request generation:gen done:^{
+        if (gen != self->_generation) return;
+        [self buildSetFromPoolWithRequest:request generation:gen done:done];
+    }];
+}
+
+- (void)buildSetFromPoolWithRequest:(NSString *)request generation:(NSUInteger)gen done:(void (^)(NSArray<MRGDJTrack *> *, NSString *intro, NSString *error))done {
     // Taste from Spotify's own player only: what is playing, what Mirage saw play, and the queue around it. The Web API's
     // user endpoints (/me/top, /me/tracks, recently-played) answer 404 to the app's token, so they aren't called.
     NSString *prompt = [self promptWithTaste:nil artists:nil liked:nil request:request];
@@ -439,7 +559,7 @@ static NSDictionary *parseJSON(NSString *text) {
         NSMutableArray *found = [NSMutableArray array], *dropped = [NSMutableArray array];
         NSMutableSet *seen = [NSMutableSet set];
         NSMutableDictionary<NSString *, NSNumber *> *perArtist = [NSMutableDictionary dictionary];
-        NSUInteger tooPopular = 0, unrated = 0;
+        NSUInteger tooPopular = 0, unrated = 0, offPool = 0, offDropped = 0;
         for (MRGDJTrack *t in slots) {
             if (!t.uri) { [dropped addObject:t]; continue; }
             if ([seen containsObject:t.uri]) continue;
@@ -448,11 +568,16 @@ static NSDictionary *parseJSON(NSString *text) {
             if (perArtist[ak].integerValue >= 2 && !focusArtist) continue;
             if (t.popularity < 0) unrated++;
             if (cap && t.popularity > cap) { tooPopular++; [dropped addObject:t]; continue; }
+            if (self->_pool.count && self->_poolHard && !focusArtist && ![self inPool:t.artist]) {
+                if (offPool >= 3) { offDropped++; [dropped addObject:t]; continue; }
+                offPool++;
+            }
             [seen addObject:t.uri];
             perArtist[ak] = @(perArtist[ak].integerValue + 1);
             [found addObject:t];
             if (found.count >= 15) break;
         }
+        if (self->_pool.count) MRGDJLog(@"picks: %lu off-topic kept, %lu off-topic dropped (not near %@)", (unsigned long)offPool, (unsigned long)offDropped, [self->_poolSeeds componentsJoinedByString:@", "]);
         MRGDJLog(@"set: %lu picks, %lu kept%@%@%@", (unsigned long)slots.count, (unsigned long)found.count,
                  cap ? [NSString stringWithFormat:@", %lu over popularity %ld dropped", (unsigned long)tooPopular, (long)cap] : @"",
                  unrated ? [NSString stringWithFormat:@", %lu without a popularity from search", (unsigned long)unrated] : @"",
@@ -761,6 +886,97 @@ static const NSInteger kCatalogMax = 80;
     }];
 }
 
+#pragma mark - the vibe box: music or a question
+
+static BOOL rx(NSString *s, NSString *pattern) {
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pattern options:NSRegularExpressionCaseInsensitive error:nil];
+    return s.length && re && [re numberOfMatchesInString:s options:0 range:NSMakeRange(0, s.length)] > 0;
+}
+
+static NSString *firstCapture(NSString *s, NSString *pattern) {
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pattern options:NSRegularExpressionCaseInsensitive error:nil];
+    NSTextCheckingResult *m = s.length ? [re firstMatchInString:s options:0 range:NSMakeRange(0, s.length)] : nil;
+    if (!m || m.numberOfRanges < 2 || [m rangeAtIndex:1].location == NSNotFound) return nil;
+    return [[s substringWithRange:[m rangeAtIndex:1]] stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" ?!.,"]];
+}
+
+// 0: music request (a set), 1: about an artist, 2: about a song, 3: another question or chat.
+// Questions get answers; anything that asks for music (play, songs, a vibe…) or reads like a vibe plays music.
+static NSInteger intentOf(NSString *text) {
+    NSString *t = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (rx(t, @"^(who|whos|who's|who is|tell me about|what do you know about|info on)\\b.*") && !rx(t, @"\\b(play|queue|put on|throw on)\\b")) {
+        if (rx(t, @"\\b(this|that|the) (song|track)\\b|\\bsings? this\\b|\\bmade this\\b|\\bproduced this\\b")) return 2;
+        return 1;
+    }
+    if (rx(t, @"^(what|whats|what's|which)\\b.*\\b(this|that) (song|track)\\b|^what song is (this|that)\\b")) return 2;
+    BOOL asks = rx(t, @"\\?\\s*$") || rx(t, @"^(what|whats|what's|when|where|why|how|is|are|was|were|does|did|do|can|could|should|would|will|explain|which|hey|hi|hello|yo|thanks|thank you)\\b");
+    BOOL music = rx(t, @"\\b(play|put on|throw on|queue|run (it|some|sum|that)|spin|give me|gimme|songs?|tracks?|music|vibes?|playlist|bangers|mix|beats|switch it up|more like)\\b");
+    if (asks && !music) return 3;
+    if (asks && music && rx(t, @"\\b(this|that) (song|track|artist)\\b") && !rx(t, @"\\b(play|queue|more like|similar)\\b")) return 3;
+    return 0;
+}
+
+- (void)handleInput:(NSString *)text {
+    NSInteger intent = intentOf(text ?: @"");
+    MRGDJLog(@"vibe box: \"%@\" → %@", text.length > 60 ? [[text substringToIndex:60] stringByAppendingString:@"…"] : text,
+             @[@"music", @"artist question", @"song question", @"question"][intent]);
+    if (intent == 0) { [self startWithRequest:text]; return; }
+    if (MRGAIProvider() == MRGProviderNone) { [self fail:@"Add your AI provider's API key in Mirage settings first."]; return; }
+    _error = nil;
+    [self setStatusText:intent == 3 ? @"Thinking…" : @"Looking it up…"];
+    NSDictionary *now = MRGNowPlaying();
+    void (^reply)(NSString *, NSDictionary *, NSArray *) = ^(NSString *answer, NSDictionary *card, NSArray *sources) {
+        self->_status = sources.count ? [@"Sources: " stringByAppendingString:[sources componentsJoinedByString:@" · "]] : nil;
+        if (!answer.length) { [self fail:@"Couldn't find an answer to that."]; return; }
+        self->_currentLine = [answer copy];
+        [self changed];
+        [self speak:answer];
+        [MRGChat.shared noteQuestion:text answer:answer card:card];
+    };
+    NSString *persona = [NSString stringWithFormat:@"You are Mirage DJ, the listener's music host. How you talk: %@\nAnswer their question in at most 3 short sentences, spoken out loud (no lists, no markdown, no URLs). Don't start a set or suggest tapping anything.", MRGDJPersonaStyle()];
+    if (intent == 3) {
+        NSString *context = [NSString stringWithFormat:@"Playing now: %@. %@\n\nQuestion: %@",
+                             now ? [NSString stringWithFormat:@"%@ — %@", now[@"title"], now[@"artist"] ?: @""] : @"nothing",
+                             self->_plan.length ? [@"The DJ set's plan: " stringByAppendingString:self->_plan] : @"", text];
+        MRGAIGrounded([persona stringByAppendingFormat:@"\n\n%@", context], ^(NSString *web, NSArray<NSDictionary *> *src, NSString *err) {
+            if (web.length && src.count) {
+                NSMutableArray *names = [NSMutableArray array];
+                for (NSDictionary *x in src) [names addObject:x[@"title"] ?: @"web"];
+                reply(web, nil, names);
+                return;
+            }
+            MRGAIChat(persona, context, NO, ^(NSString *answer, NSString *error) {
+                if (error) { [self fail:error]; return; }
+                reply(answer, nil, nil);
+            });
+        });
+        return;
+    }
+    void (^withInfo)(NSDictionary *) = ^(NSDictionary *info) {
+        if (info[@"error"]) { [self fail:info[@"error"]]; return; }
+        NSMutableArray *names = [NSMutableArray array];
+        for (NSDictionary *x in info[@"sources"]) [names addObject:x[@"title"] ?: @"?"];
+        NSString *prompt = [NSString stringWithFormat:@"Facts (the only things you may state):\n%@\nQuestion: %@\nIf the facts don't cover something, say you don't know it.", MRGInfoFacts(info), text];
+        MRGAIChat(persona, prompt, NO, ^(NSString *answer, NSString *error) {
+            NSString *fallback = info[@"wiki"][@"extract"] ?: info[@"web"][@"text"];
+            if (error) MRGDJLog(@"vibe box: answer failed (%@), reading the summary instead", error);
+            reply(answer.length ? answer : fallback, MRGInfoCard(info), names);
+        });
+    };
+    if (intent == 2) {
+        NSString *title = now[@"title"], *artist = now[@"artist"];
+        NSString *named = firstCapture(text, @"(?:song|track)\\s+[\"“']?([^\"”'?]+?)[\"”']?\\s*(?:by\\s+(.+))?\\??$");
+        if (named.length && !rx(named, @"^(this|that|is this|is that)$")) { title = named; artist = firstCapture(text, @"\\bby\\s+(.+?)\\??$") ?: @""; }
+        if (!title.length) { [self fail:@"Nothing is playing, so I don't know which song you mean."]; return; }
+        MRGTrackInfo(title, artist, withInfo);
+        return;
+    }
+    NSString *who = firstCapture(text, @"^(?:who|whos|who's|who is|tell me about|what do you know about|info on)\\s+(?:is\\s+|are\\s+)?(.+)$");
+    if (!who.length || rx(who, @"^(this|that|them|this artist|that artist|singing|this guy|this girl|he|she)$")) who = [now[@"artist"] componentsSeparatedByString:@", "].firstObject;
+    if (!who.length) { [self fail:@"Who do you mean? Nothing is playing to go by."]; return; }
+    MRGArtistInfo(who, withInfo);
+}
+
 - (void)switchItUp {
     NSMutableString *r = [NSMutableString stringWithString:@"Switch it up: take the set in a clearly different direction from the last one (another genre, scene, era or energy; different artists), still something this listener would love."];
     if (_plan.length) [r appendFormat:@" The last set's plan was: \"%@\" — do not repeat that direction.", _plan];
@@ -823,6 +1039,8 @@ static const NSInteger kCatalogMax = 80;
     if (!uris.count) { failed(@"no tracks"); return; }
     self->_set = found;
     self->_lastIndex = -1;
+    self->_rebuilds = 0;
+    for (MRGDJTrack *t in found) { t.queueState = MRGDJQueueUnknown; t.requeues = 0; }
     self->_stepping = YES;   // until the first track is verified, nothing else steps
     [self setStatusText:@"Starting the first song…"];
     MRGPlayContextURI(uris.firstObject, nil, ^(BOOL ok, NSString *error) {
@@ -845,10 +1063,14 @@ static const NSInteger kCatalogMax = 80;
             NSDictionary *now = MRGNowPlaying();
             if (now) [self arrivedAt:now];
             if (uris.count < 2) return;
+            NSArray *rest = [found subarrayWithRange:NSMakeRange(1, found.count - 1)];
+            [self mark:rest state:MRGDJQueuePending];
             MRGQueueTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)], ^(BOOL queued, NSString *queueError) {
                 if (gen != self->_generation) return;
                 self->_playbackMode = queued ? @"queue" : @"step";
-                MRGDJLog(@"set: %@", queued ? @"rest of the set queued" : [NSString stringWithFormat:@"queue refused (%@), stepping track by track", queueError ?: @"?"]);
+                MRGDJLog(@"set: %@", queued ? @"rest of the set sent to the queue, checking it" : [NSString stringWithFormat:@"queue refused (%@), stepping track by track", queueError ?: @"?"]);
+                if (!queued) [self mark:rest state:MRGDJQueueMissing];
+                [self syncQueueSoon:2.0 reason:@"after queueing"];
             });
         });
     });
@@ -876,8 +1098,19 @@ static const NSInteger kCatalogMax = 80;
             self->_playbackMode = @"step";
             [self changed];
             if (uris.count < 2) return;
-            MRGQueueTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)], ^(BOOL queued, NSString *queueError) {
-                if (gen == self->_generation) self->_playbackMode = queued ? @"queue" : @"step";
+            // Jumping plays a fresh context; what was queued before stays in Spotify's queue, so the rest is re-sent only
+            // after clearing it (otherwise the set would sit there twice).
+            NSArray *rest = [self->_set subarrayWithRange:NSMakeRange(index + 1, self->_set.count - index - 1)];
+            [self mark:rest state:MRGDJQueuePending];
+            self->_rebuilds = 0;
+            MRGClearQueue(^(NSUInteger removed, NSString *clearError) {
+                if (gen != self->_generation) return;
+                MRGQueueTracks([uris subarrayWithRange:NSMakeRange(1, uris.count - 1)], ^(BOOL queued, NSString *queueError) {
+                    if (gen != self->_generation) return;
+                    self->_playbackMode = queued ? @"queue" : @"step";
+                    if (!queued) [self mark:rest state:MRGDJQueueMissing];
+                    [self syncQueueSoon:2.0 reason:@"after a jump"];
+                });
             });
         });
     });
@@ -985,7 +1218,118 @@ static NSString *plain(NSString *s) {
     // so the queue never runs dry (after an artist's catalog: artists like them).
     if (index >= (NSInteger)_set.count - 4 && !_fetchingNext && !_next) [self fetchNext];
     if (index >= (NSInteger)_set.count - 2 && _next.count) [self appendNext];
+    [self syncQueueSoon:3.0 reason:@"track changed"];
     [self changed];
+}
+
+#pragma mark - queue sync
+
+// Spotify can take a queue command and still not apply it, and a play can wipe the queue, so the set sheet never trusts
+// a command: after every queueing, every track change and every 25 s, Spotify's real queue is read back
+// (MRGFetchQueue) and compared with what's left of the set. Missing songs are put back (the queue's set songs cleared
+// and re-sent in set order, anything the listener queued kept after them), at most twice per set; after that, step
+// mode: Mirage plays each missing song itself when its turn comes. A different order in Spotify (the listener dragged
+// things around) is followed by the set.
+- (void)mark:(NSArray<MRGDJTrack *> *)tracks state:(MRGDJQueueState)state {
+    for (MRGDJTrack *t in tracks) t.queueState = state;
+    [self changed];
+}
+
+- (void)syncTick {
+    if (_state == MRGDJPlaying && CACurrentMediaTime() - _lastSync > 20) [self syncQueue:@"timer"];
+}
+
+- (void)syncQueueSoon:(double)delay reason:(NSString *)reason {
+    NSUInteger token = ++_syncToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token == self->_syncToken) [self syncQueue:reason];
+    });
+}
+
+static NSInteger queuePosition(MRGDJTrack *t, NSArray<NSDictionary *> *queued) {
+    for (NSInteger i = 0; i < (NSInteger)queued.count; i++) if ([queued[i][@"uri"] isEqualToString:t.uri]) return i;
+    NSString *ti = plain(t.title), *ar = plain(t.artist);
+    if (!ti.length) return NSNotFound;
+    for (NSInteger i = 0; i < (NSInteger)queued.count; i++)
+        if ([plain(queued[i][@"title"]) isEqualToString:ti] && (!ar.length || [plain(queued[i][@"artist"]) isEqualToString:ar])) return i;
+    return NSNotFound;
+}
+
+- (void)syncQueue:(NSString *)reason {
+    if (_state != MRGDJPlaying || !_set.count || _syncing || _stepping) return;
+    NSInteger here = MAX(_currentIndex, _lastIndex);
+    if (here < 0) return;   // the player is somewhere else; nothing to line up
+    _syncing = YES;
+    _lastSync = CACurrentMediaTime();
+    NSUInteger gen = _generation;
+    MRGFetchQueue(^(NSArray<NSDictionary *> *queued, NSArray<NSDictionary *> *upNext, NSString *error) {
+        self->_syncing = NO;
+        if (gen != self->_generation || self->_state != MRGDJPlaying) return;
+        if (error) { MRGDJLog(@"sync: couldn't read Spotify's queue (%@) [%@]", error, reason); return; }
+        NSInteger from = MAX(self->_currentIndex, self->_lastIndex) + 1;
+        NSArray<MRGDJTrack *> *set = self->_set;
+        for (NSInteger i = 0; i < from && i < (NSInteger)set.count; i++) if (i != self->_currentIndex) set[i].queueState = MRGDJQueuePlayed;
+        if (from >= (NSInteger)set.count) { [self changed]; return; }
+        NSArray<MRGDJTrack *> *upcoming = [set subarrayWithRange:NSMakeRange(from, set.count - from)];
+        NSMutableArray *missing = [NSMutableArray array];
+        NSMutableArray *positions = [NSMutableArray array];
+        NSMutableSet *ours = [NSMutableSet set];
+        for (MRGDJTrack *t in upcoming) {
+            NSInteger pos = queuePosition(t, queued);
+            if (pos == NSNotFound) { [missing addObject:t]; t.queueState = MRGDJQueueMissing; }
+            else { [positions addObject:@(pos)]; [ours addObject:@(pos)]; t.queueState = MRGDJQueueQueued; }
+        }
+        NSMutableArray *foreign = [NSMutableArray array];
+        for (NSInteger i = 0; i < (NSInteger)queued.count; i++) if (![ours containsObject:@(i)]) [foreign addObject:queued[i][@"uri"]];
+        NSDictionary *after = upNext.firstObject;
+        MRGDJLog(@"sync: [%@] %lu left in the set, %lu in Spotify's queue, %lu missing, %lu other queued; next up: %@ (%@)", reason,
+                 (unsigned long)upcoming.count, (unsigned long)(upcoming.count - missing.count), (unsigned long)missing.count, (unsigned long)foreign.count,
+                 after[@"title"] ?: @"nothing", after[@"provider"] ?: @"-");
+        if (!missing.count) {
+            self->_playbackMode = @"queue";
+            // Same songs, other order: the listener reordered Spotify's queue, so the set follows it.
+            BOOL sorted = YES;
+            for (NSUInteger i = 1; i < positions.count; i++) if ([positions[i] integerValue] < [positions[i - 1] integerValue]) sorted = NO;
+            if (!sorted) {
+                NSArray *ordered = [upcoming sortedArrayUsingComparator:^NSComparisonResult(MRGDJTrack *a, MRGDJTrack *b) {
+                    NSInteger pa = queuePosition(a, queued), pb = queuePosition(b, queued);
+                    return pa < pb ? NSOrderedAscending : pa > pb ? NSOrderedDescending : NSOrderedSame;
+                }];
+                self->_set = [[set subarrayWithRange:NSMakeRange(0, from)] arrayByAddingObjectsFromArray:ordered];
+                MRGDJLog(@"sync: Spotify's queue has another order, the set follows it");
+            }
+            [self changed];
+            return;
+        }
+        if (missing.count == upcoming.count) MRGDJLog(@"sync: none of the set is in Spotify's queue (wiped or never applied)");
+        if (self->_rebuilds >= 2) {
+            if (![self->_playbackMode isEqualToString:@"step"]) MRGDJLog(@"sync: the queue keeps dropping songs, step mode: Mirage plays the missing ones itself");
+            self->_playbackMode = @"step";
+            [self changed];
+            return;
+        }
+        self->_rebuilds++;
+        NSMutableArray *send = [urisOf(upcoming) mutableCopy];
+        [send addObjectsFromArray:foreign];
+        MRGDJLog(@"sync: rebuilding the queue (%ld/2): %lu set songs in order%@", (long)self->_rebuilds, (unsigned long)upcoming.count,
+                 foreign.count ? [NSString stringWithFormat:@", then %lu the listener queued", (unsigned long)foreign.count] : @"");
+        for (MRGDJTrack *t in missing) t.requeues++;
+        [self mark:upcoming state:MRGDJQueuePending];
+        MRGClearQueue(^(NSUInteger removed, NSString *clearError) {
+            if (gen != self->_generation) return;
+            MRGQueueTracks(send, ^(BOOL ok, NSString *queueError) {
+                if (gen != self->_generation) return;
+                if (!ok) {
+                    MRGDJLog(@"sync: re-queue refused (%@), step mode", queueError ?: @"?");
+                    self->_playbackMode = @"step";
+                    [self mark:upcoming state:MRGDJQueueMissing];
+                    return;
+                }
+                [self syncQueueSoon:2.5 reason:@"after rebuild"];
+            });
+        });
+        [self changed];
+    });
 }
 
 - (void)appendNext {
@@ -998,9 +1342,12 @@ static NSString *plain(NSString *s) {
     _set = [_set arrayByAddingObjectsFromArray:add];
     NSUInteger gen = _generation;
     MRGDJLog(@"refill: %lu more songs after the set", (unsigned long)add.count);
+    [self mark:add state:MRGDJQueuePending];
+    _rebuilds = 0;
     MRGQueueTracks(urisOf(add), ^(BOOL queued, NSString *error) {
         if (gen != self->_generation) return;
-        if (!queued) { self->_playbackMode = @"step"; MRGDJLog(@"refill: queue refused (%@), stepping", error ?: @"?"); }
+        if (!queued) { self->_playbackMode = @"step"; [self mark:add state:MRGDJQueueMissing]; MRGDJLog(@"refill: queue refused (%@), stepping", error ?: @"?"); }
+        [self syncQueueSoon:2.0 reason:@"after the refill"];
     });
     [self changed];
 }

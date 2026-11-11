@@ -88,6 +88,24 @@ NSArray<NSDictionary *> *MRGVoicePresets(void) {
               @"openai": @"shimmer", @"gemini": @"Achernar", @"groq": @"diana", @"xai": @"ara",
               @"eleven": @[@"Sarah", @"Lily", @"Matilda", @"Alice", @"Jessica", @"Laura", @"Charlotte", @"Rachel"], @"gender": @"female",
               @"stability": @0.7, @"similarity": @0.8, @"elStyle": @0.15},
+            // Modeled on Alex's first sample (soft close-mic female, ~200 Hz median, narrow melody, very slow with long gaps).
+            @{@"id": @"velvet", @"name": @"Warm Velvet", @"blurb": @"Very soft, slow and close; warm, caring, unhurried female voice.",
+              @"speed": @0.8, @"pitch": @0.97, @"warmth": @1.0, @"breath": @0.6, @"pause": @0.85, @"persona": @6,
+              @"style": @"A very soft, close-mic female voice, almost a murmur but still voiced: slow and unhurried, short phrases with long gentle pauses between them, low-to-mid pitch with a calm, narrow melody, warm and affectionate, quietly reassuring, a soft smile in the voice. Never loud, never bright, never rushed.",
+              @"openai": @"shimmer", @"gemini": @"Sulafat", @"groq": @"autumn", @"xai": @"ara",
+              @"eleven": @[@"Mia", @"Nora", @"Faith", @"Sarah", @"Lily", @"Matilda"],
+              @"elevenID": @"sp8CrAP79SOncD3rShle", @"elevenIDName": @"Mia (soft & intimate)",
+              @"phone": @[@"Ava", @"Zoe", @"Samantha"], @"gender": @"female",
+              @"stability": @0.75, @"similarity": @0.8, @"elStyle": @0.1},
+            // Modeled on Alex's second sample (ElevenLabs "Arabella" v3 demo: young bright American female, very expressive).
+            @{@"id": @"spark", @"name": @"Playful Spark", @"blurb": @"Young, bright and super expressive; laughs, whispers, big swings.",
+              @"speed": @1.05, @"pitch": @1.03, @"warmth": @0.6, @"breath": @0.25, @"pause": @0.35, @"persona": @0,
+              @"style": @"A young, bright American female voice, playful and very expressive: big pitch swings, quick excited delivery that drops to a conspiratorial whisper, little laughs and giggles, dramatic pauses before the reveal, sounds amazed by everything, like a friend gushing about a song.",
+              @"openai": @"coral", @"gemini": @"Zephyr", @"groq": @"hannah", @"xai": @"eve",
+              @"eleven": @[@"Arabella", @"Jessica", @"Laura", @"Lily"],
+              @"elevenID": @"Z3R5wn05IrDiVCyEkUrK", @"elevenIDName": @"Arabella (library)",
+              @"phone": @[@"Zoe", @"Ava", @"Nicky"], @"gender": @"female",
+              @"stability": @0.3, @"similarity": @0.75, @"elStyle": @0.55},
             @{@"id": @"hype", @"name": @"Hype Radio DJ", @"blurb": @"Loud, fast, big energy.",
               @"speed": @1.15, @"pitch": @1.05, @"warmth": @0.4, @"breath": @0.0, @"pause": @0.15, @"persona": @2,
               @"style": @"A high-energy radio DJ: punchy, excited and confident, big smile, hits the artist names hard, fast pace.",
@@ -147,12 +165,24 @@ NSString *MRGVoiceApplyPreset(NSString *pid) {
     MRGProvider prov = MRGAIProvider();
     NSString *key = prov == MRGProviderOpenAI ? @"openai" : prov == MRGProviderGemini ? @"gemini" : prov == MRGProviderGroq ? @"groq" : prov == MRGProviderXAI ? @"xai" : nil;
     if (key && MRGProviderHasTTS(prov)) { MRGVoiceSetProviderVoice(p[key]); [what addObject:[NSString stringWithFormat:@"%@ voice %@", MRGProviderName(prov), p[key]]]; }
+    BOOL elevenSet = NO;
     for (NSString *want in p[@"eleven"]) {
         NSDictionary *hit = nil;
         for (NSDictionary *v in MRGElevenVoices()) if ([[v[@"name"] lowercaseString] hasPrefix:want.lowercaseString]) { hit = v; break; }
-        if (hit) { MRGElevenSetVoice(hit[@"id"]); [what addObject:[@"ElevenLabs " stringByAppendingString:hit[@"name"]]]; break; }
+        if (hit) { MRGElevenSetVoice(hit[@"id"]); [what addObject:[@"ElevenLabs " stringByAppendingString:hit[@"name"]]]; elevenSet = YES; break; }
     }
-    AVSpeechSynthesisVoice *phone = bestPhoneVoice(p[@"gender"]);
+    // Not in the account's list: use the shared-library voice by ID (paid ElevenLabs plans can use these directly).
+    if (!elevenSet && [p[@"elevenID"] length] && MRGKeychainGet(kEleven).length) {
+        MRGElevenSetVoice(p[@"elevenID"]);
+        [what addObject:[@"ElevenLabs " stringByAppendingString:p[@"elevenIDName"] ?: p[@"elevenID"]]];
+    }
+    AVSpeechSynthesisVoice *phone = nil;
+    for (NSString *want in p[@"phone"]) {
+        for (AVSpeechSynthesisVoice *v in MRGVoicePhoneVoices())
+            if ([v.language hasPrefix:@"en"] && [v.name.lowercaseString hasPrefix:want.lowercaseString]) { phone = v; break; }
+        if (phone) break;
+    }
+    if (!phone) phone = bestPhoneVoice(p[@"gender"]);
     if (phone) { MRGVoiceSetPhoneVoice(phone.identifier); [what addObject:[@"iPhone " stringByAppendingString:phone.name]]; }
     [D() setObject:pid forKey:@"mirage.dj.voicePreset"];
     MRGDJLog(@"voice: preset %@ (%@)", p[@"name"], what.count ? [what componentsJoinedByString:@", "] : @"settings only");

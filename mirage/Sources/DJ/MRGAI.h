@@ -45,6 +45,8 @@ void MRGAIForgetKey(void);
 
 // One chat turn. json: ask for a JSON object back (each provider's JSON mode, where it has one).
 void MRGAIChat(NSString *system, NSString *user, BOOL json, void (^done)(NSString *text, NSString *error));
+// Web-grounded answer (Gemini google_search); other providers: done(nil, nil, nil). Main queue.
+void MRGAIGrounded(NSString *question, void (^done)(NSString *text, NSArray<NSDictionary *> *sources, NSString *error));
 
 // The provider's speech for a line in `voice` (nil: its default), at `speed` (1 = normal): audio data AVAudioPlayer
 // can play (MP3 from OpenAI and xAI, WAV from Gemini and Groq).
