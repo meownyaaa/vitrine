@@ -1,3 +1,34 @@
+# Mirage
+
+**Mirage** is a fork of [Vitrine](https://github.com/meownyaaa/vitrine), which is itself the GPL-3.0 fork of
+[Chroma](https://github.com/skopevoj/spoti.pw) (up to v0.21.1). It adds a second tweak, `mirage/`, next to
+Vitrine's own:
+
+- **Custom backgrounds**: a picture (PNG/JPG/HEIC), a GIF (converted to a looping MP4) or a video
+  (MP4/MOV, muted, without touching Spotify's audio session), with blur, dim, scale mode and a choice of
+  Home / Now Playing / Library / Everywhere. It sits behind Vitrine's liquid glass.
+- A **Mirage** row in the side drawer, right below Vitrine's *Mod Settings*, that opens Mirage's settings.
+- **Mirage DJ** (0.2.0): an AI DJ that uses your own API key (OpenAI, Gemini, Anthropic, OpenRouter, Groq, xAI, Perplexity,
+  Cerebras, Fireworks, Together, DeepSeek, Mistral) to pick sets from your taste and talk between tracks. Since 0.3.0: voices
+  (iPhone, provider, ElevenLabs), personas, a chat that answers from your listening history and makes playlists. Since 0.4.0:
+  artist-aware sets, taste from what you actually play, talks like you, player controls and likes, its own settings page. Since 0.4.1:
+  an artist plays their whole catalog then similar artists, labels/crews ("yvl"), playlists/albums/Liked Songs, the queue is replaced
+  on every new request, and voice presets with fine controls. Since 0.4.2: the set is checked against Spotify's real queue and
+  repaired, picks stay near your seeds, the vibe box answers questions, artist/song info cards with sources, two new voice presets. 0.4.3: the queue crash on tapping a song is fixed, Start follows the song playing now, ElevenLabs Ivy / Nicole / Arabella presets. 0.4.4: those presets really speak with ElevenLabs, and ElevenLabs errors are shown instead of the iPhone voice. 0.5.0: "play <song> by <artist>" plays that song first and then similar music, playlist/album requests, no more overlapping sets or voices, free Microsoft Edge voices (unofficial) as the default plus Qwen TTS with your own key, a backup AI key for rate limits, and the Addon Shop with its first addon, Vinyl. 0.5.1: the free voices really speak now (and are what every preset uses), Qwen is gone, Vinyl stays on, and the DJ bar on Now Playing no longer covers the cover, lyrics or title. 0.5.2: the Vinyl crash is fixed and the record now moves with the cover, the DJ stops making up facts, the Now Playing background and DJ bar move with the player when you pull it down, and the Add-on Shop is cleaned up.
+  See [docs/mirage/AI-DJ.md](docs/mirage/AI-DJ.md).
+- Coming next: an **Addon Shop**.
+
+Vitrine's sources (`tweak/`) are kept as upstream ships them, so `git merge upstream/main` stays clean.
+
+- Build: [docs/mirage/BUILDING.md](docs/mirage/BUILDING.md). Linux works through `scripts/mirage-setup-linux.sh` and `scripts/mirage-build.sh`,
+  and macOS or GitHub Actions through `.github/workflows/mirage-ipa.yml`.
+- Install with Ksign: [docs/mirage/INSTALL.md](docs/mirage/INSTALL.md)
+
+Mirage is licensed GPL-3.0 like Vitrine and Chroma ≤ 0.21.1. Bring your own decrypted Spotify IPA. Neither this
+repo nor its workflows publish one.
+
+---
+
 <h1 align="center">Vitrine</h1>
 
 <p align="center">Spotify, in glass.</p>

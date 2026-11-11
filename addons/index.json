@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "addons": [
+    {
+      "id": "vinyl",
+      "name": "Vinyl",
+      "description": "Turns the Now Playing cover into a record sleeve. The cover slides to one side and a vinyl record peeks out from behind it. The record spins while music plays, stops when you pause, and its label shows the album art. You can pick the spin speed and the side the record sits on.",
+      "preview": "https://raw.githubusercontent.com/x4nzz/Mirage/main/addons/previews/vinyl.png",
+      "version": "1.1",
+      "type": "Now Playing",
+      "author": "Mirage",
+      "min_mirage": "0.5.0"
+    }
+  ]
+}
