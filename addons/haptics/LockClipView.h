@@ -17,6 +17,8 @@
 - (void)showCover:(UIImage *)cover;
 // Whether anything is drawn: a clip or a cover.
 @property (nonatomic, readonly) BOOL hasContent;
+// Where the clip, or else the cover, is drawn, in the view's own space: the large cover itself, a tap on which closes it.
+@property (nonatomic, readonly) CGRect drawnFrame;
 // While the screen is dark nothing is read or decoded; lit again, the clip starts over on a new display layer, as the
 // one before can come back unable to decode, leaving bands with no picture between them.
 - (void)setSuspended:(BOOL)suspended;

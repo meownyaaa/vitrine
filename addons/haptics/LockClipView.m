@@ -207,6 +207,12 @@ static void edgeColors(CGImageRef image, UIColor **top, UIColor **bottom) {
     return _wanted != nil || _cover != nil;
 }
 
+- (CGRect)drawnFrame {
+    if (_video && _wanted && !_suspended) return [self fitted];
+    CGFloat width = self.bounds.size.width;
+    return CGRectMake(0, CGRectGetMidY(self.bounds) - width / 2, width, width);
+}
+
 // The display layer could not go on: the clip again on a new one, unless the screen is dark, where it is built as it lights.
 - (void)failed:(NSNotification *)note {
     dispatch_async(dispatch_get_main_queue(), ^{

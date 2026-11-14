@@ -264,19 +264,6 @@ typedef NS_ENUM(NSInteger, SGTTMLPart) {
 
 #pragma mark - what the head adds to the lines
 
-// The letters and digits alone, lowercased: a pronunciation or a translation that reads the same as its
-// line is the line again, as an English line of a Japanese song is spelled out as itself.
-NSString *SGLyricsBareText(NSString *text) {
-    NSMutableString *bare = [NSMutableString string];
-    NSCharacterSet *kept = NSCharacterSet.alphanumericCharacterSet;
-    NSString *lower = text.lowercaseString;
-    for (NSUInteger i = 0; i < lower.length; i++) {
-        unichar c = [lower characterAtIndex:i];
-        if ([kept characterIsMember:c]) [bare appendFormat:@"%C", c];
-    }
-    return bare;
-}
-
 // The translation the Lyrics page asks for: the one in that language, whichever the region ("en"
 // takes "en-US"), and none in any other; with no language asked for, the first the document has.
 static NSString *translationLanguage(NSArray<NSString *> *languages) {

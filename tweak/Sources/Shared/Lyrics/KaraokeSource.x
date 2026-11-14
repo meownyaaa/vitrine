@@ -569,11 +569,19 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
 %end
 %end
 
+// Whether anything shows the lines now: the redesign, the lock screen's lines, the mod's own sources, the lock screen's
+// artwork with lyrics, or the large cover's lyrics once they are picked with its button. The Canvas add-on's lyrics
+// switch alone keeps the player caught (the %ctor), not the fetches: a user who never picks the lyrics pays nothing.
+static BOOL linesShown(void) {
+    return SGRedesignedUI() || SGFlag(SGKeyLockScreenLyrics, NO) || SGLyricsEnabled()
+        || SGLockArtworkShowsLyrics(SGLockScreenArtwork()) || (SGLockCoverLyricsWanted() && SGLockCoverLyricsPicked());
+}
+
 %ctor {
     // The sources that search by name learn the name from the player, so the player is caught
     // whenever one is on, not only for the redesign's lyrics and the lock screen.
     if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsEnabled()
-        && !SGLockArtworkShowsLyrics(SGLockScreenArtwork())) {
+        && !SGLockArtworkShowsLyrics(SGLockScreenArtwork()) && !SGLockCoverLyricsWanted()) {
         %init(SGSpclientHeadersOnly);
         return;
     }
@@ -615,7 +623,7 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *note) {
         NSString *playing = SGKaraokePlayingTrack();
-        if (playing && !sg_lyrics[playing] && !SGKaraokeLooking(playing)) SGKaraokeRequestLyrics(playing);
+        if (playing && linesShown() && !sg_lyrics[playing] && !SGKaraokeLooking(playing)) SGKaraokeRequestLyrics(playing);
     }];
     sg_trackWatcher = [SGKaraokeTrackWatcher new];
     SGAddPlayerStateObserver(sg_trackWatcher);

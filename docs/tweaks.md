@@ -123,7 +123,11 @@ Shared:
                   screen's line and artwork, the Live Activity, the native look's lyrics page for local files), and a
                   tap on a line seeks to its start plus the delay. Karaoke's audio, the scrubber and the lyrics preview
                   are left alone. It is read at every use, so a change applies at once (checked by harness/lyrics' -check). With EeveeSpotify injected (SGEeveeSpotifyInjected), its lyrics
-                  answer Spotify's requests and the mod's sources and its own requests stand aside
+                  answer Spotify's requests and the mod's sources and its own requests stand aside. A timed line is
+                  drawn by KaraokeLines (its words swept, glow and wave, backing row, pronunciation, Latin letters and
+                  translation, the dots of a break) for both columns of lyrics there are, the redesign's lyrics page and
+                  the lock screen's large cover in Vitrine Addon, which builds the file into MediaRemoteUI; the model
+                  builds without the protobuf reader, whose bodies KaraokeBody.m reads
     LyricsSources/ the sources lyrics come from, asked in the order the Lyrics page puts them in and merged into the
                   best answer (LyricsSources.m, the list to drag in LyricsSourcesPage.m): Apple Music's TTML from
                   BiniLyrics.m (now lrc.red: first the TTML filed under Spotify's ISRC for the track, from
@@ -216,7 +220,12 @@ Shared:
                   mode outlives a relaunch and the page's row follows it. The star takes the slot of Spotify's like
                   and dislike buttons, so their flag is forced off at launch while the switch is on, over the row's
                   own override, and the row shows it locked. The cut and the service's wire format are checked on
-                  the Mac against harness/motion/
+                  the Mac against harness/motion/. Below iOS 26 with a jailbreak, Vitrine Addon draws the Canvas in
+                  place of the lock screen's large cover (LockScreenAddonClip.x hands it the clip) and, with Lyrics on
+                  the large cover, the song's lines over it from a button in the lock screen player's header, in the
+                  place of its small cover while the large one is open (LockScreenAddonLyrics.x hands it the lines with
+                  the lyrics page's look, and the song's clock in a notification's state, only while the lyrics are
+                  picked; SpringBoard catches the touches over them, as the cover sheet takes every touch there)
     LocalFiles/   local files (LocalFiles.h lists its files): Edit info in the player's ⋯ menu, the table's footer
                   under Speed and pitch, which closes the menu and opens a form sheet (the three names, the cover
                   with a menu to change it, Restore file's info; nothing is stored before Save, and a swipe away

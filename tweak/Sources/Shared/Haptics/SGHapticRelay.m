@@ -80,6 +80,7 @@ void SGHapticRelayAsk(void) {
 
 void SGHapticRelaySendLockArt(void) {
     notify_post(SGFlag(SGKeyLockCoverAddon, NO) ? kSGRelayLockArtOn : kSGRelayLockArtOff);
+    notify_post(SGEnabled(SGKeyLockCoverLyrics) ? kSGRelayLockLyricsOn : kSGRelayLockLyricsOff);
 }
 
 void SGHapticAddonShareSoon(void) {

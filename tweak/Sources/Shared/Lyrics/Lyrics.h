@@ -97,6 +97,19 @@ typedef NS_ENUM(NSUInteger, SGKaraokeAlign) {
 BOOL SGKaraokeHasTranslations(NSArray<SGKaraokeLine *> *lines);
 // The line as one string, a space between the words that are not joined.
 NSString *SGKaraokeLineText(SGKaraokeLine *line);
+// The letters and digits of a text alone, lowercased: a pronunciation or a translation equal to its
+// line's this way reads the same as the line and is left out.
+NSString *SGLyricsBareText(NSString *text);
+// The lines as plist values (arrays, dictionaries, strings and numbers) for a file another process reads, as the
+// lock screen's large cover does (Vitrine Addon), and back: every field of each line and word, the backing and the
+// pronunciation within. A value that does not read gives nil.
+NSArray *SGKaraokeLinesPlist(NSArray<SGKaraokeLine *> *lines);
+NSArray<SGKaraokeLine *> *SGKaraokeLinesFromPlist(id plist);
+// The redesign's lyrics look as plist values, for the lock screen's large cover to draw its lines like the lyrics
+// page: "size", "spacing", "blur", "glow" and "wave" (Redesigned/Lyrics/LyricsLook.h), "order" (SGKaraokeText
+// values, largest first) and whether the lyrics menu shows "pronunciation" and "translation". Declared here for
+// Shared to ask and defined by Redesigned/Lyrics/LyricsLook.m, under either look.
+NSDictionary *SGLyricsLookPlist(void);
 // When the singing of a line is over: its own end, or its backing's when that runs on past it.
 NSInteger SGKaraokeSungEnd(SGKaraokeLine *line);
 // The one line a place with room for one names as the one being sung at `ms`. Two voices can sing
