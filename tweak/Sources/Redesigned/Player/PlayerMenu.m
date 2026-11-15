@@ -246,3 +246,9 @@ void SGRPlayerMenuWatch(UIView *button) {
     sg_moreButton = button;
     SGRSystemMenuWatch(button, ^NSArray<UIMenuElement *> *{ return playerItems(); }, ^NSString *{ return sheetKind(); });
 }
+
+// The AI DJ's sheet has rows of its own (feedback, language, voice), so it is kept apart from a song's.
+void SGRDJPlayerMenuWatch(UIView *button) {
+    sg_moreButton = button;
+    SGRSystemMenuWatch(button, ^NSArray<UIMenuElement *> *{ return playerItems(); }, ^NSString *{ return @"dj"; });
+}

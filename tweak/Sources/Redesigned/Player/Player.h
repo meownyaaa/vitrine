@@ -235,3 +235,5 @@ CGFloat SGRSeekShareAt(UISlider *slider, CGPoint point);
 // The more button's menu opens as the system menu with the player's own items (PlayerMenu.m). Called from
 // PlayerHeader.x with Spotify's more button on every pass; watching it again changes nothing.
 void SGRPlayerMenuWatch(UIView *button);
+// The same for the AI DJ's player, whose sheet has rows of its own.
+void SGRDJPlayerMenuWatch(UIView *button);

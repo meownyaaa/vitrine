@@ -4,7 +4,7 @@
 Spotify's player ⋯ and its context menu sheet (`ContextMenu_InternalImpl.ContextMenuViewController` under its
 class name, inside a navigation controller): 15 rows, each an Encore-style ListRow control whose identifier is
 Spotify's item number and which acts on touch up inside, no `didSelect`, Sleep timer last and below the sheet's
-fold, as on the phone. Speed, pitch, reverb and Animated artwork are stubs that log.
+fold, as on the phone. On the iOS 16 simulator the redesign runs as untested (`spotifyglass.redesign.untested`). Speed, pitch, reverb and Animated artwork are stubs that log.
 
     THEOS=$HOME/theos ./build.sh
     xcrun simctl install <udid> build/SystemMenuHarness.app
@@ -48,10 +48,22 @@ sheet is the player's, and that the sheet is in the mod's window under the app's
 - `close`: closing the menu with no pick takes the hidden sheet away within 1 s, and a second tap opens again.
 - `subpage`: the quick Share taps Spotify's Share, which pushes a page inside the sheet: the sheet is shown over
   the player, on that page; closed, the mod's window goes back under the app's.
-- `sleep`: More's Sleep timer pushes its options page 0.3 s later: the same.
-- `sleeppresent`: More's Sleep timer presents a context menu sheet of its own from the player, as on the phone:
-  that sheet shows as Spotify's, in the app's window, no menu comes up for it, Spotify's ⋯ action ran once, and
-  the card it came from goes unseen.
+- `sleep`: More's Sleep timer (item 51) is picked: the menu goes, Spotify's row is tapped on the hidden sheet, which
+  pushes its options page (Encore list rows, no table) 0.3 s later, and the page's rows open as a menu of their own
+  from the ⋯, under its heading, with Back; the sheet stays hidden, and picking 5 minutes taps it on the page, after
+  which the page and the sheet go, unseen.
+- `sleeppresent`: the same with Sleep timer presenting a context menu sheet of its own from the player, as on the
+  phone: it goes up from the hidden sheet instead, hidden and taking no touches, and its table rows fill the menu.
+- `sleepwrapped`: the same, with the sleep timer's sheet inside a container that puts it in only as it appears
+  (NavigationUI_SheetImpl.ContainerViewController on the phone), and Spotify's card taken down before it, as on
+  the phone: it is still kept hidden and fills the menu, which opens though the card is gone.
+- `sleepback`: as `sleepwrapped`, then Back 4.5 s after the times came (past `kPageWait`, when nothing of the pick holds
+  the menu's session): the menu opens again though Spotify's card is gone, from a fresh session that asks for a card of
+  its own, and the timer's sheet goes.
+- `pagepopup`: Voice language (item 0), a row the mod does not know, pushes a page: its rows open as a menu of their
+  own, under its heading, with Back and the picked row checked, and the row is kept as one that opens a page; Back pops
+  the page and opens the menu again; Voice language is then a submenu of the page's stored rows, opened at once, and
+  German picked from it fires Voice language on the hidden sheet and German on the page it opens.
 - `sort`: a row of the mod's own in the sheet's header (as the playlist's Sort) is in More and fires.
 - `animated`: Show Animated Artwork switches it on and the sheet goes.
 - `wrapped`: Spotify presents a controller of its own that puts the sheet in only as it appears

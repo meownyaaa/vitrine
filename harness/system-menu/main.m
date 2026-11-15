@@ -21,6 +21,8 @@
 // player-menu fixtures do not provide an album page or the shared album footer.
 void SGAlbumQueueInstall(UIViewController *menu) {}
 void SGBatchTranslationInstall(UIViewController *menu) {}
+BOOL SGIsAlertController(UIViewController *controller) { return [controller isKindOfClass:UIAlertController.class]; }
+void SGPlayerStylePanel(UIView *content) {}
 
 void SGRPlayerMenuWatch(UIView *button);
 // touch.m: a finger's touches, through UIKit's own recognizers.
@@ -81,6 +83,11 @@ BOOL SGLyricsEnabled(void) { return NO; }
 NSArray<NSString *> *SGLyricsOrder(void) { return @[]; }
 SGLyricsProvider *SGLyricsProviderFor(NSString *key) { return nil; }
 NSString *SGLyricsCreditFor(NSString *trackID) { return nil; }
+// The lyrics source picker's offers and timing (PlayerMenu.m's Lyrics Source row), and its panel: none here.
+SGKaraokeTiming SGKaraokeLinesTiming(NSArray<SGKaraokeLine *> *lines) { return SGKaraokeTimingNone; }
+void SGLyricsAskOffers(NSString *trackID) {}
+NSNotificationName const SGLyricsOffersDidChangeNotification = @"SGLyricsOffersDidChangeNotification";
+void SGPresentPopover(UIViewController *panel, UIView *from) { NSLog(@"[harness] popover %@", NSStringFromClass(panel.class)); }
 NSString *SGLyricsChosenSource(NSString *trackID) { return nil; }
 NSDictionary<NSString *, SGLyricsResult *> *SGLyricsOffersSoFar(NSString *trackID, NSArray<NSString *> **asking) { return @{}; }
 void SGLyricsChooseSource(NSString *trackID, NSString *key) {}
@@ -93,6 +100,9 @@ void SGRPlayerMenuSetBackground(NSInteger kind) { sg_background = kind; SGPlayer
 SPTPlayerState *SGPlayerState(void) { return nil; }
 NSString *SGURIString(id uri) { return nil; }
 UIView *SGRPinnedMoreRecentButton(void) { return nil; }
+@class SGRMirrorButton;
+void (*SGRPinnedMoreHook)(SGRMirrorButton *button);
+void SGRPinnedMoreNoteTap(UIView *button) {}
 void SGRAnimate(NSInteger motion, void (^animations)(void), void (^completion)(BOOL finished)) {
     [UIView animateWithDuration:0.2 animations:animations completion:completion];
 }
@@ -120,7 +130,9 @@ static NSArray<NSArray<NSString *> *> *spotifyRows(void) {
                               @[@"square.and.arrow.up", @"Share", @"9"], @[@"square.stack", @"Go to album", @"1"],
                               @[@"quote.bubble", @"Lyrics", @"28"]] mutableCopy];
     for (int i = 0; i < 9; i++) [rows addObject:@[@"circle", [NSString stringWithFormat:@"Row %d", i + 1], [NSString stringWithFormat:@"%d", 60 + i]]];
-    [rows addObject:@[@"moon", @"Sleep timer", @"44"]];
+    // The DJ's Voice language: a row the mod does not know opens a page (item 0, as on the phone).
+    if (is(@"pagepopup")) [rows addObject:@[@"globe", @"Voice language", @"0"]];
+    [rows addObject:@[@"moon", @"Sleep timer", @"51"]];
     return rows;
 }
 
@@ -158,6 +170,49 @@ static NSTimeInterval sg_rowsAfter;
 @property (nonatomic, copy) NSString *title;
 @end
 @implementation SGHarnessListRow
+@end
+
+// Encore's icon, as the checkmark at the end of a page's picked row.
+@interface SGHarnessIconView : UIView
+@end
+@implementation SGHarnessIconView
+@end
+
+// A page a row pushes inside the sheet, as Voice language's (Endless_DJSettingsLanguagePageImpl): a heading and Encore
+// list rows in a stack, no table, the picked one with a checkmark at its end. A row picked does nothing to the sheet.
+@interface SGHarnessOptionsPage : UIViewController
+@property (nonatomic, copy) NSString *heading;
+@property (nonatomic, copy) NSArray<NSString *> *options;
+@end
+@implementation SGHarnessOptionsPage
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = self.heading;
+    self.view.backgroundColor = UIColor.darkGrayColor;
+    UILabel *heading = [[UILabel alloc] initWithFrame:CGRectMake(44, 11, 300, 22)];
+    heading.text = self.heading;
+    heading.accessibilityIdentifier = @"Components.UI.ContextMenuHeading.Label";
+    [self.view addSubview:heading];
+    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectMake(0, 52, 390, 56 * self.options.count)];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.distribution = UIStackViewDistributionFillEqually;
+    [self.view addSubview:stack];
+    [self.options enumerateObjectsUsingBlock:^(NSString *option, NSUInteger index, BOOL *stop) {
+        SGHarnessListRow *row = [[SGHarnessListRow alloc] initWithFrame:CGRectMake(0, 0, 390, 56)];
+        row.accessibilityIdentifier = @"Encore.ListRow";
+        row.title = option;
+        [row addTarget:self action:@selector(picked:) forControlEvents:UIControlEventTouchUpInside];
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(12, 17, 300, 22)];
+        label.text = option;
+        [row addSubview:label];
+        if (index == 0) [row addSubview:[[SGHarnessIconView alloc] initWithFrame:CGRectMake(354, 20, 16, 16)]];
+        [stack addArrangedSubview:row];
+    }];
+}
+- (void)picked:(SGHarnessListRow *)row {
+    sg_selected = row.title;
+    NSLog(@"[harness] picked %@ on the %@ page", row.title, self.heading);
+}
 @end
 
 @class SGHarnessPlayer;
@@ -250,18 +305,31 @@ static SGHarnessPlayer *sg_player;
     sg_selected = row.title;
     NSLog(@"[harness] selected %@", row.title);
     UINavigationController *navigation = self.navigationController;
-    if ([row.title isEqualToString:@"Share"] || ([row.title isEqualToString:@"Sleep timer"] && !is(@"sleeppresent"))) {
-        after([row.title isEqualToString:@"Share"] ? 0 : 0.3, ^{
-            UIViewController *page = [UIViewController new];
-            page.title = [row.title stringByAppendingString:@" page"];
-            page.view.backgroundColor = UIColor.darkGrayColor;
+    if ([row.title isEqualToString:@"Share"]) {
+        UIViewController *page = [UIViewController new];
+        page.title = @"Share page";
+        page.view.backgroundColor = UIColor.darkGrayColor;
+        [navigation pushViewController:page animated:YES];
+        return;
+    }
+    if ([row.title isEqualToString:@"Voice language"] || ([row.title isEqualToString:@"Sleep timer"] && !is(@"sleeppresent") && !(is(@"sleepwrapped") || is(@"sleepback")))) {
+        BOOL sleep = [row.title isEqualToString:@"Sleep timer"];
+        after(0.3, ^{
+            SGHarnessOptionsPage *page = [SGHarnessOptionsPage new];
+            page.heading = sleep ? @"Stop audio in" : @"Choose a voice";
+            page.options = sleep ? @[@"1 minute", @"5 minutes"] : @[@"English", @"German", @"French"];
             [navigation pushViewController:page animated:YES];
         });
         return;
     }
     if ([row.title isEqualToString:@"Sleep timer"]) {
-        // As on the phone: the card stays while Spotify presents the timer's own sheet from the player.
-        after(0.3, ^{ [sg_player presentSleepOptions]; });
+        // The card stays while Spotify presents the timer's own sheet from the player (`sleeppresent`), or, as on the
+        // phone in 2026-11, Spotify takes the card down first (`sleepwrapped`).
+        if ((is(@"sleepwrapped") || is(@"sleepback"))) {
+            [navigation.presentingViewController dismissViewControllerAnimated:NO completion:^{ after(0.3, ^{ [sg_player presentSleepOptions]; }); }];
+        } else {
+            after(0.3, ^{ [sg_player presentSleepOptions]; });
+        }
         return;
     }
     [navigation.presentingViewController dismissViewControllerAnimated:YES completion:nil];
@@ -426,9 +494,16 @@ static void pick(NSString *title) {
     _TtC24ContextMenu_InternalImpl25ContextMenuViewController *options = [_TtC24ContextMenu_InternalImpl25ContextMenuViewController new];
     options.sleepOptions = YES;
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:options];
-    self.sleepSheet = navigation;
+    UIViewController *sheet = navigation;
+    // As on the phone: Spotify's sheet container, which puts the menu in only as it appears.
+    if ((is(@"sleepwrapped") || is(@"sleepback"))) {
+        SGHarnessWrapper *wrapper = [SGHarnessWrapper new];
+        wrapper.inner = navigation;
+        sheet = wrapper;
+    }
+    self.sleepSheet = sheet;
     NSLog(@"[harness] Spotify presents the sleep timer's own sheet");
-    [self presentViewController:navigation animated:YES completion:nil];
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 - (UIButton *)front {
@@ -696,26 +771,85 @@ static NSArray<NSString *> *quickTitles(void) {
         });
         return;
     }
-    if ([run isEqualToString:@"subpage"] || [run isEqualToString:@"sleep"]) {
-        BOOL sleep = [run isEqualToString:@"sleep"];
+    if ([run isEqualToString:@"subpage"]) {
         after(0.3, ^{
-            if (sleep) pick(@"More");
-            waitFor(^BOOL { return !sleep || menuShows(@"Sleep timer"); }, 3, ^{
-                pick(sleep ? @"Sleep timer" : @"Share");
-                waitFor(^BOOL { return self.sheetShown && [self.sheet.topViewController.title hasSuffix:@"page"]; }, 4, ^{
-                    check([sg_selected isEqualToString:sleep ? @"Sleep timer" : @"Share"], [NSString stringWithFormat:@"Spotify's row was tapped (%@)", sg_selected]);
-                    check(self.sheetShown, @"the sheet is shown, over the player");
-                    check([self.sheet.topViewController.title hasSuffix:@"page"], [NSString stringWithFormat:@"on the page the row pushed (%@)", self.sheet.topViewController.title]);
-                    waitFor(^BOOL { return !openMenu(); }, 3, ^{
-                        check(!openMenu(), @"the menu is gone");
-                        // Closed, the mod's window goes back under the app's.
-                        [self.sheet.presentingViewController dismissViewControllerAnimated:NO completion:nil];
-                        after(0.6, ^{
-                            check(self.view.window.windowLevel > [self.front.window windowLevel] - 1 && !self.sheetWindow, @"the sheet closed, nothing of the mod's stays over the player");
-                            UIWindow *host = nil;
-                            for (UIWindow *window in self.view.window.windowScene.windows) if ([NSStringFromClass(window.class) isEqualToString:@"SGRSheetWindow"]) host = window;
-                            check(host.windowLevel < self.view.window.windowLevel, [NSString stringWithFormat:@"the mod's window is back under the app's (level %.0f)", host.windowLevel]);
-                            finish();
+            pick(@"Share");
+            waitFor(^BOOL { return self.sheetShown && [self.sheet.topViewController.title hasSuffix:@"page"]; }, 4, ^{
+                check([sg_selected isEqualToString:@"Share"], [NSString stringWithFormat:@"Spotify's row was tapped (%@)", sg_selected]);
+                check(self.sheetShown, @"the sheet is shown, over the player");
+                check([self.sheet.topViewController.title hasSuffix:@"page"], [NSString stringWithFormat:@"on the page the row pushed (%@)", self.sheet.topViewController.title]);
+                waitFor(^BOOL { return !openMenu(); }, 3, ^{
+                    check(!openMenu(), @"the menu is gone");
+                    // Closed, the mod's window goes back under the app's.
+                    [self.sheet.presentingViewController dismissViewControllerAnimated:NO completion:nil];
+                    after(0.6, ^{
+                        check(self.view.window.windowLevel > [self.front.window windowLevel] - 1 && !self.sheetWindow, @"the sheet closed, nothing of the mod's stays over the player");
+                        UIWindow *host = nil;
+                        for (UIWindow *window in self.view.window.windowScene.windows) if ([NSStringFromClass(window.class) isEqualToString:@"SGRSheetWindow"]) host = window;
+                        check(host.windowLevel < self.view.window.windowLevel, [NSString stringWithFormat:@"the mod's window is back under the app's (level %.0f)", host.windowLevel]);
+                        finish();
+                    });
+                });
+            });
+        });
+        return;
+    }
+    if ([run isEqualToString:@"sleep"] || [run isEqualToString:@"sleeppresent"] || [run isEqualToString:@"sleepwrapped"]) {
+        BOOL presents = ![run isEqualToString:@"sleep"];
+        after(0.3, ^{
+            pick(@"More");
+            waitFor(^BOOL { return menuShows(@"Sleep timer"); }, 3, ^{
+                pick(@"Sleep timer");
+                // The menu goes, the row fires on the hidden sheet, and the page's rows open as a menu of their own.
+                waitFor(^BOOL { return menuShows(@"5 minutes"); }, 6, ^{
+                    // The pushed page has Spotify's heading; the presented mock sheet has none, so the row's title stands for it.
+                    check(menuShowsAll(@[@"Back", @"1 minute", @"5 minutes"]) && menuShows(presents ? @"Sleep timer" : @"Stop audio in"),
+                          @"Sleep timer's page opens as a menu of its own, under its heading, with Back");
+                    check([sg_selected isEqualToString:@"Sleep timer"], [NSString stringWithFormat:@"Spotify's Sleep timer row was tapped (%@)", sg_selected]);
+                    check(!self.sheetShown, @"Spotify's sheet stays hidden");
+                    if (presents) {
+                        UIViewController *sleepSheet = self.sleepSheet;
+                        UIView *container = sleepSheet.presentationController.containerView;
+                        // With the card gone (sleepwrapped) there is no hidden sheet to go up from: it stays in the app's window.
+                        check(sleepSheet.viewIfLoaded.window != nil && ((is(@"sleepwrapped") || is(@"sleepback")) || sleepSheet.viewIfLoaded.window != self.view.window),
+                              @"the sleep timer's own sheet is up (in the mod's window while the card is there)");
+                        check(container.alpha == 0 && !container.userInteractionEnabled, @"and hidden, taking no touches");
+                    } else {
+                        check([self.sheet.topViewController.title isEqualToString:@"Stop audio in"], @"the options page is pushed in the hidden sheet");
+                    }
+                    check(sg_spotifyTaps == 1, @"Spotify's ⋯ action ran only once");
+                    pick(@"5 minutes");
+                    CFTimeInterval picked = CACurrentMediaTime();
+                    waitFor(^BOOL { return !openMenu() && self.sheetGone && !self.sleepSheet.viewIfLoaded.window; }, 6, ^{
+                        check([sg_selected isEqualToString:@"5 minutes"], [NSString stringWithFormat:@"the page's 5 minutes was picked (%@)", sg_selected]);
+                        check(self.sheetGone && !self.sleepSheet.viewIfLoaded.window, [NSString stringWithFormat:@"the page and the sheet went, unseen, %.2f s later", CACurrentMediaTime() - picked]);
+                        check(self.front.userInteractionEnabled, @"the mod's ⋯ still takes touches");
+                        finish();
+                    });
+                });
+            });
+        });
+        return;
+    }
+    if ([run isEqualToString:@"sleepback"]) {
+        after(0.3, ^{
+            pick(@"More");
+            waitFor(^BOOL { return menuShows(@"Sleep timer"); }, 3, ^{
+                pick(@"Sleep timer");
+                waitFor(^BOOL { return menuShows(@"5 minutes"); }, 6, ^{
+                    check(self.sheetGone, @"Spotify took its card down for the timer's sheet");
+                    // Back once the times have been read, as a person does: past kPageWait (4 s), when nothing of the
+                    // pick holds the menu's session any more. Picked at once, the pick's own wait held it alive and hid
+                    // that the menu then never came back (Spotify 9.1.90, iOS 26.3 simulator).
+                    after(4.5, ^{
+                        pick(@"Back");
+                        waitFor(^BOOL { return menuShows(@"More") && !menuShows(@"5 minutes"); }, 5, ^{
+                            check(menuShows(@"More"), @"Back, 4.5 s after the times came, opens the menu again though the card is gone");
+                            check(!self.sleepSheet.viewIfLoaded.window, @"and the timer's sheet went");
+                            waitFor(^BOOL { return sg_spotifyTaps == 2; }, 4, ^{
+                                check(sg_spotifyTaps == 2, [NSString stringWithFormat:@"a fresh card was asked for (%lu taps)", (unsigned long)sg_spotifyTaps]);
+                                finish();
+                            });
                         });
                     });
                 });
@@ -723,24 +857,37 @@ static NSArray<NSString *> *quickTitles(void) {
         });
         return;
     }
-    if ([run isEqualToString:@"sleeppresent"]) {
+    if ([run isEqualToString:@"pagepopup"]) {
         after(0.3, ^{
             pick(@"More");
-            waitFor(^BOOL { return menuShows(@"Sleep timer"); }, 3, ^{
-                pick(@"Sleep timer");
-                waitFor(^BOOL { return self.sleepSheet.viewIfLoaded.window && !self.sleepSheet.isBeingPresented; }, 4, ^{
-                    UIViewController *sleepSheet = self.sleepSheet;
-                    check(sleepSheet.viewIfLoaded.window == self.view.window && sleepSheet.presentingViewController == self,
-                          @"Spotify's sleep timer sheet is up, from the player, in the app's window");
-                    UIView *container = sleepSheet.presentationController.containerView;
-                    check(container.alpha == 1 && container.userInteractionEnabled, @"and it is seen and takes touches, as Spotify's");
-                    waitFor(^BOOL { return !openMenu(); }, 3, ^{
-                        check(!openMenu(), @"no menu came up for it (the picked one faded out)");
-                        check(sg_spotifyTaps == 1, @"Spotify's ⋯ action ran only once");
-                        after(1, ^{
-                            check(self.sheetGone, @"the card it came from is gone, unseen");
-                            check(sleepSheet.viewIfLoaded.window != nil, @"the sleep timer sheet is still up");
-                            finish();
+            waitFor(^BOOL { return menuShows(@"Voice language"); }, 3, ^{
+                pick(@"Voice language");
+                // The menu goes, the row fires, its page is pushed hidden and its rows open as a menu of their own.
+                waitFor(^BOOL { return menuShows(@"German"); }, 5, ^{
+                    check(menuShowsAll(@[@"Choose a voice", @"Back", @"English", @"German", @"French"]), @"the page's rows open as a menu of their own, under its heading, with Back");
+                    UIAction *english = (UIAction *)sg_elements[@"English"];
+                    check(english.state == UIMenuElementStateOn, @"the page's picked row is checked");
+                    check(!self.sheetShown, @"Spotify's sheet stays hidden, on the page");
+                    NSDictionary *learned = [NSUserDefaults.standardUserDefaults dictionaryForKey:@"spotifyglass.redesign.player.menuPageRows"];
+                    check([learned[@"track"] containsObject:@"Voice language"], [NSString stringWithFormat:@"Voice language is kept as a row that opens a page (%@)", learned]);
+                    pick(@"Back");
+                    waitFor(^BOOL { return menuShows(@"More"); }, 4, ^{
+                        check(menuShows(@"More") && !menuShows(@"German"), @"Back opens the menu again");
+                        check([self.sheet.topViewController isKindOfClass:_TtC24ContextMenu_InternalImpl25ContextMenuViewController.class], @"and the page is popped off the hidden sheet");
+                        pick(@"More");
+                        waitFor(^BOOL { return menuShows(@"Voice language"); }, 3, ^{
+                            pick(@"Voice language");
+                            waitFor(^BOOL { return menuShows(@"German"); }, 6, ^{
+                                check(menuShowsAll(@[@"English", @"German"]) && !menuShows(@"Back"), @"picked again, its page's stored rows open at once as a submenu of More");
+                                pick(@"German");
+                                CFTimeInterval picked = CACurrentMediaTime();
+                                waitFor(^BOOL { return !openMenu() && self.sheetGone; }, 6, ^{
+                                    check([sg_selected isEqualToString:@"German"], [NSString stringWithFormat:@"German was picked on the page (%@)", sg_selected]);
+                                    check(self.sheetGone, [NSString stringWithFormat:@"the sheet went, unseen, %.2f s later", CACurrentMediaTime() - picked]);
+                                    check(sg_spotifyTaps == 1, @"Spotify's ⋯ action ran only once");
+                                    finish();
+                                });
+                            });
                         });
                     });
                 });
@@ -778,8 +925,14 @@ static NSArray<NSString *> *quickTitles(void) {
 __attribute__((constructor(101))) static void sgr_harnessDefaults(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults setBool:YES forKey:@"spotifyglass.redesign"];
+    // Below iOS 26 (the iOS 16 simulator) the redesign runs only as untested, and a run that exits at once must not count
+    // as a launch that hung (Core/SGUIMode.m).
+    [defaults setBool:YES forKey:@"spotifyglass.redesign.untested"];
+    [defaults removeObjectForKey:@"spotifyglass.redesign.untested.starting"];
     for (NSString *key in defaults.dictionaryRepresentation.allKeys) {
-        if ([key hasPrefix:@"spotifyglass.redesign.player.menuRows"]) [defaults removeObjectForKey:key];
+        if ([key hasPrefix:@"spotifyglass.redesign.player.menu"]) {
+            [defaults removeObjectForKey:key];
+        }
     }
     sg_elements = [NSMutableDictionary dictionary];
     Method make = class_getClassMethod(UIAction.class, @selector(actionWithTitle:image:identifier:handler:));

@@ -74,6 +74,9 @@
 // `source` is Spotify's own ⋯, wherever the page keeps it; nil hides the button until one is found. Kept
 // on `page` under `key` and cheap to call again on every pass.
 SGRMirrorButton *SGRPinnedMore(UIView *page, const void *key, UIView *source);
+// Called with the pinned ⋯ on every pass of SGRPinnedMore, once it is placed and fed: the system menu
+// (Redesigned/ContextMenu) sets it to open its menu from the button itself, as it does the player's ⋯.
+extern void (*SGRPinnedMoreHook)(SGRMirrorButton *button);
 
 // A sheet opening within this long of a tap on a pinned ⋯ is that page's context menu.
 static const NSTimeInterval SGRPinnedMoreWindow = 3;
@@ -107,3 +110,6 @@ void SGRPlacePinnedBack(UIView *page);
 // Share and Close. `glyph` is drawn in white when Spotify's control has no image view to copy. Kept on `page` under
 // `key`; cheap to call on every pass.
 SGRMirrorButton *SGRPinnedTrailing(UIView *page, const void *key, UIView *source, NSUInteger slot, UIImage *glyph);
+// Notes `button` as tapped when it is a pinned ⋯, as its touch down does: for a tap run from code, which sends the
+// button no touch down so that its other touch down targets (the press highlight) stay still.
+void SGRPinnedMoreNoteTap(UIView *button);

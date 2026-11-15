@@ -62,9 +62,9 @@ static void pressFrom(UIControl *control, BOOL throughMenu) {
     [control addTarget:press action:@selector(up:) forControlEvents:throughMenu ? up : up | UIControlEventTouchCancel];
 }
 
-// `identifiers` holds, for each button, the identifiers it may carry, the first found winning. `watchMenu`: the ⋯ is
-// handed to PlayerMenu.m, which takes it for the ordinary player's; the AI DJ's ⋯ keeps Spotify's own menu.
-static void glassInside(UIViewController *unit, NSArray<NSArray<NSString *> *> *identifiers, const void **findKeys, BOOL watchMenu) {
+// `identifiers` holds, for each button, the identifiers it may carry, the first found winning. `watchMenu` hands the ⋯
+// to PlayerMenu.m, which opens the system menu from it: the ordinary player's, or the AI DJ's under a kind of its own.
+static void glassInside(UIViewController *unit, NSArray<NSArray<NSString *> *> *identifiers, const void **findKeys, void (*watchMenu)(UIView *)) {
     UIView *host = unit.viewIfLoaded;
     if (!host) return;
     NSUInteger found = 0;
@@ -92,8 +92,8 @@ static void glassInside(UIViewController *unit, NSArray<NSArray<NSString *> *> *
                   button.accessibilityIdentifier, button.bounds.size.width, button.bounds.size.height,
                   button.hidden || button.alpha < 0.01 ? @"hidden" : @"shown");
         }
-        if (watchMenu && [name isEqualToString:@"Context menu"]) {
-            SGRPlayerMenuWatch(button);
+        if ([name isEqualToString:@"Context menu"]) {
+            watchMenu(button);
         }
         UIControl *front = SGRSystemMenuFront(button);
         pressFrom(front ?: (UIControl *)button, front != nil);
@@ -111,7 +111,7 @@ static void glassInside(UIViewController *unit, NSArray<NSArray<NSString *> *> *
     }
 }
 
-static void glassHeader(UIViewController *unit, BOOL watchMenu) {
+static void glassHeader(UIViewController *unit, void (*watchMenu)(UIView *)) {
     static const void *keys[] = {&kCloseKey, &kMoreKey};
     glassInside(unit, @[@[@"now-playing-minimize-button", @"mobile-nowplaying-close-button"], @[@"Context menu"]], keys, watchMenu);
 }
@@ -119,7 +119,7 @@ static void glassHeader(UIViewController *unit, BOOL watchMenu) {
 %hook _TtC20NowPlaying_ModesImpl18HeaderElementsUnit
 - (void)viewDidLayoutSubviews {
     %orig;
-    glassHeader((UIViewController *)self, YES);
+    glassHeader((UIViewController *)self, SGRPlayerMenuWatch);
 }
 %end
 
@@ -129,7 +129,7 @@ static void glassHeader(UIViewController *unit, BOOL watchMenu) {
 %hook SGRDJHeaderUnit
 - (void)viewDidLayoutSubviews {
     %orig;
-    glassHeader((UIViewController *)self, NO);
+    glassHeader((UIViewController *)self, SGRDJPlayerMenuWatch);
 }
 %end
 %end
