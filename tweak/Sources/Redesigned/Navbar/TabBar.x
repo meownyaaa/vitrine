@@ -70,6 +70,21 @@ static id activeVariantOf(id icon) {
     return name && [name isEqualToString:iconName(variant)] ? nil : variant;
 }
 
+// A tab of the mod's own that wears an SF Symbol hands UIKit the symbol itself, with no size of its own, so the
+// bar sizes it the way UIKit sizes every app's tab symbols, the Music app's included. One object per name, so
+// setGlyphs sees the same image again and leaves the item alone.
+static UIImage *symbolGlyph(NSString *name) {
+    if (!name.length) return nil;
+    static NSCache<NSString *, UIImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSCache new]; });
+    UIImage *image = [cache objectForKey:name];
+    if (image) return image;
+    image = [[UIImage systemImageNamed:name] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    if (image) [cache setObject:image forKey:name];
+    return image;
+}
+
 // One glyph of a tab: `icon` drawn at the size of `live`, Spotify's icon view it came from. The caller picks the
 // icon, outline or filled, so the cache key names the glyph actually drawn and an outline drawing can never be
 // filed under a filled icon's name or the other way round. isActive only picks the view's colors, white either
@@ -77,6 +92,12 @@ static id activeVariantOf(id icon) {
 // and paint, and UITabBar swaps image and selectedImage itself.
 static UIImage *drawGlyph(UIView *live, id icon, BOOL active) {
     if (!live) return nil;
+    NSString *symbol = SGTabIconSymbolName(live);
+    if (symbol.length) {
+        NSString *activeSymbol = active && ![symbol hasSuffix:@".fill"] ? [symbol stringByAppendingString:@".fill"] : symbol;
+        UIImage *glyph = symbolGlyph(activeSymbol) ?: symbolGlyph(symbol);
+        if (glyph) return glyph;
+    }
     CGSize size = live.bounds.size;
     Class viewClass = NSClassFromString(@"SPTEncoreIconView");
     if (icon && viewClass) {

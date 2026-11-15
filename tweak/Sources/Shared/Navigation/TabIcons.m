@@ -6,9 +6,15 @@
 
 NSString *const SGTabIconSetSymbols = @"symbols";
 
+static char kSymbolNameKey;
+
 static UIImage *symbolImage(NSString *name) {
     if (!name.length) return nil;
     return [UIImage systemImageNamed:name withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]];
+}
+
+NSString *SGTabIconSymbolName(UIView *icon) {
+    return icon ? objc_getAssociatedObject(icon, &kSymbolNameKey) : nil;
 }
 
 // SPTEncoreIcon exposes one class method per glyph ("podcasts", "heart"), 538 of them in 9.1.78.
@@ -32,8 +38,14 @@ static UIView *symbolView(UIImage *image, UIColor *color) {
 
 UIView *SGTabIconView(NSString *name, BOOL symbol, UIColor *color) {
     UIImage *image = symbol ? symbolImage(name) : nil;
-    if (image) return symbolView(image, color);
-    return encoreView(name, color) ?: symbolView(symbolImage(@"star.fill"), color);
+    UIView *view = image ? symbolView(image, color) : encoreView(name, color);
+    if (view) {
+        if (image) objc_setAssociatedObject(view, &kSymbolNameKey, name, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        return view;
+    }
+    view = symbolView(symbolImage(@"star.fill"), color);
+    objc_setAssociatedObject(view, &kSymbolNameKey, @"star.fill", OBJC_ASSOCIATION_COPY_NONATOMIC);
+    return view;
 }
 
 #pragma mark - the catalogs
