@@ -114,6 +114,7 @@ static NSString *storeIDKey(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         void *slot = dlsym(RTLD_DEFAULT, "_MPNowPlayingInfoPropertyiTunesStoreIdentifier");
+        if (!slot) slot = dlsym(RTLD_DEFAULT, "MPNowPlayingInfoPropertyiTunesStoreIdentifier");
         id value = slot ? (__bridge id)*(void **)slot : nil;
         key = [value isKindOfClass:NSString.class] ? value : nil;
         if (!key) SGLog(@"music haptics: MediaPlayer has no iTunes Store identifier key, the ISRC is named instead");
@@ -185,16 +186,20 @@ API_AVAILABLE(ios(18.0))
 
 // A status callback alone is not proof: it has to be for the identifier named, and iOS active for it.
 - (BOOL)iOSPlays {
-    return _observedActive && ([_observedCode isEqualToString:_isrc] || [_observedCode isEqualToString:_songID]);
+    if (!_observedActive) return NO;
+    if (_isrc.length && _observedCode.length && [_observedCode caseInsensitiveCompare:_isrc] == NSOrderedSame) return YES;
+    return [_observedCode isEqualToString:_isrc] || [_observedCode isEqualToString:_songID];
 }
 
 // Every change ends here: the status, and whether the mod's own stands down.
 - (void)showStatus {
     // follow: leaves Waiting only with In the Background on, iOS's switch on and a track playing.
+    BOOL listed = SGMusicHapticsListedByInstall();
     BOOL starting = _phase == SGNativeChecking || (_phase == SGNativeReady && !_graceOver);
-    SGMusicHapticsSetSystemCovers(SGMusicHapticsListedByInstall() && _enabled && _active && ([self iOSPlays] || starting));
+    SGMusicHapticsSetSystemCovers(listed && _enabled && _active && ([self iOSPlays] || starting));
     NSString *status;
     if (!_enabled) status = @"Off in iOS";
+    else if (!listed) status = @"Missing from install";
     else if (!_active) status = @"Paused in Control Center";
     else if (_phase == SGNativeChecking) status = @"Checking";
     else if (_phase == SGNativeUnavailable) status = @"Unavailable";
@@ -221,7 +226,7 @@ API_AVAILABLE(ios(18.0))
     _graceOver = NO;
     // Off before anything is asked, so no answer can arrive while the last track's is still named.
     SGNowPlayingSetExtras(@"haptics", nil, nil);
-    if (!SGMusicHapticsInBackground() || !_enabled || !track) {
+    if (!SGMusicHapticsInBackground() || (SGIsLiveContainer() && !SGMusicHapticsListedByInstall()) || !_enabled || !track) {
         self.phase = SGNativeWaiting;
         return;
     }
@@ -263,7 +268,7 @@ API_AVAILABLE(ios(18.0))
 // addStatusObserver: can answer nil while the switch in Accessibility is off, so it is asked again whenever
 // iOS's state or the app's comes back.
 - (void)observe {
-    if (_observer || !_enabled) return;
+    if (_observer || !_enabled || (SGIsLiveContainer() && !SGMusicHapticsListedByInstall())) return;
     __weak SGNativeMusicHaptics *weakSelf = self;
     _observer = [MAMusicHapticsManager.sharedManager addStatusObserver:^(NSString *code, BOOL active) {
         dispatch_async(dispatch_get_main_queue(), ^{

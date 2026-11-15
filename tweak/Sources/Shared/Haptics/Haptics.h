@@ -77,6 +77,10 @@ BOOL SGMusicHapticsInBackground(void);
 // Whether iOS lists this install for Music Haptics: MusicHapticsSupported, which only Vitrine's IPA build writes
 // into Info.plist. Without it In the Background has nothing to hand the song to.
 BOOL SGMusicHapticsListedByInstall(void);
+// The LiveContainer host bundle, if running under LiveContainer.
+NSBundle *SGHostBundle(void);
+// Whether running inside LiveContainer.
+BOOL SGIsLiveContainer(void);
 // The choice of before moved to the switches, once: Generated turns Music Haptics on, Native iOS In the
 // Background, None neither. Each reader of the switches calls it first, since none can know it runs first.
 void SGMigrateMusicHaptics(void);

@@ -1,14 +1,39 @@
 // NowPlayingExtras.h says what this is and why it stores nothing of Spotify's.
+#import <dlfcn.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import "Core/SGCore.h"
+#import "Shared/Haptics/Haptics.h"
 #import "Shared/Player/NowPlayingExtras.h"
 
 // Read on whatever thread Spotify sets the info from, written on the main one.
 static NSObject *sg_lock;
-static NSMutableDictionary<NSString *, NSDictionary *> *sg_extras;   // by owner
-static NSMutableDictionary<NSString *, NSString *> *sg_titles;       // by owner
+static NSMutableDictionary<NSString *, NSDictionary *> *sg_extras;  // by owner
+static NSMutableDictionary<NSString *, NSString *> *sg_titles;    // by owner
 static double sg_elapsed, sg_rate;
 static CFAbsoluteTime sg_clockAt;
+
+static void updateCenterClient(MPNowPlayingInfoCenter *center) {
+    if (!SGIsLiveContainer()) return;
+    NSBundle *host = SGHostBundle();
+    NSString *hostID = host.bundleIdentifier;
+    if (!hostID.length) return;
+
+    id client = nil;
+    if ([center respondsToSelector:@selector(playerPath)]) {
+        id playerPath = ((id (*)(id, SEL))objc_msgSend)(center, @selector(playerPath));
+        if ([playerPath respondsToSelector:@selector(client)]) {
+            client = ((id (*)(id, SEL))objc_msgSend)(playerPath, @selector(client));
+        }
+    }
+    if (!client && [center respondsToSelector:@selector(client)]) {
+        client = ((id (*)(id, SEL))objc_msgSend)(center, @selector(client));
+    }
+    if (client && [client respondsToSelector:@selector(setBundleIdentifier:)]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(client, @selector(setBundleIdentifier:), hostID);
+    }
+}
 
 // `stale` are an owner's old keys: the info the getter gives back can still carry them, and the hook puts
 // back only the extras that are current.
@@ -46,6 +71,7 @@ void SGNowPlayingSetExtras(NSString *owner, NSDictionary *extras, NSString *titl
 
 %hook MPNowPlayingInfoCenter
 - (void)setNowPlayingInfo:(NSDictionary *)info {
+    updateCenterClient(self);
     NSMutableDictionary *added = nil;
     @synchronized (sg_lock) {
         if (info[MPNowPlayingInfoPropertyElapsedPlaybackTime]) {
@@ -72,9 +98,56 @@ void SGNowPlayingSetExtras(NSString *owner, NSDictionary *extras, NSString *titl
 }
 %end
 
+// Installed only under LiveContainer (%ctor): every other install keeps NSBundle and MediaRemote's clients as they are.
+%group SGLiveContainerHooks
+%hook NSBundle
+- (NSString *)bundleIdentifier {
+    if (self == NSBundle.mainBundle) {
+        Dl_info info = {0};
+        if (dladdr(__builtin_return_address(0), &info) && info.dli_fbase) {
+            const char *fname = info.dli_fname;
+            if (fname && (strstr(fname, "MediaRemote") ||
+                          strstr(fname, "MediaPlayer") ||
+                          strstr(fname, "MediaAccessibility") ||
+                          strstr(fname, "AVFAudio") ||
+                          strstr(fname, "AudioToolbox"))) {
+                NSBundle *host = SGHostBundle();
+                if (host.bundleIdentifier.length) return host.bundleIdentifier;
+            }
+        }
+    }
+    return %orig;
+}
+%end
+%end
+
+%group SGMRClientHooks
+%hook MRClient
+- (NSString *)bundleIdentifier {
+    NSBundle *host = SGHostBundle();
+    if (host.bundleIdentifier.length) return host.bundleIdentifier;
+    return %orig;
+}
+%end
+%end
+
+%group SGMRNowPlayingClientHooks
+%hook MRNowPlayingClient
+- (NSString *)bundleIdentifier {
+    NSBundle *host = SGHostBundle();
+    if (host.bundleIdentifier.length) return host.bundleIdentifier;
+    return %orig;
+}
+%end
+%end
+
 %ctor {
     sg_lock = [NSObject new];
     sg_extras = [NSMutableDictionary dictionary];
     sg_titles = [NSMutableDictionary dictionary];
     %init;
+    if (!SGIsLiveContainer()) return;
+    %init(SGLiveContainerHooks);
+    if (objc_getClass("MRClient")) %init(SGMRClientHooks);
+    if (objc_getClass("MRNowPlayingClient")) %init(SGMRNowPlayingClientHooks);
 }
