@@ -17,6 +17,7 @@
 #import "Shared/Sing/Sing.h"
 #import "Shared/LyricsSources/LyricsSources.h"
 #import "Shared/LyricsTranslation/LyricsTranslation.h"
+#import "Settings/SGPage.h"
 #import "Settings/SGPageStyle.h"
 #import "Shared/Player/PlayerEvents.h"
 #import "Shared/Player/PlayerState.h"
@@ -970,15 +971,22 @@ static BOOL anyUntranslated(NSArray<SGKaraokeLine *> *lines) {
         [self offerExtras];
         if (error) {
             BOOL needsDownload = [source.by isEqualToString:SGTranslatedOnDevice] && [error hasPrefix:@"Download "];
-            NSString *title = needsDownload ? @"Language not downloaded" : (translations ? @"Partly translated" : @"No translation");
+            NSString *title = translations ? @"Partly Translated" : SGLyricsErrorTitle(error);
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
                                                                            message:error preferredStyle:UIAlertControllerStyleAlert];
             // Over the player, which is dark whatever the system's appearance.
-            alert.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+            SGPresentDark(alert);
             if (needsDownload) {
                 [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
                 UIAlertAction *open = [UIAlertAction actionWithTitle:@"Open Settings" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                     [SGOnDeviceTranslation openTranslateSettings];
+                }];
+                [alert addAction:open];
+                alert.preferredAction = open;
+            } else if ([error containsString:@"Mod Settings"]) {
+                [alert addAction:[UIAlertAction actionWithTitle:@"Dismiss" style:UIAlertActionStyleCancel handler:nil]];
+                UIAlertAction *open = [UIAlertAction actionWithTitle:@"Open Settings" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    SGOpenModSettings(nil);
                 }];
                 [alert addAction:open];
                 alert.preferredAction = open;
