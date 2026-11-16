@@ -26,6 +26,7 @@
 // (npbSnapshotView, tabBarSnapshotView); which of the two 9.1.78 runs is not known, so both are hooked
 // and the log says which fired.
 #import "Core/SGCore.h"
+#import "Redesigned/NowPlayingBar/NowPlayingBar.h"
 
 @interface SPTBarOverlayPresentationTransition : NSObject
 - (UIView *)bottomBarView;
@@ -282,8 +283,22 @@ static void startWatch(void) {
     CFRunLoopAddObserver(CFRunLoopGetMain(), sg_watch, kCFRunLoopCommonModes);
 }
 
+// A tab bar stand-in the player's morph has dropped (PlayerMorph.x): the real bar stays in view, so it is neither
+// backed with glass nor does it hold the real bar hidden.
+static char kDroppedKey;
+
+void SGRTabBarStandInDropped(UIView *standIn) {
+    if (!standIn) return;
+    objc_setAssociatedObject(standIn, &kDroppedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // One that was taken up before the morph dropped it gives the real bar back now, in the same turn.
+    for (SGStandInGlass *follower in [sg_followers allObjects]) {
+        if (follower.snapshot == standIn) [follower stop];
+    }
+}
+
 static void backWithGlass(UIView *snapshot, UIView *source, NSString *what, BOOL hideRealBar) {
     if (!snapshot || !source) return;
+    if (objc_getAssociatedObject(snapshot, &kDroppedKey)) return;
     NSMutableArray<UIView *> *panes = [NSMutableArray array];
     collectPanes(source, panes);
     if (!panes.count) return;
