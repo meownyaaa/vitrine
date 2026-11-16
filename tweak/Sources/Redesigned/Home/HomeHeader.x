@@ -537,19 +537,29 @@ static const CGFloat kFeedGap = 12;
 // it is Spotify's, as LibraryHeader.x's raiseList reads it.
 static void insetFeed(UIScrollView *feed) {
     if (sg_firstTop <= 0 || !feed) return;
+    // Setting the inset makes UIKit move the offset at once, which the follower hears (SGRFollowOffset) and answers
+    // with followScroll, so this is entered again before it has finished: that inner pass is left to the outer one.
+    static BOOL inside;
+    if (inside) return;
+    inside = YES;
     CGFloat extra = MAX(0, sg_firstTop - feed.safeAreaInsets.top) + kFeedGap;
     CGFloat added = [objc_getAssociatedObject(feed, &kExtraKey) doubleValue];
     NSNumber *written = objc_getAssociatedObject(feed, &kWrittenKey);
     UIEdgeInsets inset = feed.contentInset;
     BOOL ours = written && fabs(inset.top - written.doubleValue) < 0.5;
     if (!ours) added = 0;
-    if (ours && fabs(extra - added) < 0.5) return;
+    if (ours && fabs(extra - added) < 0.5) {
+        inside = NO;
+        return;
+    }
     BOOL atRest = feed.contentOffset.y <= -feed.adjustedContentInset.top + 1;
     inset.top += extra - added;
-    feed.contentInset = inset;
+    // What is written is noted before it is written, so that a pass that does run inside the write reads it as ours.
     objc_setAssociatedObject(feed, &kExtraKey, @(extra), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(feed, &kWrittenKey, @(inset.top), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    feed.contentInset = inset;
     if (atRest) feed.contentOffset = CGPointMake(feed.contentOffset.x, -feed.adjustedContentInset.top);
+    inside = NO;
 }
 
 // The header element's black: Spotify paints it again as the page scrolls, after any pass of ours, and on its layer

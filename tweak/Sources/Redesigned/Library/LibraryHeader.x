@@ -390,11 +390,12 @@ static void raiseList(UIView *page, UIView *header, UIView *filters) {
 
     BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 1;
     inset.top += extra;
+    // Noted before it is written, so that a pass inside the write reads the inset as ours.
+    objc_setAssociatedObject(list, &kInsetKey, @(inset.top), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     list.contentInset = inset;
     UIEdgeInsets bar = list.verticalScrollIndicatorInsets;
     if (bar.top < extra) { bar.top += extra; list.verticalScrollIndicatorInsets = bar; }
     if (atTop) list.contentOffset = CGPointMake(list.contentOffset.x, -list.adjustedContentInset.top);
-    objc_setAssociatedObject(list, &kInsetKey, @(inset.top), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     SGLog(@"redesign library: list raised under the chips by %.0fpt, top inset %.1f", extra, inset.top);
 }
 
