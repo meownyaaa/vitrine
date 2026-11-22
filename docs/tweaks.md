@@ -91,6 +91,9 @@ Shared:
                   command's ESP request gets overrideRestrictions before the core receives it; other restrictions
                   and commands stay as Spotify supplied them. The hooks install together only when the expected
                   runtime signatures match. Checked by harness/radio-modes/; its README records device evidence.
+    SponsorBlock/ skipping sponsored segments and filler in podcasts via the community API (sponsor.ajay.app),
+                  observed through PlayerState.x and skipped via SPTPlayer/SGKaraokeSeek, with an undo toast
+                  (SGSponsorBlockToast.m) and category settings. Ported from EeveeSpotify Reincarnated (GPL-3.0).
     AlbumQueue/   With Spoof Premium on, adds Add to Queue to an album page's header menu when Spotify leaves
                   that row out, under either look. The Creative Work page's template.creativeWork.uri is read
                   by named Swift reflection and checked against the header's menu button; a track menu is
@@ -726,9 +729,10 @@ App:
                    release brings up on its own a few seconds after Spotify opens, once per release; backup, the
                    signing warning, the date the provisioning profile runs out (on the Mod page, and at the top of
                    Mod Settings for a free Apple ID's week) and the Mod page with the reset
-    Onboarding/    the welcome page over Home on the first launch, opening on the logo in glass, with Redesigned UI and
+    Onboarding/    the welcome page over Home on the first launch, opening on the logo in glass, with Redesigned UI,
                    a No ads switch that sets Hide ads, Hide upsells and Spoof Premium together (off leaves each as it is;
-                   on, like a changed look, ends the tour in a restart, as all are read at launch), and under "Easy to miss"
+                   on, like a changed look, ends the tour in a restart, as all are read at launch), a SponsorBlock switch
+                   for podcast episodes, and under "Easy to miss"
                    a card of pointers, each what it is and where in Mod Settings: Split Tabs (with the redesign picked),
                    Lyrics (sources, lyrics for every track, the redesign's live preview with it picked) and AirPods
                    gestures with the Live Activity (iOS 17 on);
@@ -943,7 +947,7 @@ four heights) and the Home flags, the parts of Home to hide including the DJ but
 playlist header, buttons and pills to hide, and the Library flags. Then Premium, ads & privacy
 (EeveeSpotify's Hide ads and Hide upsells, in the native look hiding the video carousel in Search, and
 an Ad and upsell flags page under them, every switch there forcing a flag Spotify ships on to off;
-Spoof Premium; Block telemetry; Clean shared links; then what the ad
+SponsorBlock and its Categories & behavior page; Spoof Premium; Block telemetry; Clean shared links; then what the ad
 blocking and the telemetry blocking have stopped) and Labs (features Spotify built and did not ship,
 AI Chat (Martini) first). Last, All flags, Spotify's remote-config flags with a search field and an
 Auto / Off / On control per flag (a text field for the number and text ones), and Mod: Updates

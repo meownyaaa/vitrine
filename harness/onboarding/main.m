@@ -29,6 +29,7 @@ NSString *SGRedesignUntestedWarning(void) {
     return [NSString stringWithFormat:@"The redesign is built on iOS 26's Liquid Glass. iOS %@ draws a blur in its place, and nobody has tested the redesign there: pages can be laid out wrongly, and Spotify can freeze as it starts. If Spotify does not start with it, the next launch goes back to Legacy.", @"17.5"];
 }
 void SGShowSigningFixIfPending(void) {}
+void SGSponsorBlockPreferencesDidChange(void) {}
 // Settings/SGModPage.m, for the Mod Settings rows, which the harness does not show.
 SGModRow *SGWarningRow(NSString *title, NSString *subtitle, void (^action)(void)) { return nil; }
 // Shared/Lyrics/KaraokeSource.x's look for EeveeSpotify, by the loaded image's name alone.

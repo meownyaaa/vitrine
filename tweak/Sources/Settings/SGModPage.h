@@ -50,6 +50,11 @@
 @property (nonatomic, copy) NSArray<NSString *> *menu;
 // A small rounded square of this color before the row's value.
 @property (nonatomic, copy) UIColor *(^swatch)(void);
+// A segmented row's (SGSegmentRow): its segment names, index getter and setter, and optional color picker action.
+@property (nonatomic, copy) NSArray<NSString *> *segments;
+@property (nonatomic, copy) NSInteger (^segmentIndex)(void);
+@property (nonatomic, copy) void (^setSegmentIndex)(NSInteger index);
+@property (nonatomic, copy) void (^colorAction)(void);
 // One of a few rows picked from on the page itself (an action row each): a checkmark against it while this answers
 // YES, read as the row is drawn, so its action reloads the table.
 @property (nonatomic, copy) BOOL (^checked)(void);
@@ -96,6 +101,9 @@ SGModRow *SGChoiceRow(NSString *title, NSString *subtitle, NSString *key, NSArra
 // changes applies while it is dragged. `subtitle` may be nil.
 SGModRow *SGSliderRow(NSString *title, NSString *subtitle, double minimum, double maximum, double step,
                       double (^get)(void), void (^set)(double value), NSString *(^format)(double value));
+// A setting picked from a segmented control under the row's title, with an optional color swatch button.
+SGModRow *SGSegmentRow(NSString *title, NSString *subtitle, NSArray<NSString *> *segments,
+                       NSInteger (^get)(void), void (^set)(NSInteger index));
 // A setting picked from a short list without leaving the page: the value is a button whose pull-down menu
 // lists `choices`, a checkmark against the one `value` reads, and picking one runs `chosen` with its index,
 // after which the page reads every row again.

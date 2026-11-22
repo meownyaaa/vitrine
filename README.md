@@ -93,7 +93,7 @@ The app keeps Spotify's bundle id, so it installs over the real Spotify.
 
 [cyan](https://github.com/asdfzxcvbn/pyzule-rw) injects, [Theos](https://theos.dev) builds, and
 [FLEX](https://github.com/FLEXTool/FLEX), as hopeless's AutoFLEX build in `vendor/`, is the inspector
-the view trees are read through. The ad blocking and the Premium state are ported from
+the view trees are read through. The ad blocking, the Premium state, and SponsorBlock are ported from
 [EeveeSpotify Reincarnated](https://github.com/SideloadLabs/EeveeSpotifyReincarnated).
 
 GPL-3.0. Not affiliated with Spotify.

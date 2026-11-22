@@ -4,6 +4,7 @@
 #import "App/About/About.h"
 #import "App/Pages.h"
 #import "Shared/AdBlock/AdBlock.h"
+#import "Shared/SponsorBlock/SGSponsorBlock.h"
 
 static const CGFloat kMargin = 24;
 static const CGFloat kCardRadius = 22;
@@ -340,8 +341,8 @@ static BOOL adFree(void) {
 
 @implementation SGOnboardingController {
     SGTourLogo *_logo;
-    SGLookCard *_redesigned, *_legacy, *_adsCard;
-    UISwitch *_ads;
+    SGLookCard *_redesigned, *_legacy, *_adsCard, *_sponsorBlockCard;
+    UISwitch *_ads, *_sponsorBlock;
     UIStackView *_column;
     UIView *_splitTip;   // the redesign's; the lyrics tip's line changes with the look too
     UILabel *_lyricsTip;
@@ -481,20 +482,42 @@ static BOOL adFree(void) {
     adsNote.layoutMargins = UIEdgeInsetsMake(4, 4, 0, 4);
     adsNote.layoutMarginsRelativeArrangement = YES;
 
+    _sponsorBlock = [UISwitch new];
+    _sponsorBlock.onTintColor = SGGreen();
+    _sponsorBlock.on = SGHidden(SGKeySponsorBlockEnabled);
+    _sponsorBlockCard = [[SGLookCard alloc] initWithSymbol:@"shield.lefthalf.filled" title:@"SponsorBlock"
+                                                  subtitle:@"Skip sponsored segments and filler in podcasts." accessory:_sponsorBlock];
+    [_sponsorBlockCard addTarget:self action:@selector(toggleSponsorBlock) forControlEvents:UIControlEventTouchUpInside];
+    _sponsorBlockCard.isAccessibilityElement = YES;
+    _sponsorBlockCard.accessibilityLabel = @"SponsorBlock";
+    _sponsorBlockCard.accessibilityHint = @"Skip sponsored segments and filler in podcasts.";
+    _sponsorBlockCard.accessibilityValue = _sponsorBlock.on ? @"On" : @"Off";
+    if (@available(iOS 17.0, *)) _sponsorBlockCard.accessibilityTraits = UIAccessibilityTraitToggleButton;
+    else _sponsorBlockCard.accessibilityTraits = UIAccessibilityTraitButton;
+    UILabel *sponsorBlockText = [UILabel new];
+    sponsorBlockText.text = @"Skips segments submitted by listeners to sponsor.ajay.app, with an Undo banner after each skip. "
+                            @"Newer or less common episodes may not be marked yet. "
+                            @"Categories and behavior live in Mod Settings > Premium, ads & privacy.";
+    UIStackView *sponsorBlockNote = noteLine(SGSymbolView(@"info.circle.fill", 15, UIImageSymbolWeightSemibold, 22), sponsorBlockText);
+    sponsorBlockNote.arrangedSubviews.firstObject.tintColor = SGGrey();
+    sponsorBlockNote.layoutMargins = UIEdgeInsetsMake(4, 4, 0, 4);
+    sponsorBlockNote.layoutMarginsRelativeArrangement = YES;
+
     UILabel *tipsHeading = [UILabel new];
     tipsHeading.text = @"Easy to miss";
     tipsHeading.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
     tipsHeading.textColor = UIColor.whiteColor;
     UIView *tips = [self tipsView];
 
-    _column = [[UIStackView alloc] initWithArrangedSubviews:@[strip, heading, _redesigned, _legacy, _note, _adsCard, adsNote, tipsHeading, tips]];
+    _column = [[UIStackView alloc] initWithArrangedSubviews:@[strip, heading, _redesigned, _legacy, _note, _adsCard, adsNote, _sponsorBlockCard, sponsorBlockNote, tipsHeading, tips]];
     UIStackView *column = _column;
     column.axis = UILayoutConstraintAxisVertical;
     column.spacing = 12;
     [column setCustomSpacing:28 afterView:strip];
     [column setCustomSpacing:24 afterView:heading];
     [column setCustomSpacing:32 afterView:_note];
-    [column setCustomSpacing:32 afterView:adsNote];
+    [column setCustomSpacing:16 afterView:adsNote];
+    [column setCustomSpacing:32 afterView:sponsorBlockNote];
     column.translatesAutoresizingMaskIntoConstraints = NO;
     [self updateNote];
 
@@ -543,7 +566,7 @@ static BOOL adFree(void) {
     [self refresh];
 
     // The tour opens on the logo alone; the page waits under it until the reeds land.
-    _page = @[heading, _redesigned, _legacy, _note, _adsCard, adsNote, tipsHeading, tips, _primary, footer];
+    _page = @[heading, _redesigned, _legacy, _note, _adsCard, adsNote, _sponsorBlockCard, sponsorBlockNote, tipsHeading, tips, _primary, footer];
     [_logo prepare];
     BOOL reduce = UIAccessibilityIsReduceMotionEnabled();
     for (UIView *view in _page) {
@@ -587,6 +610,12 @@ static BOOL adFree(void) {
     [self refresh];
 }
 
+- (void)toggleSponsorBlock {
+    [_sponsorBlock setOn:!_sponsorBlock.on animated:YES];
+    _sponsorBlockCard.accessibilityValue = _sponsorBlock.on ? @"On" : @"Off";
+    [self refresh];
+}
+
 // The look and the ad switches are read at launch, so a choice that differs from the running one ends the
 // tour in a restart.
 - (BOOL)needsRestart {
@@ -606,6 +635,10 @@ static BOOL adFree(void) {
     SGSetEnabled(SGKeyOnboardingSeen, YES);
     SGSetRedesignedUI(_redesigned.selected);
     if (_ads.on) for (NSString *key in adKeys()) SGSetEnabled(key, YES);
+    if (_sponsorBlock.on != SGHidden(SGKeySponsorBlockEnabled)) {
+        SGSetEnabled(SGKeySponsorBlockEnabled, _sponsorBlock.on);
+        SGSponsorBlockPreferencesDidChange();
+    }
     if (self.needsRestart) {
         SGRestartSpotify();
         return;
