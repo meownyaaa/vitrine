@@ -149,6 +149,21 @@ jobs:
       - name: Build
         run: ./scripts/pipeline.sh ipa/spotify.ipa --no-flex -o "$OUT_IPA"
 
+      # some IPAs ship with MinimumOSVersion 18.0; 16.1 is the native look's floor. extensions keep their own.
+      - name: Set the minimum iOS version
+        env:
+          MIN_IOS: "16.1"
+        run: |
+          set -eo pipefail
+          APP_DIR="$(unzip -Z1 "$OUT_IPA" | grep -oE '^Payload/[^/]+\.app/' | sort -u | head -1)"
+          PATCH="$(mktemp -d)"
+          unzip -q "$OUT_IPA" "${APP_DIR}Info.plist" -d "$PATCH"
+          PLIST="$PATCH/${APP_DIR}Info.plist"
+          echo "MinimumOSVersion: $(plutil -extract MinimumOSVersion raw -o - "$PLIST" 2>/dev/null || echo unset) -> $MIN_IOS"
+          plutil -replace MinimumOSVersion -string "$MIN_IOS" "$PLIST"
+          (cd "$PATCH" && zip -q "$OUT_IPA" "${APP_DIR}Info.plist")
+          rm -rf "$PATCH"
+
       - name: Add the verification marker
         continue-on-error: true
         run: |
