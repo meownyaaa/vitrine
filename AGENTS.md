@@ -1,3 +1,6 @@
+insert from user:
+don't co-author commits
+
 # Vitrine
 
 A Theos tweak (Objective-C + Logos) injected into the decrypted Spotify iOS app. The full guide is
