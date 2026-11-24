@@ -194,6 +194,7 @@ static UIColor *lit(UIColor *color, CGFloat luminance) {
 }
 
 - (void)dealloc {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(updateMotion) object:nil];
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [_link invalidate];
     if (_reading) needReader(NO);
@@ -469,7 +470,10 @@ BOOL SGRPlayerVisualiserShowing(void) {
 }
 
 UIView *SGRPlayerVisualiserPreview(void) {
-    return [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+    static __weak SGRVisualiserView *sg_preview;
+    SGRVisualiserView *preview = sg_preview ?: [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+    sg_preview = preview;
+    return preview;
 }
 
 // The hills from the top of the field to the foot of its bleed, standing on the screen's foot.

@@ -13,3 +13,7 @@ void SGRObservePlayerTransition(id owner, void (^began)(id owner), void (^ended)
 
 // Shared/AlbumQueue/AlbumQueueMenu.x: a tapped album header ⋯ records its album for the menu; no menu here.
 void SGAlbumQueueMarkSource(UIView *view) {}
+
+// SGRRepaint.x, the layer hooks that keep a glassed sheet clear of Spotify's grey: the harness has no Spotify sheet.
+__weak UIView *sgr_sheetChromeRoot = nil;
+void SGRWatchSheetPaint(UIView *root) {}

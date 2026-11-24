@@ -6,8 +6,9 @@
 //                                  of its own (10.txt:2280-2286): cut at the cover radius, continuous, over the
 //                                  4pt Spotify bakes into the picture (an artist's round one sits inside it)
 //   in Discovery_MediumDensityCardKit.DJMDCView   the DJ card 370x192 r=8 that clips (01.txt:477-478): the card
-//                                  radius, and without the transcript Spotify's DJ talks through
-//                                  (Discovery_MediumDensityCardKit.TranscriptView, :500) or the Beta badge (:503)
+//                                  radius, and without the Beta badge. The transcript Spotify's DJ talks through
+//                                  (Discovery_MediumDensityCardKit.TranscriptView) stays, as it is without the
+//                                  redesign: taken off, the card had nothing to say
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Home.h"
@@ -33,12 +34,12 @@ static void roundCover(UIView *card) {
     }
 }
 
-// The transcript's own labels are plain UILabels the Kit keeps transparent; the Swift views around them
-// take their alpha again on every pass.
+// The badge's own labels are plain UILabels the Kit keeps transparent; the Swift views around them take their alpha
+// again on every pass.
 static void calmDJ(UIView *card) {
     for (UIView *sub in card.subviews) {
         NSString *name = NSStringFromClass(sub.class);
-        if (![name containsString:@"TranscriptView"] && ![name containsString:@"BetaBadge"]) continue;
+        if (![name containsString:@"BetaBadge"]) continue;
         if (sub.alpha != 0) sub.alpha = 0;
         sub.accessibilityElementsHidden = YES;
         SGForEachView(sub, ^(UIView *v) {
@@ -79,7 +80,7 @@ static void style(UIView *button) {
         roundCorners(button, SGRRadiusCard);
         calmDJ(button);
         static dispatch_once_t once;
-        dispatch_once(&once, ^{ SGLog(@"redesign home: DJ card at the card radius, transcript gone"); });
+        dispatch_once(&once, ^{ SGLog(@"redesign home: DJ card at the card radius, its Beta badge gone"); });
     }
 }
 

@@ -2,10 +2,13 @@
 #import "Settings/SGPageStyle.h"
 #import "MeaningSheet.h"
 #import "Redesigned/Kit/SGRTokens.h"
+#import "Core/SGGlass.h"
+#import "Redesigned/Kit/SGRGlass.h"
 
 static const CGFloat kSide = 24, kTop = 28, kGap = 12;
 // The footer's row is drawn 22pt tall; its buttons take touches over 44, centered on it.
 static const CGFloat kRow = 22, kTouch = 44;
+static char kMeaningGlassKey;
 
 static NSString *authorName(SGLyricsMeaningAuthor author) {
     switch (author) {
@@ -60,6 +63,7 @@ static NSAttributedString *linkedBody(NSString *body) {
     UISheetPresentationController *sheet = self.sheetPresentationController;
     sheet.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent];
     sheet.prefersGrabberVisible = YES;
+    if (SGBelowiOS26()) sheet.preferredCornerRadius = SGRSheetCornerRadius();
     sheet.prefersScrollingExpandsWhenScrolledToEdge = YES;
     // On the landscape lyrics (compact height) the sheet would otherwise cover the whole screen with no
     // grabber and nothing to pull down; edge attached it is a card on the bottom edge, inside the safe area.
@@ -96,10 +100,16 @@ static NSAttributedString *linkedBody(NSString *body) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     // From iOS 26 a sheet short of full height is Liquid Glass, which the system draws and turns opaque
-    // itself at the large detent and under Reduce Transparency; a fill here would cover it.
+    // itself at the large detent and under Reduce Transparency; a fill here would cover it. Below 26 the
+    // sheet gets legacy glass.
     if (@available(iOS 26.0, *)) {
     } else {
-        self.view.backgroundColor = UIColor.systemBackgroundColor;
+        self.view.backgroundColor = UIColor.clearColor;
+        UIView *glass = SGGlassFor(self.view, &kMeaningGlassKey);
+        glass.frame = self.view.bounds;
+        glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        SGShapeGlass(glass, SGRSheetCornerRadius(), NO);
+        SGRThickenSheetGlass(glass, SGRSheetCornerRadius());
     }
     _scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
     _scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;

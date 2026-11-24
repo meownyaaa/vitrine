@@ -37,7 +37,9 @@ with open(path, "r+b") as f:
     raw = name.encode() + b"\0"
     cmdsize = (24 + len(raw) + 7) & ~7
     end = 32 + sizeofcmds
-    if end + cmdsize > first_section or any(data[end:end + cmdsize]):
+    # Some Spotify builds leave stale, uncounted load-command bytes after the active command table.
+    # The loader stops after ncmds; this header padding is free to reuse up to the first section.
+    if end + cmdsize > first_section:
         sys.exit(f"{path}: no room for another load command")
 
     cmd = struct.pack("<IIIIII", LC_LOAD_WEAK_DYLIB, cmdsize, 24, 2, 0x10000, 0x10000) + raw

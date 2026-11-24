@@ -84,6 +84,8 @@ BOOL SGRPlayerLyricsAvailable(void);
 BOOL SGRPlayerLyricsNone(void);
 // Whether the player is showing them.
 BOOL SGRPlayerLyricsOpen(void);
+// Hides a control that does not fit or while the lines are alone; records it in sg_faded when it fits.
+BOOL SGRPlayerLyricsFadeView(UIView *view, BOOL fits);
 // Shows them, or puts the cover back; does nothing when there are none to show.
 void SGRPlayerToggleLyrics(void);
 // Called by PlayerLyrics.x whenever either of those two changed, so the footer's lyrics glyph follows
@@ -233,3 +235,5 @@ CGFloat SGRSeekShareAt(UISlider *slider, CGPoint point);
 // The more button's menu opens as the system menu with the player's own items (PlayerMenu.m). Called from
 // PlayerHeader.x with Spotify's more button on every pass; watching it again changes nothing.
 void SGRPlayerMenuWatch(UIView *button);
+// The same for the AI DJ's player, whose sheet has rows of its own.
+void SGRDJPlayerMenuWatch(UIView *button);

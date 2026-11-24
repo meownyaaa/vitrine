@@ -2,6 +2,7 @@
 #import "Settings/SGPage.h"
 #import "Settings/SGPageStyle.h"
 #import "Navbar.h"
+#import "Redesigned/Kit/SGRAccent.h"
 #import "Shared/Navigation/AddTabSheet.h"
 #import "Redesigned/Kit/SGRTokens.h"
 
@@ -145,8 +146,11 @@ typedef NS_ENUM(NSInteger, SGRSplitSection) {
     [super viewDidLoad];
     self.tableView.editing = YES;
     self.tableView.allowsSelectionDuringEditing = YES;
-    _intro = SGNote(@"Tabs here sit apart from the others at the right end of the bar, the way the Music "
-                    "app sets Search apart. They are not on the bar's own list.");
+    _intro = SGNote(SGRLegacyTabBarOn()
+                    ? @"The tab here sits apart from the others at the right end of the bar, the way the Music "
+                       "app sets Search apart. Only one can: adding another replaces it. It is not on the bar's own list."
+                    : @"Tabs here sit apart from the others at the right end of the bar, the way the Music "
+                       "app sets Search apart. They are not on the bar's own list.");
     self.tableView.tableHeaderView = _intro;
     [self load];
 }
@@ -269,6 +273,8 @@ typedef NS_ENUM(NSInteger, SGRSplitSection) {
         SGPresentAddTabSheet(self, tabPresets(), ^(NSDictionary *tab) {
             typeof(self) page = weakSelf;
             if (!page) return;
+            // One round button below iOS 26: a new split tab takes the place of the one there.
+            if (SGRLegacyTabBarOn()) [page->_split removeAllObjects];
             [page->_split addObject:tabEntry(tab)];
             [page save];
         });
@@ -277,6 +283,7 @@ typedef NS_ENUM(NSInteger, SGRSplitSection) {
     } else if (path.section == SGRSplitSectionStock) {
         NSString *ident = _stock[(NSUInteger)path.row];
         showStockTab(ident);
+        if (SGRLegacyTabBarOn()) [_split removeAllObjects];
         [_split addObject:@{SGRNavbarID: ident, SGRNavbarTitle: ident}];
         [self save];
     }
@@ -378,6 +385,22 @@ static NSArray<UITabBarItem *> *itemsFor(NSArray<NSDictionary *> *entries, BOOL 
     NSMutableArray<NSDictionary *> *main = [NSMutableArray array], *apart = [NSMutableArray array];
     for (NSDictionary *entry in shown) if (![splitStock containsObject:entry[SGRNavbarID]]) [main addObject:entry];
     if (custom) [apart addObjectsFromArray:SGRNavbarSplit()];
+    // The fallback bar folds the split tab into the capsule when the bar is this short (TabBarLegacy.x).
+    // The split tab stands where the tab list puts it, as on the bar.
+    if (SGRLegacyTabBarOn() && main.count && apart.count && main.count + apart.count <= SGRLegacyFoldLimit) {
+        NSSet<NSString *> *apartIDs = [NSSet setWithArray:[apart valueForKey:SGRNavbarID]];
+        NSMutableArray<NSDictionary *> *merged = [NSMutableArray array];
+        NSMutableSet<NSString *> *mergedIDs = [NSMutableSet set];
+        for (NSDictionary *entry in shown) {
+            NSString *ident = entry[SGRNavbarID];
+            if ([splitStock containsObject:ident] && ![apartIDs containsObject:ident]) continue;
+            [merged addObject:entry];
+            if (ident) [mergedIDs addObject:ident];
+        }
+        for (NSDictionary *entry in apart) if (![mergedIDs containsObject:entry[SGRNavbarID]]) [merged addObject:entry];
+        main = merged;
+        [apart removeAllObjects];
+    }
     if (!main.count) {
         main = shown;
         apart = [NSMutableArray array];
@@ -653,6 +676,8 @@ typedef NS_ENUM(NSInteger, SGRNavbarSection) {
 
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section {
     if (section == SGRNavbarSectionTabs) return (NSInteger)_entries.count;
+    // Tabs in the accent, under the switch, for the capsule bar below iOS 26 only: iOS 26's bar is the system's.
+    if (section == SGRNavbarSectionSwitch) return SGRLegacyTabBarOn() ? 2 : 1;
     return section == SGRNavbarSectionLinks ? 2 : 1;
 }
 
@@ -752,6 +777,15 @@ typedef NS_ENUM(NSInteger, SGRNavbarSection) {
     UITableViewCell *cell = SGDequeueCell(table, @"navbar");
     switch (path.section) {
         case SGRNavbarSectionSwitch: {
+            if (path.row == 1) {
+                SGFillCell(cell, @"Tabs in the accent", @"Every tab's icon and name; white when off", nil, nil);
+                UISwitch *toggle = [UISwitch new];
+                toggle.onTintColor = SGGreen();
+                toggle.on = SGFlag(SGRKeyTabAccent, NO);
+                [toggle addTarget:self action:@selector(accentToggled:) forControlEvents:UIControlEventValueChanged];
+                cell.accessoryView = toggle;
+                break;
+            }
             SGFillCell(cell, @"Custom tab bar", @"Your order, hidden tabs and tabs you add", nil, nil);
             UISwitch *toggle = [UISwitch new];
             toggle.onTintColor = SGGreen();
@@ -882,13 +916,22 @@ typedef NS_ENUM(NSInteger, SGRNavbarSection) {
     [self showChoices];
 }
 
+- (void)accentToggled:(UISwitch *)toggle {
+    SGSetEnabled(SGRKeyTabAccent, toggle.on);
+    SGRRefreshTabBar();
+}
+
 - (void)customToggled:(UISwitch *)toggle {
     SGSetEnabled(SGRKeyNavbar, toggle.on);
     SGRRefreshTabBar();
     [self showChoices];
-    [UIView performWithoutAnimation:^{
-        [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:SGRNavbarSectionSwitch] withRowAnimation:UITableViewRowAnimationNone];
-    }];
+    // After the glass switch's drop has settled (SGModPage.m): the reload puts a new switch in its place.
+    NSTimeInterval wait = SGUseLegacyGlass() ? 0.95 : 0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [UIView performWithoutAnimation:^{
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:SGRNavbarSectionSwitch] withRowAnimation:UITableViewRowAnimationNone];
+        }];
+    });
 }
 
 - (void)reset {

@@ -235,3 +235,8 @@ void SGHeadMotionListen(NSString *name, void (^handler)(CMDeviceMotion *motion))
 void SGHeadMotionAskPermission(void) {
     NSLog(@"[harness] Motion & Fitness asked for");
 }
+
+// Redesigned/Pages/ModPageBar.x, the bar below iOS 26 over a page of the mod's on Spotify's stack: none here.
+void SGDressPageBar(UIViewController *page) {}
+void SGUndressPageBar(UIViewController *page) {}
+void SGPlacePageBar(UIViewController *page) {}

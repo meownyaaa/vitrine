@@ -28,3 +28,6 @@ UIImage *SGRNavbarGlyph(NSDictionary *entry, BOOL active) {
     UIView *icon = SGTabIconView(entry[SGRNavbarIcon], [entry[SGRNavbarIconSet] isEqual:SGTabIconSetSymbols], UIColor.whiteColor);
     return [icon isKindOfClass:UIImageView.class] ? ((UIImageView *)icon).image : nil;
 }
+
+// TabBarLegacy.x, the bar below iOS 26 with Legacy Liquid Glass: the editor the harness shows is the one main has.
+BOOL SGRLegacyTabBarOn(void) { return NO; }

@@ -180,7 +180,7 @@ static void whenClear(NSInteger tries, void (^then)(void)) {
     // them lands nowhere, so this one waits its turn. It also waits for the app to be in front, so it is
     // not shown, and counted as told, to someone who sent Spotify away in its first seconds.
     BOOL front = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
-    if (!front || !top || SGOnboardingShowing() || [top isKindOfClass:UIAlertController.class]) {
+    if (!front || !top || SGOnboardingShowing() || SGIsAlertController(top)) {
         if (tries <= 0) return;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRetry * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             whenClear(tries - 1, then);

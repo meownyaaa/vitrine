@@ -1,0 +1,11 @@
+Package: com.vitrine.addon
+Name: Vitrine Addon
+Depends: firmware (>= 16.0)
+Conflicts: com.vitrine.haptics
+Replaces: com.vitrine.haptics
+Provides: com.vitrine.haptics
+Architecture: iphoneos-arm64
+Description: Lets Vitrine's Music Haptics play on outside Spotify, and fills the lock screen with the playing song's Canvas, or its lyrics, below iOS 26
+Maintainer: Vitrine
+Author: Vitrine
+Section: Tweaks

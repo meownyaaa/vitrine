@@ -23,8 +23,8 @@ static NSDictionary *bestOf(id results, NSInteger seconds) {
         if (![found isKindOfClass:NSDictionary.class] || ![found[@"lyricsUrl"] isKindOfClass:NSString.class]) continue;
         id duration = found[@"duration"];
         NSInteger length = [duration respondsToSelector:@selector(integerValue)] ? [duration integerValue] : 0;
-        NSInteger off = seconds > 0 && length > 0 ? labs(length - seconds) : 0;
-        if (off > kLengthSlack) continue;
+        NSInteger off = seconds > 0 ? (length > 0 ? labs(length - seconds) : NSIntegerMax) : 0;
+        if (length > 0 && off > kLengthSlack) continue;
         BOOL wordTimed = [found[@"timing_type"] isEqual:@"word"];
         if (best && !(wordTimed && !bestWordTimed) && (bestWordTimed != wordTimed || off >= bestOff)) continue;
         best = found;

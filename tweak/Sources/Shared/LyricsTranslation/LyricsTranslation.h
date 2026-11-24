@@ -70,6 +70,9 @@ void SGLyricsTranslateBatchWithAI(NSDictionary<NSString *, NSArray<NSString *> *
 // Forgets the song's answers kept for the launch, so it is asked again; a nil track forgets every song's.
 void SGLyricsForgetAITranslation(NSString *trackID, NSString *languageTag);
 
+// A title describing why a translation failed, for an alert or a notice.
+NSString *SGLyricsErrorTitle(NSString *error);
+
 // "“Title” by Artist" for a track the player or the local files know, for a translator's instructions; else nil.
 NSString *SGLyricsSongName(NSString *trackID);
 

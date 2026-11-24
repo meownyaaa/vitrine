@@ -1,6 +1,7 @@
-// The redesign's ⋯ opens the system menu instead of Spotify's sheet, the way the Music app's does: the
-// player's ⋯ and the ⋯ every redesigned entity page pins to its corner (playlist, album, artist and the
-// pages that share their templates). Always on in the redesign; no setting.
+// The redesign's ⋯ opens the system menu instead of Spotify's sheet, the way the Music app's does: the player's
+// and the ⋯ every redesigned entity page pins to its corner (playlist, album, artist and the pages that share their
+// templates), on iOS 26 and below it alike; below it the menu wears the mod's glass and opens out of a drop
+// (ContextMenuGlass.x). Always on in the redesign; no setting.
 //
 //     ContextMenu.x   the takeover: Spotify's sheet presented unseen, its rows read into a UIMenu shown from
 //                     the ⋯, a pick fired on the sheet, and the sheet itself as the fallback
@@ -49,3 +50,9 @@ void SGRSystemMenuWatch(UIView *button, SGRMenuItems items, SGRMenuKind kind);
 
 // The mod's button over `button`, which takes the ⋯'s touches once SGRSystemMenuWatch has been called; nil before.
 UIControl *SGRSystemMenuFront(UIView *button);
+
+// The glass the system menu has below iOS 26, on `host` under `key`: SGRMenuGlass (ContextMenuGlass.x) is what the
+// menu's platter gets (SGRMenuDim) and what the sliders' panel under the ⋯ takes for its background with a dim
+// of its own. Nil while `host` has no size.
+static const CGFloat SGRMenuDim = 0.42;
+UIView *SGRMenuGlass(UIView *host, const void *key, CGFloat dim);

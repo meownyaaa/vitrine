@@ -655,10 +655,40 @@ static void applyHeader(UIView *header, UIView *page) {
     [hero playMotionForArtist:artist album:album];
 }
 
+// Find on this page sits above the cover the way it does on a playlist (PlaylistHeader.x), and the
+// template is shared with a podcast episode and Your Episodes (AlbumField.x).
+static void glassAlbumToolbar(UIView *page) {
+    static char kToolbarKey, kFieldKey, kSortBoxKey, kFieldGlassKey, kSortGlassKey, kRowKey, kRowFieldKey, kRowGlassKey;
+    SGRMirrorButton *back = SGRPinnedBack(page, page);
+    UIView *toolbar = SGRFindByIdentifier(page, @"Components.Header.UI.Toolbar.Content", &kToolbarKey);
+    if (toolbar) {
+        SGRGlassFlatBox(SGRFindByIdentifier(toolbar, @"Components.Header.UI.Toolbar.SearchField", &kFieldKey), &kFieldGlassKey, NO);
+        SGRGlassFlatBox(SGRFindByIdentifier(toolbar, @"Components.Header.UI.Toolbar.ButtonContainer", &kSortBoxKey), &kSortGlassKey, NO);
+    }
+    // A podcast's "Find in this show" is not in that toolbar: it is a row of the page's own, 16pt in from the sides
+    // and 36pt high, set 12pt up into the 100pt bar where Spotify's back button was 32pt, so the pinned circles (44pt,
+    // from the safe area's top) reached 3pt over it. Its box is glass like a playlist's, and the row is moved down to
+    // clear the circles by the gap a playlist's field has under them. A transform and not a frame: Spotify's
+    // constraints put the frame back at every pass.
+    UIView *row = SGRFindByIdentifier(page, @"CreativeWorkPlatform.Components.UI.FindRow", &kRowKey);
+    if (!row) return;
+    SGRGlassFlatBox(SGRFindByIdentifier(row, @"Components.Header.UI.Toolbar.SearchField", &kRowFieldKey), &kRowGlassKey, NO);
+    if (!back || back.hidden) return;
+    static const CGFloat kRowGap = 8;
+    CGFloat top = row.center.y - row.bounds.size.height / 2;
+    CGFloat shift = MAX(CGRectGetMaxY(back.frame) + kRowGap - top, 0);
+    CGAffineTransform wanted = CGAffineTransformMakeTranslation(0, shift);
+    if (!CGAffineTransformEqualToTransform(row.transform, wanted)) row.transform = wanted;
+}
+
 static void applyPage(UIView *page) {
+    // The wash goes whether or not the header has its title yet: a podcast's page showed its dark wash and bar
+    // gradient until the header's own pass had found the title row.
+    applyWash(page);
     UIView *header = SGRFindByIdentifier(page, @"CreativeWorkPlatform.Components.UI.CreativeWorkHeader", &kHeaderKey);
     if (!header) return;
     applyHeader(header, page);
+    glassAlbumToolbar(page);
     // The header lays itself out again whenever its cover, its artist or its buttons arrive, which the
     // page's own pass does not hear about. It is a plain UIView, so its pass can be watched.
     watch(header, &kHeaderWatchedKey, ^(UIView *view) {
@@ -689,11 +719,49 @@ static void applyPage(UIView *page) {
 }
 %end
 
+// The navigation bar's gradient is masked from the bar's own passes as well as the header's (applyWash): Spotify
+// adds it as the page scrolls, between two passes of the header.
+%hook _TtC28EncoreConsumerMobile_BaseKit19HeaderNavigationBar
+- (void)layoutSubviews {
+    %orig;
+    UIView *bar = (UIView *)self;
+    if (!SGRAlbumPageOf(bar)) return;
+    for (UIView *sub in bar.subviews) {
+        if ([NSStringFromClass(sub.class) containsString:@"GradientView"]) maskOut(sub);
+    }
+}
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig;
+    if (SGRAlbumPageOf((UIView *)self) && [NSStringFromClass(subview.class) containsString:@"GradientView"]) maskOut(subview);
+}
+%end
+
+// The wash is a HeaderView of the page holding Spotify's GradientView, and Spotify adds the gradient to it, and
+// fades it, between two passes of the page: masked as it is added and from the view's own passes.
+%hook _TtCO19LegacyUI_ECMCoreKit5Views10HeaderView
+- (void)layoutSubviews {
+    %orig;
+    UIView *header = (UIView *)self;
+    if (!SGRAlbumPageOf(header)) return;
+    for (UIView *sub in header.subviews) {
+        if ([NSStringFromClass(sub.class) containsString:@"GradientView"]) maskOut(sub);
+    }
+}
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig;
+    if (SGRAlbumPageOf((UIView *)self) && [NSStringFromClass(subview.class) containsString:@"GradientView"]) maskOut(subview);
+}
+%end
+
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
     SGRequireClasses(@[
+        @"_TtCO19LegacyUI_ECMCoreKit5Views10HeaderView",
         @"_TtC28CreativeWorkPlatform_PageKit24CreativeWorkTemplateView",
         @"_TtC28EncoreConsumerMobile_BaseKit14PlayButtonView",
+        @"_TtC28EncoreConsumerMobile_BaseKit19HeaderNavigationBar",
     ]);
 }

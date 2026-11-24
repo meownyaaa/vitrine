@@ -22,7 +22,9 @@
 //
 // The rebinding and the notify are in place under either look, so the switch works at once; with it
 // off the notify returns straight away. Nothing listens while Spotify is not the active app, since iOS
-// plays no haptics for an app in the background. Sound that is not Spotify's own output (Connect,
+// plays no haptics for an app in the background, unless Everywhere is on and SpringBoard has answered
+// (SGHapticRelay.h): then the same taps and levels are handed to SpringBoard at the moment each is to be felt,
+// and Core Haptics is left alone until Spotify is in front again. Sound that is not Spotify's own output (Connect,
 // AirPlay to another device, video) never passes the unit, and plays no haptics.
 // Nothing listens either while In the Background (SystemMusicHaptics.x) is finding out whether iOS has a
 // haptic track for the song, or has one named: iOS plays it in front of Spotify as well as behind it, so
@@ -43,6 +45,7 @@
 #import "Shared/Player/SpeedPitch.h"
 #import "Haptics.h"
 #import "SGMusicAnalyzer.h"
+#import "SGHapticRelay.h"
 
 // Core Haptics takes about this long from a scheduled time to the Taptic Engine's peak.
 static const double kHapticLead = 0.012;
@@ -67,7 +70,7 @@ enum { kRingSize = 1024, kMonoFrames = 4096 };
 
 #pragma mark - shared between the threads
 
-static atomic_bool sg_active, sg_systemCovers, sg_listening;
+static atomic_bool sg_active, sg_systemCovers, sg_listening, sg_relay;
 static atomic_uint sg_generation;
 static atomic_uint_fast64_t sg_latencyBits;
 static atomic_uint sg_lastFrames;
@@ -264,6 +267,26 @@ static float strength(void) {
     return (float)loadDouble(&sg_strengthBits);
 }
 
+static BOOL handleEngineStopped(NSError *error) {
+    BOOL interrupted = (error && (error.code == CHHapticErrorCodeEngineNotRunning ||
+                                 error.code == CHHapticErrorCodeServerInterrupted));
+    BOOL signaled = atomic_exchange(&sg_engineStopped, false);
+    if (!interrupted && !signaled) return NO;
+    sg_engineRunning = NO;
+    sg_rumble = nil;
+    sg_rumbling = NO;
+    sg_quietSince = 0;
+    return YES;
+}
+
+static void stopRumble(NSTimeInterval at) {
+    sg_quietSince = 0;
+    if (handleEngineStopped(nil) || !sg_rumbling) return;
+    NSError *error = nil;
+    if (![sg_rumble stopAtTime:at error:&error]) handleEngineStopped(error);
+    sg_rumbling = NO;
+}
+
 static BOOL startEngine(void) {
     static BOOL supported, checked;
     static double retryAt;
@@ -292,11 +315,7 @@ static BOOL startEngine(void) {
             SGLog(@"music haptics: the engine was reset");
         };
     }
-    if (atomic_exchange(&sg_engineStopped, false)) {
-        sg_engineRunning = NO;
-        sg_rumble = nil;
-        sg_rumbling = NO;
-    }
+    handleEngineStopped(nil);
     if (sg_engineRunning) return YES;
     double now = hostSeconds(mach_absolute_time());
     if (now < retryAt) return NO;
@@ -311,9 +330,8 @@ static BOOL startEngine(void) {
 }
 
 static void stopEngine(void) {
-    [sg_rumble stopAtTime:CHHapticTimeImmediate error:nil];
+    stopRumble(CHHapticTimeImmediate);
     sg_rumble = nil;
-    sg_rumbling = NO;
     if (sg_engineRunning) [sg_engine stopWithCompletionHandler:nil];
     sg_engineRunning = NO;
 }
@@ -355,7 +373,7 @@ static void playTap(const SGMusicEvent *event) {
     if (!player || ![player startAtTime:at error:&error]) {
         static int logged;
         if (logged++ < 3) SGLog(@"music haptics: a tap did not play: %@", error);
-        if (error.code == CHHapticErrorCodeEngineNotRunning || error.code == CHHapticErrorCodeServerInterrupted) atomic_store(&sg_engineStopped, true);
+        handleEngineStopped(error);
         return;
     }
     sg_stats.taps++;
@@ -380,13 +398,10 @@ static void playPreview(BOOL rumbles) {
     NSError *error = nil;
     CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:events parameters:@[] error:&error];
     id<CHHapticPatternPlayer> player = pattern ? [sg_engine createPlayerWithPattern:pattern error:&error] : nil;
-    if (!player || ![player startAtTime:CHHapticTimeImmediate error:&error]) SGLog(@"music haptics: the preview did not play: %@", error);
-}
-
-static void stopRumble(NSTimeInterval at) {
-    if (!sg_rumbling) return;
-    [sg_rumble stopAtTime:at error:nil];
-    sg_rumbling = NO;
+    if (!player || ![player startAtTime:CHHapticTimeImmediate error:&error]) {
+        SGLog(@"music haptics: the preview did not play: %@", error);
+        handleEngineStopped(error);
+    }
 }
 
 static void playLevel(const SGMusicEvent *event) {
@@ -420,6 +435,7 @@ static void playLevel(const SGMusicEvent *event) {
         if (!sg_rumble) {
             static int logged;
             if (logged++ < 3) SGLog(@"music haptics: no rumble: %@", error);
+            handleEngineStopped(error);
             return;
         }
     }
@@ -432,15 +448,79 @@ static void playLevel(const SGMusicEvent *event) {
         if (![sg_rumble startAtTime:at error:&error]) {
             static int logged;
             if (logged++ < 3) SGLog(@"music haptics: the rumble did not start: %@", error);
+            handleEngineStopped(error);
             sg_rumble = nil;
             return;
         }
         sg_rumbling = YES;
     } else {
-        [sg_rumble sendParameters:controls atTime:at error:nil];
+        if (![sg_rumble sendParameters:controls atTime:at error:&error]) handleEngineStopped(error);
     }
     sg_rumbleSentAt = heard;
     sg_rumbleSent = level;
+}
+
+#pragma mark - SpringBoard, Everywhere
+
+// Posts are made on this queue at the time each is to be felt, the way the engine is told the time to play.
+static dispatch_queue_t relayQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("spotifyglass.music-haptics.relay",
+                                      dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+    });
+    return queue;
+}
+
+// How far ahead of now `hostTime`'s sound is heard.
+static double leadOf(uint64_t hostTime) {
+    return hostSeconds(hostTime) + loadDouble(&sg_latencyBits) - kHapticLead - hostSeconds(mach_absolute_time());
+}
+
+static void relayAt(double lead, void (^post)(void)) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(0, lead) * NSEC_PER_SEC)), relayQueue(), post);
+}
+
+static void relayTap(const SGMusicEvent *event) {
+    double lead = leadOf(event->hostTime);
+    if (lead < -kLatestTap) {
+        sg_stats.late++;
+        return;
+    }
+    float intensity = MIN(1, event->intensity * kTapGain * strength()), sharpness = event->sharpness;
+    relayAt(lead, ^{ SGHapticRelayTap(intensity, sharpness); });
+    sg_stats.taps++;
+}
+
+// The rumble's level as playLevel decides it, started, followed and stopped by the same thresholds.
+static void relayLevel(const SGMusicEvent *event) {
+    sg_stats.levels++;
+    double lead = leadOf(event->hostTime);
+    double heard = hostSeconds(event->hostTime);
+    float level = MIN(1, event->intensity * kRumbleGain);
+    float played = MIN(1, level * strength());
+    if (level < kRumbleStop) {
+        if (!sg_quietSince) sg_quietSince = heard;
+        if (sg_rumbling && heard - sg_quietSince >= kRumbleStopAfter) {
+            sg_rumbling = NO;
+            relayAt(lead, ^{ SGHapticRelayRumble(0); });
+        }
+    } else {
+        sg_quietSince = 0;
+    }
+    if (!sg_rumbling && level < kRumbleStart) return;
+    if (sg_rumbling && heard - sg_rumbleSentAt < kRumbleInterval && fabsf(level - sg_rumbleSent) < kRumbleStep) return;
+    sg_rumbling = YES;
+    sg_rumbleSentAt = heard;
+    sg_rumbleSent = level;
+    // SGHapticRelayRumble posts a level that has not changed only as its keepalive, so a steady rumble keeps being heard.
+    relayAt(lead, ^{ SGHapticRelayRumble(played); });
+}
+
+static void relayQuiet(void) {
+    sg_rumbling = NO;
+    dispatch_async(relayQueue(), ^{ SGHapticRelayRumble(0); });
 }
 
 static void report(void) {
@@ -467,7 +547,7 @@ static double quietAfter(void) {
 static void *playerLoop(void *unused) {
     pthread_setname_np("spotifyglass.music-haptics");
     double lastEvent = 0;
-    BOOL idle = YES;
+    BOOL idle = YES, relayed = NO;
     for (;;) {
         dispatch_time_t wait = idle ? DISPATCH_TIME_FOREVER : dispatch_time(DISPATCH_TIME_NOW, (int64_t)(quietAfter() * NSEC_PER_SEC));
         dispatch_semaphore_wait(sg_wake, wait);
@@ -477,11 +557,43 @@ static void *playerLoop(void *unused) {
                 atomic_store(&sg_previewAsked, false);
                 atomic_store(&sg_tail, atomic_load(&sg_head));
                 stopEngine();
+                if (relayed) relayQuiet();
+                relayed = NO;
                 idle = YES;
                 continue;
             }
             SGMusicFollows follows = (SGMusicFollows)atomic_load(&sg_follows);
             BOOL rumbles = follows != SGMusicFollowsBeat, snares = follows != SGMusicFollowsBass;
+            // Spotify behind another app with Everywhere on: SpringBoard plays, the engine (which iOS has stopped) rests.
+            BOOL relay = atomic_load(&sg_relay);
+            if (relay != relayed) {
+                if (relay) stopEngine();
+                else relayQuiet();
+                relayed = relay;
+            }
+            if (relay) {
+                atomic_store(&sg_previewAsked, false);
+                if (!rumbles && sg_rumbling) relayQuiet();
+                unsigned head = atomic_load(&sg_head), tail = atomic_load(&sg_tail);
+                BOOL any = tail != head;
+                for (; tail != head; tail++) {
+                    SGMusicEvent event = sg_ring[tail & (kRingSize - 1)];
+                    if (event.kind == SGMusicEventLevel) {
+                        if (rumbles) relayLevel(&event);
+                    } else if (event.kind == SGMusicEventKick || snares) {
+                        relayTap(&event);
+                    }
+                }
+                atomic_store(&sg_tail, head);
+                if (any) {
+                    lastEvent = now;
+                    idle = NO;
+                }
+                if (now - lastEvent >= quietAfter() && sg_rumbling) relayQuiet();
+                if (now - lastEvent >= kEngineStopAfter) idle = YES;
+                report();
+                continue;
+            }
             if (!rumbles) stopRumble(CHHapticTimeImmediate);
             BOOL any = NO;
             if (atomic_exchange(&sg_previewAsked, false) && startEngine()) {
@@ -490,7 +602,7 @@ static void *playerLoop(void *unused) {
             }
             unsigned head = atomic_load(&sg_head), tail = atomic_load(&sg_tail);
             if (tail != head && startEngine()) {
-                for (; tail != head; tail++) {
+                for (; tail != head && !handleEngineStopped(nil) && sg_engineRunning; tail++) {
                     SGMusicEvent event = sg_ring[tail & (kRingSize - 1)];
                     if (event.kind == SGMusicEventLevel) {
                         if (rumbles) playLevel(&event);
@@ -526,9 +638,20 @@ static void readLatency(void) {
     if (logged++ < 6) SGLog(@"music haptics: output latency %.0f ms, IO buffer %.0f ms, route %@", session.outputLatency * 1000, session.IOBufferDuration * 1000, session.currentRoute.outputs.firstObject.portType);
 }
 
+// Everywhere: on, and SpringBoard there to play.
+static BOOL everywhere(void) {
+    return SGFlag(SGKeyMusicHapticsEverywhere, NO) && SGHapticRelayAvailable();
+}
+
 static void updateListening(void) {
-    BOOL listening = SGMusicHapticsOn() && atomic_load(&sg_active) && !atomic_load(&sg_systemCovers);
-    if (atomic_exchange(&sg_listening, listening) == listening) return;
+    BOOL active = atomic_load(&sg_active);
+    BOOL relay = !active && everywhere() && !SGHapticRelayQuiet();
+    BOOL listening = SGMusicHapticsOn() && (active || relay) && !atomic_load(&sg_systemCovers);
+    BOOL relayChanged = atomic_exchange(&sg_relay, relay) != relay;
+    if (atomic_exchange(&sg_listening, listening) == listening) {
+        if (relayChanged && sg_wake) dispatch_semaphore_signal(sg_wake);
+        return;
+    }
     if (listening) {
         atomic_fetch_add(&sg_generation, 1);
         readLatency();
@@ -554,6 +677,12 @@ void SGMusicHapticsSetSystemCovers(BOOL covers) {
 static void readSettings(void) {
     storeDouble(&sg_strengthBits, SGHapticsStrength(SGKeyMusicStrength));
     atomic_store(&sg_follows, (int)SGMusicHapticsFollows());
+}
+
+void SGMusicHapticsRelayQuietChanged(void) {
+    // The relay watches the lock also when the %ctor stopped early (Spotify's output out of reach), with no sg_wake.
+    if (!sg_wake) return;
+    updateListening();
 }
 
 void SGMusicHapticsSettingsChanged(void) {
@@ -591,6 +720,10 @@ void SGMusicHapticsWatchTaps(void (^watcher)(float intensity)) {
     [center addObserverForName:SGMusicHapticsSwitchesChangedNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
         updateListening();
     }];
+    [center addObserverForName:SGHapticRelayAvailableNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        updateListening();
+    }];
+    SGHapticRelayAsk();
     [center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
         atomic_store(&sg_active, true);
         updateListening();

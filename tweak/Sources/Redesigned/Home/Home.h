@@ -11,7 +11,7 @@
 //     HomeHeader.x     a large title where the filter pills were, the avatar at the trailing edge, no scrim
 //     HomeHeadings.x   the shelves' headings in the Music app's size, drawn over Spotify's
 //     HomeCards.x      the Encore button every card is: shortcut tiles (HomeTiles.m), continuous corners on the
-//                      shelf covers, the DJ card at the card radius without its talking transcript
+//                      shelf covers, the DJ card at the card radius without its Beta badge, what the DJ says kept
 //     HomeTiles.m      a shortcut tile's picture run across the tile, blurred behind its title
 //     HomeTopPicks.x   Top picks: the shelf nearest the top drawn large and moved above the shortcuts, each card
 //                      the cover over a footer in its color

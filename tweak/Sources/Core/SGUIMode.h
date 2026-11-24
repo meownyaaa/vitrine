@@ -26,6 +26,12 @@ BOOL SGRedesignAvailable(void);
 BOOL SGRedesignFellBack(void);
 
 BOOL SGRedesignedUI(void);
+
+// YES below iOS 26, where the system draws no glass of its own and the mod's fallbacks (legacy glass, the capsule
+// tab bar, the Telegram alert, glassed sheets) take over: !SGRedesignAvailable(), named for what the callers mean.
+static inline BOOL SGBelowiOS26(void) {
+    return !SGRedesignAvailable();
+}
 BOOL SGNativeUI(void);
 // The stored switch rather than the launch's (below iOS 26, with the warning accepted), for settings pages opened after it was flipped: they
 // show what the restart will bring.

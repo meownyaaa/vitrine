@@ -5,12 +5,19 @@
 // next start or end of a line or word the line shown hangs on. While the lyrics or the player's track
 // are not in yet it looks four times a second. The lock screen keeps the line it was left on until the
 // sound starts again.
+//
+// While the large cover shows the song's whole lyrics over its Canvas (Vitrine Addon below iOS 26, which says so in the
+// state of kSGRelayLockGestureArea), the line is there already, larger: the player's row shows the artist again until
+// the lyrics go.
 #import <MediaPlayer/MediaPlayer.h>
 #import <objc/runtime.h>
 #import "Core/SGCore.h"
 #import "LockScreenLyrics.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Headers/SPTPlayer.h"
+#import "Shared/Haptics/SGHapticRelay.h"
+#import "Shared/AnimatedArtwork/AnimatedArtwork.h"
+#import <notify.h>
 
 // How often to look while the line cannot be worked out yet.
 static const NSTimeInterval kTick = 0.25;
@@ -27,6 +34,8 @@ static dispatch_source_t sg_timer;
 static CFAbsoluteTime sg_due;
 // SGKeyLockScreenTranslation, read at launch.
 static BOOL sg_translation;
+// The large cover's lyrics are up (Vitrine Addon): the artist stays.
+static BOOL sg_coverLyrics;
 
 static NSString *textOf(NSArray<SGKaraokeWord *> *words) {
     SGKaraokeLine *line = [SGKaraokeLine new];
@@ -88,6 +97,12 @@ static double elapsedAt(NSDictionary *info, CFAbsoluteTime reportedAt, CFAbsolut
 // cannot be worked out yet, negative for not again.
 static NSString *lineFor(NSDictionary *info, double elapsed, NSTimeInterval *wait) {
     *wait = kTick;
+    // Only while the large cover's lyrics are switched on and picked: a MediaRemoteUI that went away with them up left the
+    // state set, which its next start clears.
+    if (sg_coverLyrics && SGLockCoverLyricsWanted() && SGLockCoverLyricsPicked()) {
+        *wait = -1;   // looked at again as the lyrics go
+        return nil;
+    }
     SPTPlayerState *state = [(id<SPTPlayer>)SGKaraokePlayer() state];
     // The player's track can lag behind the now playing info; its lyrics would then be another song's.
     if (![state.track.trackTitle isEqualToString:info[MPMediaItemPropertyTitle]]) return nil;
@@ -265,6 +280,25 @@ static void lookNow(void) {
         delay = now;
         dispatch_async(dispatch_get_main_queue(), ^{ lookNow(); });
     }];
+    // The large cover's lyrics coming or going: the artist back at once, or the line.
+    static int areaToken;
+    notify_register_dispatch(kSGRelayLockGestureArea, &areaToken, dispatch_get_main_queue(), ^(int t) {
+        uint64_t state = 0;
+        if (notify_get_state(t, &state) != NOTIFY_STATUS_OK) return;
+        BOOL shown = SGLockGestureAreaRead(state).lyricsShown;
+        if (shown == sg_coverLyrics) return;
+        sg_coverLyrics = shown;
+        tick();
+    });
+    // The Canvas picked: the line is back at once, whatever the area's state says.
+    static int canvasToken;
+    notify_register_dispatch(kSGRelayLockModeCanvas, &canvasToken, dispatch_get_main_queue(), ^(int t) {
+        if (!sg_coverLyrics) return;
+        sg_coverLyrics = NO;
+        tick();
+    });
+    uint64_t lastArea = 0;
+    if (notify_get_state(areaToken, &lastArea) == NOTIFY_STATUS_OK) sg_coverLyrics = SGLockGestureAreaRead(lastArea).lyricsShown;
     // The timer waits for Spotify to report a playing track; nothing before that has a line to show.
     SGLog(@"lock screen lyrics: on%@", sg_translation ? @", translations" : @"");
 }

@@ -10,7 +10,7 @@ SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
 xcrun -sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator -fobjc-arc -g -O0 -isysroot "$SDK" -Wall -Wno-deprecated-declarations \
     -Wno-undeclared-selector -I"$SRC" "$HERE/main.m" "$HERE/sing-stubs.m" "$HERE/../../scene.m" \
     "$SRC"/Redesigned/Lyrics/SGRSingButton.m "$SRC"/Redesigned/Kit/SGRGlass.m "$SRC"/Redesigned/Kit/SGRTokens.m \
-    "$SRC"/Core/SGGlass.m "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m \
+    "$SRC"/Core/SGGlass.m "$SRC"/Core/SGLegacyGlass.m "$SRC"/Core/SGGlassTouch.m "$SRC"/Core/SGUIMode.m "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m \
     -framework UIKit -framework QuartzCore -framework CoreGraphics -framework Foundation -framework Symbols -o "$APP/SingButtonHarness"
 cat > "$APP/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

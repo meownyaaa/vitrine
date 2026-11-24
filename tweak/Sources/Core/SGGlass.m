@@ -1,5 +1,7 @@
 #import "SGGlass.h"
+#import "SGPrefs.h"
 #import "SGRuntime.h"
+#import "SGUIMode.h"
 
 // +effectWithStyle: is the only initializer UIGlassEffect has; a bare -init leaves the material
 // unresolved and the pane renders as a plain blur, while the capsule shape, which is the view's
@@ -10,8 +12,25 @@ UIVisualEffect *SGGlassEffect(void) {
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark];
 }
 
-static UIVisualEffectView *newPane(void) {
-    UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:SGGlassEffect()];
+// Read once: the switch, like every switch, takes effect at the next launch. The redesign's only: the native look
+// never draws legacy glass.
+BOOL SGUseLegacyGlass(void) {
+    static BOOL on;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        if (@available(iOS 26.0, *)) return;
+        on = SGRedesignedUI() && SGFlag(SGKeyLegacyGlass, NO) && SGLegacyGlassAvailable();
+    });
+    return on;
+}
+
+static UIView *newPane(void) {
+    UIView *glass;
+    if (SGUseLegacyGlass()) {
+        glass = [[SGLegacyGlassView alloc] initWithFrame:CGRectZero];
+    } else {
+        glass = [[UIVisualEffectView alloc] initWithEffect:SGGlassEffect()];
+    }
     glass.userInteractionEnabled = NO;
     // A pane goes in at index 0, but a host that rebuilds its content puts that in at index 0 too
     // and the pane would end up over it. Depth keeps a pane behind whatever the host draws.
@@ -19,8 +38,8 @@ static UIVisualEffectView *newPane(void) {
     return glass;
 }
 
-UIVisualEffectView *SGGlassFor(UIView *host, const void *key) {
-    UIVisualEffectView *glass = objc_getAssociatedObject(host, key);
+UIView *SGGlassFor(UIView *host, const void *key) {
+    UIView *glass = objc_getAssociatedObject(host, key);
     if (!glass) {
         glass = newPane();
         objc_setAssociatedObject(host, key, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -31,25 +50,31 @@ UIVisualEffectView *SGGlassFor(UIView *host, const void *key) {
 
 static char kPanesKey;
 
-UIVisualEffectView *SGGlassAt(UIView *host, NSUInteger index) {
-    NSMutableArray<UIVisualEffectView *> *panes = objc_getAssociatedObject(host, &kPanesKey);
+UIView *SGGlassAt(UIView *host, NSUInteger index) {
+    NSMutableArray<UIView *> *panes = objc_getAssociatedObject(host, &kPanesKey);
     if (!panes) {
         panes = [NSMutableArray array];
         objc_setAssociatedObject(host, &kPanesKey, panes, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     while (panes.count <= index) [panes addObject:newPane()];
-    UIVisualEffectView *glass = panes[index];
+    UIView *glass = panes[index];
     glass.hidden = NO;
     if (glass.superview != host) [host insertSubview:glass atIndex:0];
     return glass;
 }
 
 void SGHideGlassFrom(UIView *host, NSUInteger count) {
-    NSArray<UIVisualEffectView *> *panes = objc_getAssociatedObject(host, &kPanesKey);
+    NSArray<UIView *> *panes = objc_getAssociatedObject(host, &kPanesKey);
     for (NSUInteger i = count; i < panes.count; i++) panes[i].hidden = YES;
 }
 
 void SGShapeGlass(UIView *glass, CGFloat radius, BOOL capsule) {
+    if ([glass isKindOfClass:SGLegacyGlassView.class]) {
+        SGLegacyGlassView *legacy = (SGLegacyGlassView *)glass;
+        legacy.cornerRadius = radius;
+        legacy.capsule = capsule;
+        return;
+    }
     // The classes and what they answer to are fixed once loaded; whether this pane takes a configuration is asked each time.
     static Class config, cornerRadius;
     static BOOL capsules, uniform;

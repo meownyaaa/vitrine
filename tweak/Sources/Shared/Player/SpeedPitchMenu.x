@@ -44,6 +44,12 @@ static const CGFloat kRowHeight = 56, kSliderBlockHeight = 72, kSwitchRowHeight 
 // the redesign's Kit: the sheet's side margin, the gap everything else is a multiple of, and a spring
 // that settles without overshooting.
 static const CGFloat kSideMargin = 16, kGrid = 8;
+// The panel's room over its first slider. Below iOS 26 it stands on the mod's glass, which reaches to the popover's
+// edge with no inset of the system's, and the Speed label all but touched the top; at 16pt its letters still stood
+// 13pt under the edge, closer than the side margin under the popover's large corners.
+static CGFloat panelTop(void) {
+    return SGBelowiOS26() ? 3 * kGrid : kGrid;
+}
 static const NSTimeInterval kOpenDuration = 0.45;
 
 static UIColor *primary(void) {
@@ -291,7 +297,7 @@ static void placeTick(UISlider *slider) {
 
     _row.hidden = self.panelOnly;
     _animatedRow.hidden = self.panelOnly;
-    _panel.frame = CGRectMake(0, self.panelOnly ? kGrid : kRowHeight, width, 3 * kSliderBlockHeight + kSwitchRowHeight + kPanelBottom);
+    _panel.frame = CGRectMake(0, self.panelOnly ? panelTop() : kRowHeight, width, 3 * kSliderBlockHeight + kSwitchRowHeight + kPanelBottom);
     CGFloat y = 0;
     for (NSArray<UIView *> *line in @[@[_speedName, _speedValue, _speed], @[_pitchName, _pitchValue, _pitch],
                                        @[_reverbName, _reverbValue, _reverb]]) {
@@ -300,6 +306,8 @@ static void placeTick(UISlider *slider) {
         line[2].frame = CGRectMake(side, y + 30, width - 2 * side, 36);
         [line[2] layoutIfNeeded];
         placeTick((UISlider *)line[2]);
+        // The redesign's thumb below iOS 26: a white capsule that swells into glass while it is dragged.
+        if (SGRedesignedUI()) SGGlassThumbAttach((UISlider *)line[2], CGSizeMake(34, 22));
         y += kSliderBlockHeight;
     }
     CGSize toggle = [_follows sizeThatFits:CGSizeZero];
@@ -534,11 +542,23 @@ static NSString *pitchText(float pitch) {
     block.panelOnly = YES;
     self.view = block;
 }
+
+// Below iOS 26 the popover's own blur gives way to the ⋯ menu's glass; the popover itself stays the system's, so
+// its animation does too. The chrome is made on layout, after UIKit has put it in.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    SGPlayerStylePanel(self.view);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    SGPlayerStylePanel(self.view);
+}
 @end
 
 void SGPlayerShowSpeedPitchPanel(UIView *from) {
     SGSpeedPitchPanel *panel = [SGSpeedPitchPanel new];
-    panel.preferredContentSize = CGSizeMake(320, kGrid + 3 * kSliderBlockHeight + kSwitchRowHeight + kPanelBottom);
+    panel.preferredContentSize = CGSizeMake(320, panelTop() + 3 * kSliderBlockHeight + kSwitchRowHeight + kPanelBottom);
     SGPresentPopover(panel, from);
 }
 

@@ -104,13 +104,17 @@ static void styleSearchField(UIView *button) {
     button.layer.backgroundColor = NULL;
     button.layer.cornerRadius = size.height / 2;
     button.layer.cornerCurve = kCACornerCurveContinuous;
+    // The legacy glass grows and stretches under a finger (SGGlassInteractive) and the pane has the corners itself, but
+    // Spotify's button clips to its bounds (r=24 clips), which cut the grown capsule off at its edges.
+    if (SGUseLegacyGlass() && button.layer.masksToBounds) button.layer.masksToBounds = NO;
 
-    UIVisualEffectView *glass = SGGlassAt(button, 0);
+    UIView *glass = SGGlassAt(button, 0);
     // Dark like every glass of the redesign's, rather than by grace of the navigation stack Spotify hosts
     // the page in (TabBar.x).
     if (glass.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     glass.frame = button.bounds;
     SGShapeGlass(glass, size.height / 2, YES);
+    SGGlassInteractive(button, glass);
 
     SGForEachView(button, ^(UIView *v) { whiten(v); });
     traceField(button, @"styled");

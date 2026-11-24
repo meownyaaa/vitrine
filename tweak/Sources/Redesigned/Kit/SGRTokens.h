@@ -19,6 +19,7 @@ extern const CGFloat SGRRadiusCard;      // 16, a content card
 extern const CGFloat SGRRadiusCover;     // 8, a release cover in a list
 extern const CGFloat SGRRadiusThumb;     // 6, a row's thumbnail up to 64pt
 extern const CGFloat SGRGlassCircleSize; // 44, a round glass behind a top bar button
+extern const CGFloat SGRTitlePadding;    // 18, the glass each side of a name on its capsule (SGRGlassTitleCapsule)
 extern const CGFloat SGRActionHeight;    // 48, a button of the action row under a hero
 extern const CGFloat SGRActionSpacing;   // 12, between the buttons of an action row
 extern const CGFloat SGRGlassSpacing;    // 16, how near two glass shapes merge in one container
@@ -31,6 +32,8 @@ UIColor *SGRAccent(void);       // the accent color of Appearance, else Spotify'
 UIColor *SGRNeutralField(void); // #121212, the field before a color arrives; SGRAmoled.x turns it black
 // Where glass cannot be (Reduce Transparency), the shape it would have had: white 16% over the field.
 UIColor *SGRSolidGlassFill(void);
+// The faint white film over glass below iOS 26 (a floating bar's, a prominent shape's): white 16%, one instance.
+UIColor *SGRGlassFilmColor(void);
 // A content surface on the field (a card), a step lighter than the field it sits on.
 UIColor *SGRElevated(UIColor *field);
 // The line between two rows of a list, drawn a pixel thick from the text's leading edge: white 12%, 20% with

@@ -374,9 +374,12 @@ static void install(UIViewController *menu) {
     }
 }
 
+// The sheet's own chrome (SGRGlassSheetChrome), found by the "sheet-view" identifier rather than by class,
+// since the presentation controller that owns it belongs to UIKit. A no-op on iOS 26.
 %hook _TtC24ContextMenu_InternalImpl25ContextMenuViewController
 - (void)viewDidLayoutSubviews {
     %orig;
+    SGRGlassSheetChrome(((UIViewController *)self).viewIfLoaded);
     install((UIViewController *)self);
 }
 %end

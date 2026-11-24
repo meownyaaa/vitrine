@@ -20,6 +20,8 @@ void SGRSetNavbarLayout(NSArray<NSDictionary *> *layout);
 // SGRNavbarLayout's. A tab of the mod's own here is independent of the bar's; one of Spotify's can stand in one
 // place only, so it leaves the bar's list while it is here.
 NSArray<NSDictionary *> *SGRNavbarSplit(void);
+// The split tabs the bar shows: the list, or below iOS 26 its last one alone (the capsule bar's one round button).
+NSArray<NSDictionary *> *SGRNavbarSplitShown(void);
 void SGRSetNavbarSplit(NSArray<NSDictionary *> *split);
 // The split tabs as they were stored before they had a list of their own (.split, the identities of entries of the
 // bar's list) moved over to that list, once: when .split is there and the list is not. Run at launch, so a settings
@@ -38,6 +40,29 @@ void SGRComposeTabBar(UIView *tabBar);
 void SGRLogTabBarRow(UIView *tabBar);
 // Lays the bar out again after the Navbar page changes something, so it does not wait for a touch.
 void SGRRefreshTabBar(void);
+
+// YES below iOS 26 when the redesign is on: the tab bar is then TabBarLegacy.x's capsule, drawn on a plain blur or on
+// legacy glass by the Legacy Liquid Glass switch, not TabBar.x's system bar. Decided once, at launch.
+BOOL SGRLegacyTabBarOn(void);
+// On that bar the split tab joins the capsule while the bar is expanded when the bar has this many tabs or fewer
+// (the split one counted), and stands on its round button only while it is minimized.
+#define SGRLegacyFoldLimit 3
+// TabBarLegacy.x's own minimized bar, the same three as below for the capsule bar: TabBar.x's functions hand over
+// to them where SGRLegacyTabBarOn() says that bar is the one in place. SGRLegacyApplyTabBarMinimized makes the change
+// at once; SGRSetTabBarMinimized decides when it is made, for both bars.
+BOOL SGRLegacyTabBarMinimized(void);
+void SGRLegacyApplyTabBarMinimized(BOOL minimized, BOOL animated);
+CGRect SGRLegacyTabBarInlineSlot(UIView *host, CGFloat height);
+
+// TabBarRoom.m, the same for both bars. The hold on Spotify's Home that opens Mod Settings, added once.
+void SGRHoldHomeForModSettings(UIView *stockBar);
+// The room made under Spotify's bar for the taller bar of the mod's (see "room for the glass bar" there): the bottom
+// safe area `container` (TabBarContainerImpl) is given, and what UIKit's `bar` asks for with no room made.
+CGFloat SGRTabBarRoom(void);
+CGFloat SGRTabBarGlassHeight(UITabBar *bar, UIView *stockBar);
+void SGRMakeTabBarRoom(UIViewController *container, UIView *stockBar, UITabBar *bar);
+// Whether Create's menu is on screen in the window `view` is in.
+BOOL SGRCreateMenuUp(UIView *view);
 // Whether a tab of the composed row is one of the split tabs at its trailing end, for TabBar.x's second bar.
 BOOL SGRTabIsApart(UIView *item);
 // The tab of the mod's own whose page is on screen, which the glass bar shows selected; nil when none is.
@@ -48,6 +73,9 @@ void SGRNavbarForgetTab(void);
 // The glass bar minimizes as a page scrolls down (TabBarMinimize.x): it shrinks to two of its tabs, the
 // now playing card coming down between them. On unless switched off; read as each scroll goes.
 #define SGRKeyNavbarMinimize @"spotifyglass.redesign.navbar.minimize"
+// The capsule bar (iOS < 26) comes back as the page is scrolled up when this is on; off until asked for, it
+// comes back only at the top of the page or on a tap on its tab (TabBarMinimize.x). The glass bar always does.
+#define SGRKeyNavbarExpandOnScrollUp @"spotifyglass.redesign.navbar.minimize.expandOnScrollUp"
 BOOL SGRTabBarMinimized(void);
 // TabBar.x lays both bars out for it, the now playing bar in the same animation, at once; asked for inside an
 // animation, on the main queue's next turn (SGRTabBarMinimized changes then too). `animated` NO is a cut, made

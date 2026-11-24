@@ -6,6 +6,15 @@ void SGForEachView(UIView *view, void (^fn)(UIView *)) {
     for (UIView *sub in view.subviews) SGForEachView(sub, fn);
 }
 
+UIView *SGLazyChild(UIView *host, const void *key, UIView *(^make)(void)) {
+    UIView *v = objc_getAssociatedObject(host, key);
+    if (!v) {
+        v = make();
+        objc_setAssociatedObject(host, key, v, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return v;
+}
+
 CGRect SGFrameIn(UIView *view, UIView *target) {
     return [view.superview convertRect:view.frame toView:target];
 }
@@ -179,4 +188,12 @@ BOOL SGIsBaseSurface(CGColorRef color) {
 BOOL SGLooksLikeCard(UIView *view, CGColorRef color) {
     CGSize size = view.bounds.size;
     return size.height >= 40 && size.height <= 140 && size.width >= 200 && SGIsVisibleColor(color);
+}
+
+BOOL SGIsFaintWhite(CGColorRef color) {
+    if (!color || CGColorGetAlpha(color) > 0.3) return NO;
+    const CGFloat *c = CGColorGetComponents(color);
+    size_t n = CGColorGetNumberOfComponents(color);
+    for (size_t i = 0; i + 1 < n; i++) if (c[i] < 0.9) return NO;
+    return n >= 2;
 }

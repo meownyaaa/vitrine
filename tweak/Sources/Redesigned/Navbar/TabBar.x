@@ -16,6 +16,7 @@
 #import "Redesigned/Kit/SGRTokens.h"
 #import "Redesigned/NowPlayingBar/NowPlayingBar.h"
 #import "Settings/SGPage.h"
+#import "Shared/Navigation/TabItems.h"
 #import "Headers/SPTEncoreIconView.h"
 #import "Shared/Navigation/TabIcons.h"
 #import <objc/message.h>
@@ -24,7 +25,6 @@ static char kBarKey, kApartBarKey, kHostKey, kFadeKey;
 // On a UITabBarItem: the names of the Encore icons its image and selectedImage were drawn from (see fillBar).
 static char kGlyphNamesKey;
 static __weak UIView *sg_stockBar;
-static CGFloat sg_room, sg_glassHeight;   // see "room for the glass bar"
 // The glass row in the window as the now playing card was last told of it (syncBar), CGRectNull for none.
 static CGRect sg_glassRow = {{INFINITY, INFINITY}, {0, 0}};
 // See "minimized". sg_keepApart holds the second bar on screen while the main one grows back under it.
@@ -44,68 +44,6 @@ static BOOL sg_minimized, sg_keepApart;
 static void syncBar(UIView *stockBar);
 
 #pragma mark - reading Spotify's items
-
-// The items the bar shows, left to right as Navbar/Navbar.x placed them.
-static NSArray<UIView *> *tabItems(UIView *tabBar) {
-    NSMutableArray<UIView *> *items = [NSMutableArray array];
-    for (UIView *item in SGRowIn(tabBar).arrangedSubviews) {
-        if (!item.hidden && item.bounds.size.width >= 20) [items addObject:item];
-    }
-    return [items sortedArrayUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
-        return [@(SGFrameIn(a, tabBar).origin.x) compare:@(SGFrameIn(b, tabBar).origin.x)];
-    }];
-}
-
-// Navbar.x never reorders Spotify's row and appends the mod's own tabs after it, so Home stays first.
-static BOOL isHome(UIView *item, UIView *tabBar) {
-    return item && item == SGRowIn(tabBar).arrangedSubviews.firstObject;
-}
-
-static UILabel *labelIn(UIView *item) {
-    __block UILabel *label = nil;
-    SGForEachView(item, ^(UIView *v) {
-        if (!label && [v isKindOfClass:UILabel.class] && ((UILabel *)v).text.length) label = (UILabel *)v;
-    });
-    return label;
-}
-
-static UIView *iconIn(UIView *item) {
-    __block UIView *icon = nil;
-    SGForEachView(item, ^(UIView *v) {
-        if (icon || v.bounds.size.width < 2) return;
-        if ([v isKindOfClass:UIImageView.class] || [NSStringFromClass(v.class) containsString:@"IconView"]) icon = v;
-    });
-    return icon;
-}
-
-// Spotify paints the selected tab's label white and the rest #B3B3B3.
-static BOOL isActive(UIView *item) {
-    UIColor *color = labelIn(item).textColor;
-    CGFloat white = 0, alpha = 0, r, g, b;
-    if (![color getWhite:&white alpha:&alpha] && [color getRed:&r green:&g blue:&b alpha:&alpha]) white = MIN(r, MIN(g, b));
-    return white > 0.95;
-}
-
-static BOOL hasInk(UIImage *image) {
-    CGImageRef cg = image.CGImage;
-    size_t width = CGImageGetWidth(cg), height = CGImageGetHeight(cg);
-    if (!width || !height) return NO;
-    NSMutableData *pixels = [NSMutableData dataWithLength:width * height];
-    CGContextRef context = CGBitmapContextCreate(pixels.mutableBytes, width, height, 8, width, NULL, (CGBitmapInfo)kCGImageAlphaOnly);
-    CGContextDrawImage(context, CGRectMake(0, 0, width, height), cg);
-    CGContextRelease(context);
-    const uint8_t *alpha = pixels.bytes;
-    for (size_t i = 0; i < pixels.length; i++) if (alpha[i] > 16) return YES;
-    return NO;
-}
-
-static UIImage *renderLayer(CALayer *layer, CGSize size) {
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
-    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-        [layer renderInContext:context.CGContext];
-    }];
-    return hasInk(image) ? [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] : nil;
-}
 
 // The SPTEncoreIcon an icon view was built with. Encore keeps it in a Swift ivar with no getter.
 static id encoreIconOf(UIView *view) {
@@ -132,6 +70,21 @@ static id activeVariantOf(id icon) {
     return name && [name isEqualToString:iconName(variant)] ? nil : variant;
 }
 
+// A tab of the mod's own that wears an SF Symbol hands UIKit the symbol itself, with no size of its own, so the
+// bar sizes it the way UIKit sizes every app's tab symbols, the Music app's included. One object per name, so
+// setGlyphs sees the same image again and leaves the item alone.
+static UIImage *symbolGlyph(NSString *name) {
+    if (!name.length) return nil;
+    static NSCache<NSString *, UIImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSCache new]; });
+    UIImage *image = [cache objectForKey:name];
+    if (image) return image;
+    image = [[UIImage systemImageNamed:name] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    if (image) [cache setObject:image forKey:name];
+    return image;
+}
+
 // One glyph of a tab: `icon` drawn at the size of `live`, Spotify's icon view it came from. The caller picks the
 // icon, outline or filled, so the cache key names the glyph actually drawn and an outline drawing can never be
 // filed under a filled icon's name or the other way round. isActive only picks the view's colors, white either
@@ -139,6 +92,12 @@ static id activeVariantOf(id icon) {
 // and paint, and UITabBar swaps image and selectedImage itself.
 static UIImage *drawGlyph(UIView *live, id icon, BOOL active) {
     if (!live) return nil;
+    NSString *symbol = SGTabIconSymbolName(live);
+    if (symbol.length) {
+        NSString *activeSymbol = active && ![symbol hasSuffix:@".fill"] ? [symbol stringByAppendingString:@".fill"] : symbol;
+        UIImage *glyph = symbolGlyph(activeSymbol) ?: symbolGlyph(symbol);
+        if (glyph) return glyph;
+    }
     CGSize size = live.bounds.size;
     Class viewClass = NSClassFromString(@"SPTEncoreIconView");
     if (icon && viewClass) {
@@ -190,51 +149,6 @@ UIImage *SGRNavbarGlyph(NSDictionary *entry, BOOL active) {
         if ([labelIn(item).text isEqualToString:entry[SGRNavbarID]]) return glyphOf(item, active);
     }
     return nil;
-}
-
-#pragma mark - passing a tap on
-
-// NavigationUI_TabBarImpl's TabBarItemElementUI answers a tap recognizer (-handleTap), so the tap is
-// replayed through the recognizer's own target-action pairs, the same call a real touch ends in.
-static BOOL fireTapRecognizers(UIView *view) {
-    Ivar targetsIvar = class_getInstanceVariable(UIGestureRecognizer.class, "_targets");
-    if (!targetsIvar) return NO;
-    BOOL fired = NO;
-    for (UIGestureRecognizer *recognizer in view.gestureRecognizers) {
-        if (![recognizer isKindOfClass:UITapGestureRecognizer.class] || !recognizer.enabled) continue;
-        for (id pair in object_getIvar(recognizer, targetsIvar)) {
-            Ivar targetIvar = class_getInstanceVariable([pair class], "_target");
-            Ivar actionIvar = class_getInstanceVariable([pair class], "_action");
-            if (!targetIvar || !actionIvar) continue;
-            id target = object_getIvar(pair, targetIvar);
-            SEL action = *(SEL *)((char *)(__bridge void *)pair + ivar_getOffset(actionIvar));
-            if (!target || !action || ![target respondsToSelector:action]) continue;
-            SGLog(@"tab bar: tap -> %@ %@", NSStringFromClass([target class]), NSStringFromSelector(action));
-            ((void (*)(id, SEL, id))objc_msgSend)(target, action, recognizer);
-            fired = YES;
-        }
-    }
-    return fired;
-}
-
-static void forwardTap(UIView *item) {
-    __block BOOL sent = NO;
-    SGForEachView(item, ^(UIView *v) {
-        if (!sent) sent = fireTapRecognizers(v);
-    });
-    SGForEachView(item, ^(UIView *v) {
-        if (sent || ![v isKindOfClass:UIControl.class]) return;
-        SGLog(@"tab bar: tap -> control %@", NSStringFromClass(v.class));
-        [(UIControl *)v sendActionsForControlEvents:UIControlEventTouchUpInside];
-        sent = YES;
-    });
-    if (!sent) {
-        NSMutableString *out = [NSMutableString stringWithFormat:@"tab bar: nothing to tap in %@", NSStringFromClass(item.class)];
-        SGForEachView(item, ^(UIView *v) {
-            for (UIGestureRecognizer *r in v.gestureRecognizers) [out appendFormat:@"\n  %@ on %@", r, NSStringFromClass(v.class)];
-        });
-        SGLogLong(@"navbar", out);
-    }
 }
 
 #pragma mark - the system bar
@@ -341,29 +255,10 @@ void SGRShrinkTabTitles(UIView *bar) {
 @implementation SGRTabBarHost
 - (UIEdgeInsets)safeAreaInsets {
     UIEdgeInsets insets = [super safeAreaInsets];
-    insets.bottom = MAX(0, insets.bottom - sg_room);
+    insets.bottom = MAX(0, insets.bottom - SGRTabBarRoom());
     return insets;
 }
 @end
-
-@interface SGRHomeHold : UILongPressGestureRecognizer
-@end
-
-@implementation SGRHomeHold
-+ (void)held:(SGRHomeHold *)hold {
-    if (hold.state == UIGestureRecognizerStateBegan) SGOpenModSettings(hold.view);
-}
-@end
-
-// On Spotify's own bar a hold that begins fails the item's tap recognizer, so Home is not tapped too.
-static void holdHome(UIView *stockBar) {
-    UIView *home = SGRowIn(stockBar).arrangedSubviews.firstObject;
-    if (!home) return;
-    for (UIGestureRecognizer *recognizer in home.gestureRecognizers) {
-        if ([recognizer isKindOfClass:SGRHomeHold.class]) return;
-    }
-    [home addGestureRecognizer:[[SGRHomeHold alloc] initWithTarget:SGRHomeHold.class action:@selector(held:)]];
-}
 
 static void logBarOnce(UITabBar *bar) {
     static dispatch_once_t once;
@@ -415,51 +310,10 @@ static void placeFade(UIView *stockBar, CGRect glass, BOOL minimized) {
 
 #pragma mark - room for the glass bar
 
-// UIKit's glass bar asks for 83 pt, the platter the top 62 of it, over no more safe area than a Face ID
-// phone's 34 (simulator, iOS 26.5 and 27). Spotify's bar is its 49 pt row over the bottom safe area of
-// TabBarContainerImpl's view: a guide from 49 pt above the safe area's bottom to the view's bottom sets
-// its height (its viewDidLoad, 0x100840a2c), the now playing bar stands on that guide's top
-// (MainUIContainer's chrome bottom anchor, 0x100ae0178), the bar slides away by the inset plus 49 when
-// Spotify hides it (0x1037169a4) and the pages get 49 on top of the inset (0x10707bde4). A Face ID
-// phone gives the view 34 and the two bars match. A phone with a home button gives it none, and so does
-// Spotify's message bar (LimitedExperienceIndicatorBar: Offline, Private Session) coming in under the
-// tab bar, which takes the home indicator's inset for itself: the glass bar stood 34 pt above
-// Spotify's, over the now playing bar. So the view gets the rest of the glass bar's height as safe
-// area, and Spotify lays its bar, the now playing bar, the pages and the hide out for the glass bar
-// itself, and moves them all with the message bar.
-static const CGFloat kStockRow = 49;
-
-// UIKit asks for 62 + max(21, inset) on a phone with a home button, max(83, 49 + inset) on a Face ID
-// phone, by the safe area of the view the bar stands in. SGRTabBarHost keeps the room out of that; if
-// it ever reached the bar again, the bar would ask for more room every pass, so what it asks for with
-// no room made is what is kept.
-static CGFloat glassHeight(UITabBar *bar, UIView *stockBar) {
-    if (sg_room < 0.5 || sg_glassHeight <= 0) sg_glassHeight = [bar sizeThatFits:CGSizeMake(stockBar.bounds.size.width, kStockRow)].height;
-    return sg_glassHeight;
-}
-
-static UIViewController *containerOf(UIView *stockBar) {
-    Class containerClass = NSClassFromString(@"_TtC23NavigationUI_TabBarImpl19TabBarContainerImpl");
-    for (UIResponder *r = stockBar.nextResponder; r; r = r.nextResponder) {
-        if ([r isKindOfClass:containerClass]) return (UIViewController *)r;
-    }
-    return nil;
-}
-
+// The room itself is TabBarRoom.m's, shared with the capsule bar below iOS 26.
 static void makeRoom(UIViewController *container) {
     UIView *stockBar = sg_stockBar;
-    UITabBar *bar = stockBar ? objc_getAssociatedObject(stockBar, &kBarKey) : nil;
-    if (!bar.window || !container.isViewLoaded || ![stockBar isDescendantOfView:container.view]) return;
-    UIEdgeInsets extra = container.additionalSafeAreaInsets;
-    CGFloat inset = container.view.safeAreaInsets.bottom - extra.bottom;
-    CGFloat height = glassHeight(bar, stockBar);
-    // Spotify's regular width bar is a fixed 76 pt that ignores the inset.
-    BOOL compact = container.traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassCompact;
-    CGFloat room = compact ? MAX(0, ceil(height - kStockRow - inset)) : 0;
-    if (fabs(extra.bottom - room) < 0.5) return;
-    sg_room = extra.bottom = room;
-    container.additionalSafeAreaInsets = extra;
-    SGLog(@"tab bar: %.0f pt of room made under Spotify's bar for the glass bar's %.0f, over an inset of %.0f", room, height, inset);
+    SGRMakeTabBarRoom(container, stockBar, stockBar ? objc_getAssociatedObject(stockBar, &kBarKey) : nil);
 }
 
 static SGRSystemTabBar *makeBar(UIView *stockBar) {
@@ -616,7 +470,7 @@ static void syncBar(UIView *stockBar) {
 
     CGRect bounds = stockBar.bounds;
     CGFloat width = bounds.size.width;
-    CGFloat height = MAX(bounds.size.height, glassHeight(bar, stockBar));
+    CGFloat height = MAX(bounds.size.height, SGRTabBarGlassHeight(bar, stockBar));
     CGRect frame = CGRectMake(0, CGRectGetMaxY(bounds) - height, width, height);
     if (!CGRectEqualToRect(host.frame, frame)) host.frame = frame;
     placeFade(stockBar, frame, minimized);
@@ -674,6 +528,7 @@ static void syncBar(UIView *stockBar) {
 // bars get their new items and are laid out where they are going at once; then every view of theirs goes back
 // to where it was and moves on one spring with the card (see "one move"); nothing fades a bar's glass.
 BOOL SGRTabBarMinimized(void) {
+    if (SGRLegacyTabBarOn()) return SGRLegacyTabBarMinimized();
     return sg_minimized;
 }
 
@@ -685,21 +540,26 @@ static void setMinimized(BOOL minimized, BOOL animated);
 // down to it (harness/tabbar, `nested`). So an animated change asked for inside an animation is made on the main
 // queue's next turn, outside it, and only if nothing was asked for since; one asked for outside any is made at
 // once. A change with no animation stays at once too: the player's transition takes its pictures of the bars
-// right after asking.
+// right after asking. The same for the capsule bar below iOS 26 (TabBarLegacy.x), which makes the change itself.
 static NSUInteger sg_request;
+
+static void applyMinimized(BOOL minimized, BOOL animated) {
+    if (SGRLegacyTabBarOn()) SGRLegacyApplyTabBarMinimized(minimized, animated);
+    else setMinimized(minimized, animated);
+}
 
 void SGRSetTabBarMinimized(BOOL minimized, BOOL animated) {
     NSUInteger request = ++sg_request;
     if (!animated) {
-        [UIView performWithoutAnimation:^{ setMinimized(minimized, NO); }];
+        [UIView performWithoutAnimation:^{ applyMinimized(minimized, NO); }];
         return;
     }
     if (UIView.areAnimationsEnabled && UIView.inheritedAnimationDuration <= 0) {
-        setMinimized(minimized, YES);
+        applyMinimized(minimized, YES);
         return;
     }
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (request == sg_request) setMinimized(minimized, YES);
+        if (request == sg_request) applyMinimized(minimized, YES);
     });
 }
 
@@ -898,6 +758,7 @@ static CGRect platterEdges(UIView *stockBar, UIView *host) {
 }
 
 CGRect SGRTabBarInlineSlot(UIView *host, CGFloat height) {
+    if (SGRLegacyTabBarOn()) return SGRLegacyTabBarInlineSlot(host, height);
     UIView *stockBar = sg_stockBar;
     UIView *bar = stockBar ? objc_getAssociatedObject(stockBar, &kBarKey) : nil;
     UIView *apartBar = stockBar ? objc_getAssociatedObject(stockBar, &kApartBarKey) : nil;
@@ -931,12 +792,6 @@ CGRect SGRTabBarGlassRow(UIView *host) {
 
 #pragma mark - hooks
 
-static UIView *tabBarOf(UIView *item) {
-    Class barClass = NSClassFromString(@"_TtC23NavigationUI_TabBarImpl10TabBarView");
-    for (UIView *v = item.superview; v; v = v.superview) if ([v isKindOfClass:barClass]) return v;
-    return nil;
-}
-
 // The bar in its own pass, and whether one of its items laid out during it.
 static __weak UIView *sg_passBar;
 static BOOL sg_itemsLaidOut;
@@ -957,7 +812,7 @@ static BOOL sg_itemsLaidOut;
     if (sg_itemsLaidOut) SGRComposeTabBar(bar);
     sg_passBar = outer;
     sg_itemsLaidOut = outerLaidOut;
-    holdHome(bar);
+    SGRHoldHomeForModSettings(bar);
     syncBar(bar);
     SGRLogTabBarRow(bar);
 }
@@ -973,7 +828,7 @@ static void itemDidLayOut(UIView *item) {
         return;
     }
     SGRComposeTabBar(bar);
-    holdHome(bar);
+    SGRHoldHomeForModSettings(bar);
     syncBar(bar);
     SGRLogTabBarRow(bar);
 }
@@ -1026,7 +881,7 @@ static void itemDidLayOut(UIView *item) {
 %end
 
 %ctor {
-    if (!SGRedesignedUI()) return;
+    if (!SGRedesignedUI() || SGRLegacyTabBarOn()) return;   // below iOS 26 TabBarLegacy.x is the bar
     %init;
     if (objc_getClass("_TtC23NavigationUI_TabBarImpl18TabBarGradientView")) %init(SpotifyBarFade);
     SGRequireClasses(@[

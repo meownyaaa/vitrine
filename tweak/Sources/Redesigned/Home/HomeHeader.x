@@ -241,6 +241,90 @@ static void place(UIView *view, CGRect frame) {
     if (!CGPointEqualToPoint(view.center, center)) view.center = center;
 }
 
+// New Music Friday: on a Friday the pill wears a thin ring of pinks and purples, turning slowly round it, as a nod to the
+// week's new releases. A layer of the pill's glass holder, cut to a capsule's outline. It goes and comes back with the
+// pill's material as the title row scrolls away (riseGlass), and its turn is taken off the rest of the week and under
+// Reduce Motion, so the next layout stops it after midnight or as Reduce Motion goes on. A turn of 6 s needs no more
+// than 30 frames a second.
+static char kFridayKey;
+static const CGFloat kFridayRing = 1.5;
+static const CFTimeInterval kFridayTurn = 6;
+
+static BOOL sg_glassShown = YES;
+
+static BOOL isFriday(void) {
+    return [NSCalendar.currentCalendar component:NSCalendarUnitWeekday fromDate:NSDate.date] == 6;
+}
+
+// The ring's turn, on only while it can be seen: a ring faded out with the material keeps no endless animation going
+// under a page scrolled down, nor under Reduce Motion.
+static void turnRing(CALayer *ring, BOOL on) {
+    CALayer *colors = ring.sublayers.firstObject;
+    if (!colors) return;
+    if (!on || SGRReduceMotion()) {
+        [colors removeAnimationForKey:@"turn"];
+        return;
+    }
+    if ([colors animationForKey:@"turn"]) return;
+    CABasicAnimation *turn = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+    turn.fromValue = @0;
+    turn.toValue = @(2 * M_PI);
+    turn.duration = kFridayTurn;
+    turn.repeatCount = HUGE_VALF;
+    turn.removedOnCompletion = NO;
+    turn.preferredFrameRateRange = CAFrameRateRangeMake(10, 30, 30);
+    [colors addAnimation:turn forKey:@"turn"];
+}
+
+static void layoutFriday(UIView *holder, CGSize size) {
+    CALayer *ring = objc_getAssociatedObject(holder, &kFridayKey);
+    BOOL friday = isFriday() && size.width > 1;
+    if (!friday) {
+        [ring.sublayers.firstObject removeAnimationForKey:@"turn"];
+        ring.hidden = YES;
+        return;
+    }
+    CAGradientLayer *colors;
+    if (!ring) {
+        ring = [CALayer layer];
+        colors = [CAGradientLayer layer];
+        colors.type = kCAGradientLayerConic;
+        colors.startPoint = CGPointMake(0.5, 0.5);
+        colors.endPoint = CGPointMake(0.5, 0);
+        UIColor *pink = [UIColor colorWithRed:1 green:0.36 blue:0.72 alpha:1], *violet = [UIColor colorWithRed:0.62 green:0.36 blue:1 alpha:1];
+        UIColor *magenta = [UIColor colorWithRed:0.92 green:0.3 blue:1 alpha:1], *rose = [UIColor colorWithRed:1 green:0.55 blue:0.8 alpha:1];
+        colors.colors = @[(id)pink.CGColor, (id)violet.CGColor, (id)magenta.CGColor, (id)rose.CGColor, (id)pink.CGColor];
+        [ring addSublayer:colors];
+        CAShapeLayer *outline = [CAShapeLayer layer];
+        outline.fillColor = nil;
+        outline.strokeColor = UIColor.whiteColor.CGColor;
+        outline.lineWidth = kFridayRing;
+        ring.mask = outline;
+        ring.zPosition = 101;
+        ring.opacity = sg_glassShown ? 1 : 0;
+        objc_setAssociatedObject(holder, &kFridayKey, ring, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    colors = (CAGradientLayer *)ring.sublayers.firstObject;
+    if (ring.superlayer != holder.layer) [holder.layer addSublayer:ring];
+    ring.hidden = NO;
+    CGRect bounds = (CGRect){CGPointZero, size};
+    if (!CGRectEqualToRect(ring.frame, bounds)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        ring.frame = bounds;
+        // Square and wider than the pill, so it covers the outline whichever way it has turned.
+        CGFloat side = hypot(size.width, size.height);
+        colors.bounds = CGRectMake(0, 0, side, side);
+        colors.position = CGPointMake(size.width / 2, size.height / 2);
+        CAShapeLayer *outline = (CAShapeLayer *)ring.mask;
+        outline.frame = bounds;
+        CGRect line = CGRectInset(bounds, kFridayRing / 2, kFridayRing / 2);
+        outline.path = [UIBezierPath bezierPathWithRoundedRect:line cornerRadius:line.size.height / 2].CGPath;
+        [CATransaction commit];
+    }
+    turnRing(ring, sg_glassShown);
+}
+
 static CGFloat layoutPill(UIView *header, UIStackView *stack, UIView *face) {
     SGRHomePillButtons *buttons = buttonsIn(header);
     UIView *glass = glassIn(header);
@@ -254,6 +338,7 @@ static CGFloat layoutPill(UIView *header, UIStackView *stack, UIView *face) {
     CGRect filter = CGRectMake(kPillPad, 0, kPillButton, kPillHeight);
     if (!CGRectEqualToRect(buttons.filter.frame, filter)) buttons.filter.frame = filter;
     SGRGlassCapsuleInside(glass, &kPillGlassKey, pill.size, NO);
+    layoutFriday(glass, pill.size);
     return CGRectGetMinX(pill);
 }
 
@@ -335,7 +420,6 @@ static void rise(UIView *part, CGAffineTransform transform, CGFloat alpha) {
 // The pill's glass takes no alpha (SGRGlass.h): it rises with the row, and its material goes off once the row is
 // half faded and comes back with it.
 static const NSTimeInterval kGlassFade = 0.15;
-static BOOL sg_glassShown = YES;
 // When the material's last change ends: until then the glass keeps rising after the row has faded.
 static CFTimeInterval sg_glassFadeEnds;
 static void riseGlass(UIView *glass, CGAffineTransform transform, CGFloat alpha) {
@@ -347,9 +431,23 @@ static void riseGlass(UIView *glass, CGAffineTransform transform, CGFloat alpha)
     sg_glassShown = shown;
     sg_glassFadeEnds = CACurrentMediaTime() + kGlassFade;
     [UIView animateWithDuration:kGlassFade animations:^{ SGRShowGlass(shape, shown); }];
+    // The Friday ring goes and comes back with the material, over the same time.
+    CALayer *ring = objc_getAssociatedObject(glass, &kFridayKey);
+    if (ring) {
+        if (shown) turnRing(ring, YES);
+        [CATransaction begin];
+        [CATransaction setAnimationDuration:kGlassFade];
+        // Faded out, it stops turning (turnRing), unless it has come back meanwhile.
+        if (!shown) [CATransaction setCompletionBlock:^{ if (!sg_glassShown) turnRing(ring, NO); }];
+        ring.opacity = shown ? 1 : 0;
+        [CATransaction commit];
+    }
 }
 
+static void insetFeed(UIScrollView *feed);
+
 static void followScroll(UIScrollView *scroll) {
+    insetFeed(scroll);
     UILabel *title = sg_header ? objc_getAssociatedObject(sg_header, &kTitleKey) : nil;
     if (!title || !scroll) return;
     CGFloat scrolled = MAX(0, scroll.contentOffset.y + scroll.adjustedContentInset.top), faded = MAX(1, title.bounds.size.height);
@@ -364,20 +462,11 @@ static void followScroll(UIScrollView *scroll) {
     if ([sg_face isDescendantOfView:sg_header]) rise(sg_face, up, alpha);
 }
 
-@interface SGRHomeTitleFollower : NSObject
-@property (nonatomic, weak) UIScrollView *scroll;
-@end
-
-@implementation SGRHomeTitleFollower
-- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
-    followScroll(self.scroll);
-}
-@end
-
 // The feed: the page's outermost scroll view taller than the pills, found once. Not the tallest: a shelf can grow taller
 // than the page, and a shelf's offset never moves the title. Followed by an observer that lives as long as it does.
 static char kFollowerKey, kEdgeKey;
 static __weak UIScrollView *sg_feed;
+static void insetFeed(UIScrollView *feed);
 static __weak UIView *sg_pageView;
 // Kept in place (SGRKeyHomeKeepTitle), the row stays and no observer is added: the header instead shapes the feed's
 // top edge effect, hard rather than the redesign's soft one (too faint under a large title, as Apple's guidelines
@@ -407,16 +496,12 @@ static void shapeEdge(UIScrollView *feed) {
 
 static void followFeed(UIScrollView *feed) {
     sg_feed = feed;
+    insetFeed(feed);
     if (keepTitle()) {
         shapeEdge(feed);
         return;
     }
-    if (!objc_getAssociatedObject(feed, &kFollowerKey)) {
-        SGRHomeTitleFollower *follower = [SGRHomeTitleFollower new];
-        follower.scroll = feed;
-        [feed addObserver:follower forKeyPath:@"contentOffset" options:0 context:NULL];
-        objc_setAssociatedObject(feed, &kFollowerKey, follower, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+    SGRFollowOffset(feed, &kFollowerKey, ^(UIScrollView *scroll) { followScroll(scroll); });
     followScroll(feed);
 }
 
@@ -430,6 +515,111 @@ static void follow(UIView *view) {
 }
 
 static void layoutHeader(UIViewController *page);
+
+// The feed under the header. Spotify stacks it below the header (the header element's bottom to the feed's container's
+// top, 98pt down on a 414pt phone) in a container that clips, and paints the header black: once the title row had
+// scrolled away, the top of the page was an empty black band 98pt tall with the feed cut off under it in a straight
+// line. The Music app's page runs under its header to the top of the screen. So, below iOS 26, the container's top is
+// tied to the page's own, the header's black goes, and the feed is pushed down inside by what the container rose
+// (insetFeed), so nothing moves at rest.
+static char kLiftedKey, kExtraKey, kWrittenKey;
+// Where the feed's first content stood, from the top of the page, before the container rose: the container's old top
+// and the feed's safe area then.
+static CGFloat sg_firstTop;
+
+// Room between the header's row (the title and the pill) and the first row of cards, which sat right under it.
+static const CGFloat kFeedGap = 12;
+
+// The feed's top inset is Spotify's own plus what keeps its first content at sg_firstTop under the safe area it has
+// now. The safe area changes after the container rises (8pt became 56pt, and a lift worked out once left Home 48pt
+// low), so it is worked out again on every pass and every scroll; Spotify's own part is what the inset holds less what
+// was added last, unless Spotify has set the inset again since (it is no longer the value written here): then all of
+// it is Spotify's, as LibraryHeader.x's raiseList reads it.
+static void insetFeed(UIScrollView *feed) {
+    if (sg_firstTop <= 0 || !feed) return;
+    // Setting the inset makes UIKit move the offset at once, which the follower hears (SGRFollowOffset) and answers
+    // with followScroll, so this is entered again before it has finished: that inner pass is left to the outer one.
+    static BOOL inside;
+    if (inside) return;
+    inside = YES;
+    CGFloat extra = MAX(0, sg_firstTop - feed.safeAreaInsets.top) + kFeedGap;
+    CGFloat added = [objc_getAssociatedObject(feed, &kExtraKey) doubleValue];
+    NSNumber *written = objc_getAssociatedObject(feed, &kWrittenKey);
+    UIEdgeInsets inset = feed.contentInset;
+    BOOL ours = written && fabs(inset.top - written.doubleValue) < 0.5;
+    if (!ours) added = 0;
+    if (ours && fabs(extra - added) < 0.5) {
+        inside = NO;
+        return;
+    }
+    BOOL atRest = feed.contentOffset.y <= -feed.adjustedContentInset.top + 1;
+    inset.top += extra - added;
+    // What is written is noted before it is written, so that a pass that does run inside the write reads it as ours.
+    objc_setAssociatedObject(feed, &kExtraKey, @(extra), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(feed, &kWrittenKey, @(inset.top), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    feed.contentInset = inset;
+    if (atRest) feed.contentOffset = CGPointMake(feed.contentOffset.x, -feed.adjustedContentInset.top);
+    inside = NO;
+}
+
+// The header element's black: Spotify paints it again as the page scrolls, after any pass of ours, and on its layer
+// rather than through the view's setter, so a hook of the setter left the band there. The repaint hook holds the
+// element's fill clear instead (SGRHoldClear).
+static void keepHeaderClear(UIView *element) {
+    static __weak UIView *held;
+    if (held != element) {
+        held = element;
+        SGRHoldClear(element);
+        // And every element of its class, made later: Home builds its header again with the feed and paints the new one
+        // black as it makes it, before a pass of the page has found it (the element at y 48, 414x50, #000000@1.00 over
+        // the feed as it scrolled, gone once its fill was taken off).
+        SGRHoldClearClass(object_getClass(element));
+        SGLog(@"redesign home: the header's fill is held clear");
+    }
+    // The view's own colour as well as its layer's: a view keeps the colour it was given and puts it back on its layer.
+    if (element.backgroundColor) element.backgroundColor = nil;
+    if (SGIsVisibleColor(element.layer.backgroundColor)) element.layer.backgroundColor = NULL;
+}
+
+static void liftFeed(UIView *element) {
+    UIView *page = element.superview;
+    if (!SGBelowiOS26() || !page) return;
+    if ([NSStringFromClass(element.class) containsString:@"HomeHeaderElement"]) keepHeaderClear(element);
+    if (objc_getAssociatedObject(element, &kLiftedKey)) {
+        insetFeed(sg_feed);
+        return;
+    }
+    NSLayoutConstraint *below = nil;
+    for (NSLayoutConstraint *c in page.constraints) {
+        if (c.active && c.secondItem == element && c.secondAttribute == NSLayoutAttributeBottom
+            && c.firstAttribute == NSLayoutAttributeTop && [c.firstItem isKindOfClass:UIView.class]) below = c;
+    }
+    UIView *container = below.firstItem;
+    if (!container || container.bounds.size.height < 1) return;
+    // Not before the feed is known: worked out without its safe area, the first content stood 8pt high.
+    UIScrollView *feed = sg_feed;
+    if (!feed) return;
+    // A header element Spotify makes again ties the same container to it: that tie goes, and the container keeps the one
+    // tie of ours to the page's top, never a second.
+    static __weak NSLayoutConstraint *sg_lift;
+    NSLayoutConstraint *lift = sg_lift;
+    BOOL lifted = lift.active && lift.firstItem == container && lift.secondItem == page;
+    if (!lifted) {
+        CGFloat before = CGRectGetMinY(container.frame);
+        sg_firstTop = before + ([feed isDescendantOfView:container] ? feed.safeAreaInsets.top : 0);
+    }
+    below.active = NO;
+    if (!lifted) {
+        lift = [container.topAnchor constraintEqualToAnchor:page.topAnchor];
+        lift.active = YES;
+        sg_lift = lift;
+    }
+    objc_setAssociatedObject(element, &kLiftedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [page layoutIfNeeded];
+    if (container.clipsToBounds) container.clipsToBounds = NO;
+    insetFeed(feed);
+    SGLog(@"redesign home: the feed runs under the header, its first content kept %.0fpt down%@", sg_firstTop, lifted ? @", the header made again" : @"");
+}
 
 // The page's own pass can run before Spotify has sized its header at all (the header's view 0 by 0, its stack still
 // a width to the left and centered on the origin: seen on a 440pt phone, with no pass of the page after, which
@@ -460,6 +650,7 @@ static void layoutHeader(UIViewController *page) {
     if (!view || !findHeader(view)) return;
     sg_pageView = view;
     UIView *header = sg_header;
+    liftFeed(header.superview);
     UIStackView *stack = sg_stack;
     vanish(sg_scrim);
     layoutHeaderOnceSized(page, header);

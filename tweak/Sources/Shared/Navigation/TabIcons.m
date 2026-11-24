@@ -6,9 +6,66 @@
 
 NSString *const SGTabIconSetSymbols = @"symbols";
 
-static UIImage *symbolImage(NSString *name) {
+static char kSymbolNameKey;
+
+static NSBundle *privateGlyphsBundle(void) {
+    static NSBundle *bundle;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = NSClassFromString(@"SFSCoreGlyphsBundle");
+        SEL sel = NSSelectorFromString(@"private");
+        if (cls && [cls respondsToSelector:sel]) {
+            bundle = ((NSBundle *(*)(id, SEL))objc_msgSend)(cls, sel);
+        }
+        if (!bundle) bundle = [NSBundle bundleWithPath:@"/System/Library/PrivateFrameworks/SFSymbols.framework/CoreGlyphsPrivate.bundle"];
+        if (!bundle) bundle = [NSBundle bundleWithPath:@"/System/Library/CoreServices/CoreGlyphsPrivate.bundle"];
+    });
+    return bundle;
+}
+
+static id privateAssetManager(void) {
+    static id mgr;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSBundle *bundle = privateGlyphsBundle();
+        if (!bundle) return;
+        Class cls = NSClassFromString(@"_UIAssetManager");
+        SEL sel = NSSelectorFromString(@"assetManagerForBundle:");
+        if (cls && [cls respondsToSelector:sel]) {
+            mgr = ((id (*)(id, SEL, id))objc_msgSend)(cls, sel, bundle);
+        }
+    });
+    return mgr;
+}
+
+UIImage *SGSymbolImage(NSString *name) {
     if (!name.length) return nil;
-    return [UIImage systemImageNamed:name withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]];
+    static UIImageSymbolConfiguration *config;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        config = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold];
+    });
+    UIImage *image = [UIImage systemImageNamed:name withConfiguration:config];
+    if (image) return image;
+
+    SEL privateSel = NSSelectorFromString(@"_systemImageNamed:withConfiguration:allowPrivate:");
+    if ([UIImage respondsToSelector:privateSel]) {
+        image = ((UIImage *(*)(id, SEL, NSString *, id, BOOL))objc_msgSend)(UIImage.class, privateSel, name, config, YES);
+        if (image) return image;
+    }
+
+    id assetMgr = privateAssetManager();
+    if (assetMgr && [assetMgr respondsToSelector:@selector(imageNamed:)]) {
+        @synchronized (assetMgr) {
+            image = ((UIImage *(*)(id, SEL, NSString *))objc_msgSend)(assetMgr, @selector(imageNamed:), name);
+        }
+        if (image) image = [image imageByApplyingSymbolConfiguration:config] ?: image;
+    }
+    return image;
+}
+
+NSString *SGTabIconSymbolName(UIView *icon) {
+    return icon ? objc_getAssociatedObject(icon, &kSymbolNameKey) : nil;
 }
 
 // SPTEncoreIcon exposes one class method per glyph ("podcasts", "heart"), 538 of them in 9.1.78.
@@ -31,9 +88,15 @@ static UIView *symbolView(UIImage *image, UIColor *color) {
 }
 
 UIView *SGTabIconView(NSString *name, BOOL symbol, UIColor *color) {
-    UIImage *image = symbol ? symbolImage(name) : nil;
-    if (image) return symbolView(image, color);
-    return encoreView(name, color) ?: symbolView(symbolImage(@"star.fill"), color);
+    UIImage *image = symbol ? SGSymbolImage(name) : nil;
+    UIView *view = image ? symbolView(image, color) : encoreView(name, color);
+    if (view) {
+        if (image) objc_setAssociatedObject(view, &kSymbolNameKey, name, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        return view;
+    }
+    view = symbolView(SGSymbolImage(@"star.fill"), color);
+    objc_setAssociatedObject(view, &kSymbolNameKey, @"star.fill", OBJC_ASSOCIATION_COPY_NONATOMIC);
+    return view;
 }
 
 #pragma mark - the catalogs
@@ -85,14 +148,31 @@ NSArray<NSString *> *SGCommonTabGlyphs(void) {
     return kept;
 }
 
+static NSArray<NSString *> *curatedPrivateSymbols(void) {
+    return @[
+        @"music.note.square.stack.fill", @"music.note.square.stack",
+        @"apple.podcasts.square.stack.fill", @"apple.podcasts.square.stack",
+        @"apple.music", @"apple.music.fill",
+        @"apple.news", @"apple.news.fill",
+        @"apple.tv", @"apple.tv.fill",
+        @"homepod.2.fill", @"homepod.2",
+        @"homepodmini.2.fill", @"homepodmini.2",
+        @"visionpro.fill", @"visionpro",
+        @"airplayaudio", @"airplayvideo",
+        @"faceid", @"touchid"
+    ];
+}
+
 NSArray<NSString *> *SGCommonTabSymbols(void) {
     NSMutableArray<NSString *> *kept = [NSMutableArray array];
     for (NSString *name in @[@"house.fill", @"magnifyingglass", @"books.vertical.fill", @"heart.fill", @"music.note.list",
-                             @"square.stack.fill", @"music.mic", @"mic.fill", @"globe", @"radio.fill", @"headphones",
+                             @"square.stack.fill", @"square.stack", @"music.note.square.stack.fill", @"music.note.square.stack",
+                             @"square.grid.2x2.fill", @"square.grid.2x2", @"play.circle.fill",
+                             @"music.mic", @"mic.fill", @"globe", @"dot.radiowaves.left.and.right", @"radio.fill", @"headphones",
                              @"star.fill", @"clock.fill", @"arrow.down.circle.fill", @"bookmark.fill", @"person.crop.circle.fill",
                              @"sparkles", @"flame.fill", @"chart.bar.fill", @"waveform", @"calendar", @"ticket.fill",
                              @"list.bullet", @"plus"]) {
-        if (symbolImage(name)) [kept addObject:name];
+        if (SGSymbolImage(name)) [kept addObject:name];
     }
     return kept;
 }
@@ -110,17 +190,43 @@ static BOOL scriptVariant(NSString *name) {
     return dot.location != NSNotFound && [scripts containsObject:[name substringFromIndex:dot.location + 1]];
 }
 
+static NSArray<NSString *> *readPlistSymbolNames(NSBundle *bundle) {
+    if (!bundle) return nil;
+    NSString *path = [bundle pathForResource:@"symbol_order" ofType:@"plist"];
+    NSArray *names = path ? [NSArray arrayWithContentsOfFile:path] : nil;
+    if ([names isKindOfClass:NSArray.class] && names.count) return names;
+
+    path = [bundle pathForResource:@"name_availability" ofType:@"plist"];
+    NSDictionary *availability = path ? [NSDictionary dictionaryWithContentsOfFile:path] : nil;
+    NSDictionary *symbols = [availability isKindOfClass:NSDictionary.class] ? availability[@"symbols"] : nil;
+    if ([symbols isKindOfClass:NSDictionary.class] && symbols.count) return symbols.allKeys;
+
+    path = [bundle pathForResource:@"metadata" ofType:@"plist"];
+    NSDictionary *meta = path ? [NSDictionary dictionaryWithContentsOfFile:path] : nil;
+    NSDictionary *metaSymbols = [meta isKindOfClass:NSDictionary.class] ? meta[@"symbols"] : nil;
+    if ([metaSymbols isKindOfClass:NSDictionary.class] && metaSymbols.count) return metaSymbols.allKeys;
+
+    return nil;
+}
+
 // UIKit lists no symbol names. The system's own catalog does, in CoreGlyphs (a link in CoreServices to
 // SFSymbols.framework's bundle on iOS 26 and 27, checked against the iOS 27 simulator runtime): its
 // symbol_order.plist names each symbol once, in the SF Symbols app's order.
 static NSArray<NSString *> *systemSymbolNames(void) {
-    NSBundle *glyphs = [NSBundle bundleWithPath:@"/System/Library/CoreServices/CoreGlyphs.bundle"];
-    NSString *path = [glyphs pathForResource:@"symbol_order" ofType:@"plist"];
-    NSArray *names = path ? [NSArray arrayWithContentsOfFile:path] : nil;
-    if (names.count) return names;
-    path = [glyphs pathForResource:@"name_availability" ofType:@"plist"];
-    NSDictionary *symbols = path ? [NSDictionary dictionaryWithContentsOfFile:path][@"symbols"] : nil;
-    return [symbols isKindOfClass:NSDictionary.class] ? symbols.allKeys : nil;
+    NSMutableOrderedSet<NSString *> *set = [NSMutableOrderedSet orderedSet];
+
+    NSBundle *publicBundle = [NSBundle bundleWithPath:@"/System/Library/CoreServices/CoreGlyphs.bundle"];
+    if (!publicBundle) publicBundle = [NSBundle bundleWithPath:@"/System/Library/PrivateFrameworks/SFSymbols.framework/CoreGlyphs.bundle"];
+    NSArray *publicNames = readPlistSymbolNames(publicBundle);
+    if (publicNames.count) [set addObjectsFromArray:publicNames];
+
+    NSBundle *privateBundle = privateGlyphsBundle();
+    NSArray *privateNames = readPlistSymbolNames(privateBundle);
+    if (privateNames.count) [set addObjectsFromArray:privateNames];
+
+    [set addObjectsFromArray:curatedPrivateSymbols()];
+
+    return set.array;
 }
 
 void SGLoadSymbolNames(void (^done)(NSArray<NSString *> *names)) {
@@ -141,7 +247,7 @@ void SGLoadSymbolNames(void (^done)(NSArray<NSString *> *names)) {
         BOOL *draws = calloc(count ?: 1, sizeof(BOOL));
         dispatch_apply(count, DISPATCH_APPLY_AUTO, ^(size_t i) {
             id name = names[i];
-            draws[i] = [name isKindOfClass:NSString.class] && !scriptVariant(name) && symbolImage(name);
+            draws[i] = [name isKindOfClass:NSString.class] && !scriptVariant(name) && SGSymbolImage(name);
         });
         NSMutableArray<NSString *> *kept = [NSMutableArray array];
         for (NSUInteger i = 0; i < count; i++) if (draws[i]) [kept addObject:names[i]];

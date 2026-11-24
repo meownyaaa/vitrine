@@ -72,6 +72,15 @@ NSArray<NSDictionary *> *SGRNavbarSplit(void) {
     return listOfKind(kNavbarSplit, NSDictionary.class);
 }
 
+// Below iOS 26 the capsule bar has one round button for the split tab, so it shows the last one set apart. Only the
+// bar reads it this way: the Split tabs page reads and writes the whole list, so an edit below iOS 26 keeps the rest
+// for iOS 26.
+NSArray<NSDictionary *> *SGRNavbarSplitShown(void) {
+    NSArray<NSDictionary *> *split = SGRNavbarSplit();
+    if (split.count > 1 && SGRLegacyTabBarOn()) return @[split.lastObject];
+    return split;
+}
+
 void SGRSetNavbarSplit(NSArray<NSDictionary *> *split) {
     [NSUserDefaults.standardUserDefaults setObject:split ?: @[] forKey:kNavbarSplit];
 }

@@ -221,6 +221,19 @@ BOOL SGRObserveImage(UIImageView *view, void (^changed)(UIImageView *view)) {
 // returned; one level is enough to settle, and re-entering would not end.
 static BOOL sg_reportingLayout = NO;
 
+static void reportLayout(UIView *view) {
+    if (sg_reportingLayout) return;
+    void (^block)(UIView *) = objc_getAssociatedObject(view, &kLayoutObserverKey);
+    if (!block) return;
+    sg_reportingLayout = YES;
+    block(view);
+    sg_reportingLayout = NO;
+}
+
+BOOL SGRObservesLayout(UIView *view) {
+    return view && objc_getAssociatedObject(view, &kLayoutObserverKey) != nil;
+}
+
 BOOL SGRObserveLayout(UIView *view, void (^laidOut)(UIView *view)) {
     if (![view isKindOfClass:UIView.class]) return NO;
     objc_setAssociatedObject(view, &kLayoutObserverKey, laidOut, OBJC_ASSOCIATION_COPY_NONATOMIC);
@@ -228,24 +241,20 @@ BOOL SGRObserveLayout(UIView *view, void (^laidOut)(UIView *view)) {
         addOverride(subclass, original, @selector(layoutSubviews), ^(UIView *self) {
             struct objc_super parent = {self, original};
             ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&parent, @selector(layoutSubviews));
-            if (sg_reportingLayout) return;
-            void (^block)(UIView *) = objc_getAssociatedObject(self, &kLayoutObserverKey);
-            if (!block) return;
-            sg_reportingLayout = YES;
-            block(self);
-            sg_reportingLayout = NO;
+            reportLayout(self);
         });
     });
-    if (!kept) {
-        static NSMutableSet<NSString *> *logged;
-        if (!logged) logged = [NSMutableSet set];
-        NSString *name = NSStringFromClass(object_getClass(view));
-        if (![logged containsObject:name]) {
-            [logged addObject:name];
-            SGLog(@"redesign kit: %@ cannot be watched for its layout", name);
-        }
-    }
-    return kept;
+    // One of Spotify's Swift classes (a library filter chip) cannot be subclassed, so the class carries the
+    // override, which only ever reports the instances that asked, as SGRObserveImage does. Below iOS 26 only: on 26 the
+    // watchers that asked for such a view stay unreported, as they were.
+    BOOL onClass = !kept && SGBelowiOS26() && overrideOnClass(object_getClass(view), @selector(layoutSubviews), ^id(IMP replaced) {
+        return ^(UIView *self) {
+            ((void (*)(id, SEL))replaced)(self, @selector(layoutSubviews));
+            reportLayout(self);
+        };
+    });
+    logWatch(view, @selector(layoutSubviews), kept || onClass, onClass);
+    return kept || onClass;
 }
 
 // An identifier ending in * matches by prefix, for Spotify's ids that carry an entity after a dash.
@@ -275,6 +284,62 @@ UIView *SGRFindByIdentifier(UIView *root, NSString *identifier, const void *cach
     if (!root || !identifier.length) return nil;
     if (!cacheKey) return findIdentifier(root, identifier);
     return SGFindRemembered(root, cacheKey, ^BOOL(UIView *v) { return identifierMatches(v.accessibilityIdentifier, identifier); });
+}
+
+UIView *SGRChildNamed(UIView *host, NSString *name) {
+    for (UIView *sub in host.subviews) {
+        if ([NSStringFromClass(sub.class) isEqualToString:name]) return sub;
+    }
+    return nil;
+}
+
+UINavigationController *SGRNavigationOf(UIView *view) {
+    for (UIResponder *r = view; r; r = r.nextResponder) {
+        if ([r isKindOfClass:UINavigationController.class]) return (UINavigationController *)r;
+    }
+    return nil;
+}
+
+Class SGRSwiftClass(NSString *module, NSString *name) {
+    NSString *mangled = [NSString stringWithFormat:@"_TtC%lu%@%lu%@", (unsigned long)module.length, module, (unsigned long)name.length, name];
+    return NSClassFromString(mangled) ?: NSClassFromString([NSString stringWithFormat:@"%@.%@", module, name]);
+}
+
+Class SGRPrivateSwiftClass(NSString *module, NSString *suffix) {
+    // The app's own images walked by name, without realizing any class (objc_copyClassList realizes every class of the
+    // process, which a launch pays for), each name compared as it is read and none kept.
+    const char *prefix = [NSString stringWithFormat:@"_TtC%lu%@", (unsigned long)module.length, module].UTF8String;
+    const char *end = suffix.UTF8String;
+    const char *bundle = NSBundle.mainBundle.bundlePath.fileSystemRepresentation;
+    if (!prefix || !end || !bundle) return nil;
+    size_t prefixLength = strlen(prefix), endLength = strlen(end), bundleLength = strlen(bundle);
+    Class found = nil;
+    unsigned int imageCount = 0;
+    const char **images = objc_copyImageNames(&imageCount);
+    for (unsigned int i = 0; i < imageCount && !found; i++) {
+        if (strncmp(images[i], bundle, bundleLength) != 0) continue;
+        unsigned int count = 0;
+        const char **classes = objc_copyClassNamesForImage(images[i], &count);
+        for (unsigned int j = 0; j < count; j++) {
+            const char *name = classes[j];
+            size_t length = strlen(name);
+            if (length < prefixLength + endLength || strncmp(name, prefix, prefixLength) != 0) continue;
+            if (strcmp(name + length - endLength, end) != 0) continue;
+            found = objc_getClass(name);
+            break;
+        }
+        free(classes);
+    }
+    free(images);
+    return found;
+}
+
+void SGRConceal(UIView *view) {
+    if (!view) return;
+    if (!view.layer.hidden) view.layer.hidden = YES;
+    if (!view.layer.mask) view.layer.mask = [CALayer layer];
+    if (view.userInteractionEnabled) view.userInteractionEnabled = NO;
+    view.accessibilityElementsHidden = YES;
 }
 
 void SGRFindByIdentifiers(UIView *root, NSArray<NSString *> *identifiers, const void *const cacheKeys[], UIView *__strong found[]) {
@@ -455,4 +520,64 @@ BOOL SGRFire(UIControl *control) {
     if (!fire) return NO;
     [control sendActionsForControlEvents:fire];
     return YES;
+}
+
+static char kWatchedLayoutKey, kOwnFrameKey, kRoomKey;
+
+BOOL SGRWatchLayout(UIView *view, void (^laidOut)(UIView *view)) {
+    if (!view || objc_getAssociatedObject(view, &kWatchedLayoutKey)) return view != nil;
+    if (!SGRObserveLayout(view, laidOut)) return NO;
+    objc_setAssociatedObject(view, &kWatchedLayoutKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return YES;
+}
+
+SGRListRoom SGRListRoomOf(UIView *view) {
+    CGRect frame = view.frame;
+    NSValue *own = objc_getAssociatedObject(view, &kOwnFrameKey);
+    NSValue *room = objc_getAssociatedObject(view, &kRoomKey);
+    if (!room || !own || !CGRectEqualToRect(own.CGRectValue, frame)) {
+        CGFloat height = view.superview.bounds.size.height;
+        SGRListRoom read = {MAX(frame.origin.y, 0), MAX(height - CGRectGetMaxY(frame), 0)};
+        room = [NSValue valueWithBytes:&read objCType:@encode(SGRListRoom)];
+        objc_setAssociatedObject(view, &kRoomKey, room, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    SGRListRoom result;
+    [room getValue:&result];
+    return result;
+}
+
+void SGRSetOwnFrame(UIView *view, CGRect frame) {
+    if (!CGRectEqualToRect(view.frame, frame)) view.frame = frame;
+    objc_setAssociatedObject(view, &kOwnFrameKey, [NSValue valueWithCGRect:view.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+void SGRSetListInsets(UIScrollView *list, UIEdgeInsets inset) {
+    if (list.contentInsetAdjustmentBehavior != UIScrollViewContentInsetAdjustmentNever) list.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    UIEdgeInsets old = list.contentInset;
+    BOOL moving = list.isDragging || list.isDecelerating;
+    if (fabs(old.bottom - inset.bottom) < 0.5 && fabs(old.top - inset.top) < 0.5) {
+        if (!moving && inset.top > 0 && fabs(list.contentOffset.y) < 0.5) list.contentOffset = CGPointMake(0, -inset.top);
+        return;
+    }
+    BOOL atTop = list.contentOffset.y <= -old.top + 1;
+    list.contentInset = inset;
+    list.verticalScrollIndicatorInsets = inset;
+    if (atTop && !moving) list.contentOffset = CGPointMake(0, -inset.top);
+}
+
+void SGRRunListToFoot(UIScrollView *list, UIView *page, CGFloat top, BOOL fromTop) {
+    UIView *host = list.superview;
+    CGFloat height = host.bounds.size.height;
+    if (!host || height < 1) return;
+    SGRListRoom room = SGRListRoomOf(list);
+    CGFloat y = fromTop ? 0 : list.frame.origin.y;
+    SGRSetOwnFrame(list, CGRectMake(list.frame.origin.x, y, list.frame.size.width, height - y));
+    SGRSetListInsets(list, UIEdgeInsetsMake(top + (fromTop ? room.top : 0), 0, MAX(room.below, page.safeAreaInsets.bottom), 0));
+}
+
+UICollectionView *SGRPageListIn(UIView *view, const void *key) {
+    CGFloat wide = view.bounds.size.width * 0.9;
+    return (UICollectionView *)SGFindRemembered(view, key, ^BOOL(UIView *v) {
+        return [v isKindOfClass:UICollectionView.class] && v.bounds.size.width >= wide;
+    });
 }

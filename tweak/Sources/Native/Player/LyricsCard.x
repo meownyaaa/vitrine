@@ -34,7 +34,7 @@ static UIView *cellAround(UIView *view) {
     // pass of its own; Native/Appearance/Repaint.x keeps it clear in between.
     sg_lyricsCardRoot = cell;
     SGStripBackgrounds(cell);
-    UIVisualEffectView *glass = SGGlassFor(cell, &kCardGlassKey);
+    UIView *glass = SGGlassFor(cell, &kCardGlassKey);
     // Dark whatever the system is set to, as the player's header panes are (Player.x): light glass under
     // white lyrics otherwise, on a phone in light mode.
     if (glass.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;

@@ -439,13 +439,13 @@ static void runChecks(SGRKaraokeView *karaoke, UIView *host) {
     line.words.lastObject.end = line.words.lastObject.start + 3000;
     line.end = line.words.lastObject.end;
 #ifdef SGKeyLyricsRomanised
-    id style = ((id (*)(id, SEL, CGFloat, NSArray *, BOOL, BOOL, BOOL))objc_msgSend)([NSClassFromString(@"SGRKaraokeStyle") alloc],
+    id style = ((id (*)(id, SEL, CGFloat, NSArray *, BOOL, BOOL, BOOL))objc_msgSend)([NSClassFromString(@"SGKaraokeStyle") alloc],
         NSSelectorFromString(@"initWithSize:order:pronunciation:translation:romanised:"), 30, SGRLyricsTextOrder(), NO, NO, NO);
 #else
-    id style = ((id (*)(id, SEL, CGFloat, NSArray *, BOOL, BOOL))objc_msgSend)([NSClassFromString(@"SGRKaraokeStyle") alloc],
+    id style = ((id (*)(id, SEL, CGFloat, NSArray *, BOOL, BOOL))objc_msgSend)([NSClassFromString(@"SGKaraokeStyle") alloc],
         NSSelectorFromString(@"initWithSize:order:pronunciation:translation:"), 30, SGRLyricsTextOrder(), NO, NO);
 #endif
-    UIView *lineView = ((id (*)(id, SEL, id, CGFloat, id, id, BOOL, BOOL))objc_msgSend)([NSClassFromString(@"SGRKaraokeLineView") alloc],
+    UIView *lineView = ((id (*)(id, SEL, id, CGFloat, id, id, BOOL, BOOL))objc_msgSend)([NSClassFromString(@"SGKaraokeLineView") alloc],
         NSSelectorFromString(@"initWithLine:width:style:under:blurred:sweepsEstimates:"), line, 300, style, nil, NO, NO);
     [karaoke.window addSubview:lineView];
     [lineView setValue:@YES forKey:@"active"];

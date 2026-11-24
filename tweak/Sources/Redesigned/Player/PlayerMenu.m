@@ -109,6 +109,17 @@ static const CGFloat kSourcePanelWidth = 300, kSourcePanelMaxHeight = 440;
     [self rebuild];
 }
 
+// Below iOS 26 the popover's blur gives way to the ⋯ menu's glass, as Speed, Pitch & Reverb's does (PlayerPanelGlass.m).
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    SGPlayerStylePanel(self.view);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    SGPlayerStylePanel(self.view);
+}
+
 - (void)offersChanged:(NSNotification *)note {
     if ([note.object isEqual:_track]) [self rebuild];
 }
@@ -234,4 +245,10 @@ static NSString *sheetKind(void) {
 void SGRPlayerMenuWatch(UIView *button) {
     sg_moreButton = button;
     SGRSystemMenuWatch(button, ^NSArray<UIMenuElement *> *{ return playerItems(); }, ^NSString *{ return sheetKind(); });
+}
+
+// The AI DJ's sheet has rows of its own (feedback, language, voice), so it is kept apart from a song's.
+void SGRDJPlayerMenuWatch(UIView *button) {
+    sg_moreButton = button;
+    SGRSystemMenuWatch(button, ^NSArray<UIMenuElement *> *{ return playerItems(); }, ^NSString *{ return @"dj"; });
 }

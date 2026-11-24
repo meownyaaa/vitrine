@@ -35,13 +35,17 @@
 #import "Artist.h"
 
 // The dissolve and the scrim are the Kit's stretching hero's (SGRStretchHero.h), the playlist's and the album's.
+// A photo bright across its top (a white studio wall) turned the pinned Back and ⋯ into white discs with their white glyphs
+// lost in them: the scrim grows with the top's brightness, from SGRStretchHeroScrimAlpha at kBrightFrom up to
+// kBrightScrimAlpha for a white top.
+static const CGFloat kBrightFrom = 0.45, kBrightScrimAlpha = 0.62;
 // A photo view narrower than this is a placeholder glyph, and a picture shorter than this one mid load.
 static const CGFloat kMinCover = 80, kMinHero = 120;
 // The collapsed ImageHeaderView, Spotify's navigation bar; the text fades out over the last kFade before it.
 static const CGFloat kBar = 100, kFade = 150;
 
 static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatchedKey, kSizeKey;
-static char kTitleKey, kMetaKey, kShuffleKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
+static char kTitleKey, kMetaKey, kShuffleKey, kPlayKey, kFollowKey, kArtworkKey, kMoreKey, kMoreButtonKey;
 
 #pragma mark - Spotify's views
 
@@ -137,6 +141,45 @@ static UIView *containerOf(UIView *header) {
     SGRObserveImage(source, ^(UIImageView *view) { [weakSelf takeArtwork:view late:YES]; });
 }
 
+// The mean luminance of the band of `image` the scrim covers, as the hero shows it (aspect fill, the top of a picture
+// taller than the hero kept): drawn into a few pixels and averaged.
+static CGFloat topBrightness(UIImage *image, CGSize shown) {
+    CGSize size = image.size;
+    if (size.width < 1 || size.height < 1 || shown.width < 1 || shown.height < 1) return 0;
+    CGFloat scale = MAX(shown.width / size.width, shown.height / size.height);
+    CGFloat band = MIN(SGRStretchHeroScrim, shown.height) / scale;
+    CGFloat inset = (size.width - shown.width / scale) / 2;
+    enum { W = 12, H = 3 };
+    uint8_t pixels[W * H * 4] = {0};
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixels, W, H, 8, W * 4, space, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(space);
+    if (!context) return 0;
+    UIGraphicsPushContext(context);
+    CGContextTranslateCTM(context, 0, H);
+    CGContextScaleCTM(context, 1, -1);
+    CGFloat sx = W / (size.width - 2 * inset), sy = H / band;
+    [image drawInRect:CGRectMake(-inset * sx, 0, size.width * sx, size.height * sy)];
+    UIGraphicsPopContext();
+    CGContextRelease(context);
+    CGFloat sum = 0;
+    for (int i = 0; i < W * H; i++) {
+        sum += (0.2126 * pixels[i * 4] + 0.7152 * pixels[i * 4 + 1] + 0.0722 * pixels[i * 4 + 2]) / 255.0;
+    }
+    return sum / (W * H);
+}
+
+- (void)darkenScrimFor:(UIImage *)image {
+    CGSize shown = self.bounds.size.width > 0 ? self.bounds.size : CGSizeMake(UIScreen.mainScreen.bounds.size.width, SGRStretchHeroScrim * 3);
+    CGFloat light = topBrightness(image, shown);
+    CGFloat t = MAX(0, MIN(1, (light - kBrightFrom) / (1 - kBrightFrom)));
+    CGFloat alpha = SGRStretchHeroScrimAlpha + (kBrightScrimAlpha - SGRStretchHeroScrimAlpha) * t;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.scrim.colors = @[(id)[UIColor colorWithWhite:0 alpha:alpha].CGColor, (id)UIColor.clearColor.CGColor];
+    [CATransaction commit];
+}
+
 // `late` is a photo that arrived after the header had laid out -- the artist opened for the first time,
 // whose picture is still being fetched while the page is already on screen (issue #52). The log line says
 // once that the watch, and not one of the header's passes, is what filled the hero.
@@ -144,6 +187,7 @@ static UIView *containerOf(UIView *header) {
     UIImage *image = source.image;
     if (!image || _picture.image == image) return;
     _picture.image = image;
+    [self darkenScrimFor:image];
     // The page's field takes its color from the same picture.
     SGRArtistSetArtwork(self, image);
     static BOOL logged;
@@ -198,6 +242,11 @@ static void applyHero(UIView *container, UIView *artwork, CGFloat bottom) {
 static void applyHeader(UIView *header, BOOL full);
 static void applyContent(UIView *header, UIView *container, SGRHeaderInfo *info, NSString *name, UIView *listeners, UIColor *fieldColor);
 
+// Drawn by nothing, whatever Spotify does to it: an empty mask, which -setHidden: and alpha never touch.
+static void maskGradient(UIView *view) {
+    if ([NSStringFromClass(view.class) containsString:@"GradientView"] && !view.layer.mask) view.layer.mask = [CALayer layer];
+}
+
 // Spotify's navigation bar, the one part of the header kept: collapsed, it is where the name is. Its gradient
 // is a flat dark band over the field, as the album's was (Album/AlbumHeader.x); the soft top edge every
 // redesigned page has keeps the name legible instead.
@@ -206,12 +255,9 @@ static UIView *keepBar(UIView *header) {
     for (UIView *sub in header.subviews) {
         if ([NSStringFromClass(sub.class) containsString:@"HeaderForegroundView"]) foreground = sub;
     }
-    if (foreground && !objc_getAssociatedObject(header, &kBarKey)) {
-        SGForEachView(foreground, ^(UIView *v) {
-            if ([NSStringFromClass(v.class) containsString:@"GradientView"] && !v.layer.mask) v.layer.mask = [CALayer layer];
-        });
-        objc_setAssociatedObject(header, &kBarKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+    // On every pass: Spotify adds the bar's gradient as the page scrolls, after the first pass has looked
+    // (scrolled, the bar's GradientView had no mask).
+    if (foreground) SGForEachView(foreground, ^(UIView *v) { maskGradient(v); });
     return foreground;
 }
 
@@ -296,7 +342,9 @@ static void applyContent(UIView *header, UIView *container, SGRHeaderInfo *info,
     // with the photo: pinned there it is the same button in the same place on the album and the playlist,
     // and the page keeps it however far down the list one is (issue #57).
     UIView *more = SGRFindByIdentifier(header, @"Components.UI.ContextMenuButton*", &kMoreKey);
-    SGRPinnedMore(SGRArtistPageOf(container), &kMoreButtonKey, more);
+    UIView *page = SGRArtistPageOf(container);
+    SGRPinnedMore(page, &kMoreButtonKey, more);
+    SGRPinnedBack(page, header);
 
     // The buttons arrive after the header has laid out, in a row that keeps its size and so lays nothing out
     // again (Native/Artist/Artist.x): the row's own pass is watched, a plain UIStackView.
@@ -353,8 +401,27 @@ static void clearNavigationBar(UIView *header) {
 }
 %end
 
+// The bar is Spotify's, so its gradient is masked from the bar's own passes too: the header lays out only when
+// the page's header does, and a gradient added to the bar between two of those showed as a band under the name.
+%hook _TtC28EncoreConsumerMobile_BaseKit19HeaderNavigationBar
+- (void)layoutSubviews {
+    %orig;
+    UIView *bar = (UIView *)self;
+    if (!SGRArtistPageOf(bar)) return;
+    for (UIView *sub in bar.subviews) maskGradient(sub);
+}
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig;
+    if (SGRArtistPageOf((UIView *)self)) maskGradient(subview);
+}
+%end
+
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
-    SGRequireClasses(@[@"_TtC35CreativeWorkPlatform_ImageHeaderKit15ImageHeaderView"]);
+    SGRequireClasses(@[
+        @"_TtC35CreativeWorkPlatform_ImageHeaderKit15ImageHeaderView",
+        @"_TtC28EncoreConsumerMobile_BaseKit19HeaderNavigationBar",
+    ]);
 }

@@ -424,6 +424,18 @@ int main(int argc, char **argv) {
                   @{@"id": @5, @"trackName": @"a", @"artistName": @"b", @"syncedLyrics": @"", @"plainLyrics": @"y\nz"}];
         got = lrclibAnswer(query, nil);
         CHECK(got && !got.synced);
+        // Null instrumental and null duration: a word-synced record with null instrumental still reads its
+        // Lyricsfile, a known duration within slack beats a null duration, and when both have null duration
+        // the fuller sheet wins.
+        query.seconds = 200;
+        found = @[@{@"id": @13, @"trackName": @"a", @"artistName": @"b", @"duration": NSNull.null, @"instrumental": NSNull.null, @"syncedLyrics": twoLines},
+                  @{@"id": @14, @"trackName": @"a", @"artistName": @"b", @"duration": @203, @"instrumental": NSNull.null, @"syncedLyrics": @"[00:01.00]a\n"}];
+        got = lrclibAnswer(query, nil);
+        CHECK(got.synced && got.karaokeLines.count == 1);
+        found = @[@{@"id": @13, @"trackName": @"a", @"artistName": @"b", @"duration": NSNull.null, @"instrumental": NSNull.null, @"syncedLyrics": @"[00:01.00]a\n"},
+                  @{@"id": @14, @"trackName": @"a", @"artistName": @"b", @"duration": NSNull.null, @"instrumental": NSNull.null, @"syncedLyrics": twoLines}];
+        got = lrclibAnswer(query, nil);
+        CHECK(got.synced && got.karaokeLines.count == 2);
 
         for (int i = 1; i < argc; i++) checkLive(@(argv[i]));
         printf("lyrics-sources: all checks passed\n");

@@ -25,6 +25,8 @@
 #import "Redesigned/Kit/SGRRepaint.h"
 #import "Redesigned/Kit/SGRGlass.h"
 #import "Redesigned/Kit/SGRTokens.h"
+#import "Redesigned/Kit/SGRPass.h"
+#import "Shared/Player/PlayerEvents.h"
 #import "Settings/SGMarquee.h"
 #import "NowPlayingBar.h"
 #import "Redesigned/Navbar/Navbar.h"
@@ -32,13 +34,14 @@
 static const CGFloat kCardRadius = 24;
 // The strip's pane is this much smaller than the strip at each end, so a gap parts it from the card's glass.
 static const CGFloat kStripInset = 4;
-static char kGlassKey, kStripGlassKey;
+static char kGlassKey, kStripGlassKey, kStripFilmKey;
 static __weak UIView *sg_card;
 static CGRect sg_stripFrame;
+static __weak UIView *sg_cardGlass;
+static char kTintKey, kCardDimKey, kStripDimKey;
 // The track's glass frame in the container's view as the bar was last styled, the strip cut off: the row
 // takes the card's height and middle from it, never the bar's, which in a Jam has the strip on top.
 static CGRect sg_trackFrame = {{INFINITY, INFINITY}, {0, 0}};
-static __weak UIVisualEffectView *sg_cardGlass;
 static __weak UIView *sg_cardArtwork;
 static __weak UIView *sg_progress;
 static __weak UIViewController *sg_container;
@@ -46,7 +49,7 @@ static __weak UIViewController *sg_container;
 static __weak UIView *sg_inline;
 
 CGRect SGRNowPlayingCardFrameIn(UIView *host, CGFloat *radius) {
-    UIVisualEffectView *glass = sg_cardGlass;
+    UIView *glass = sg_cardGlass;
     if (!glass.superview || !glass.window || !host) return CGRectNull;
     if (radius) *radius = MIN(kCardRadius, glass.bounds.size.height / 2);
     return [host convertRect:glass.bounds fromView:glass];
@@ -82,6 +85,29 @@ static UIView *stripIn(UIView *root) {
     __block UIView *strip = nil;
     SGForEachView(root, ^(UIView *v) { if (!strip && isStrip(v)) strip = v; });
     return strip;
+}
+
+// The listener's avatar at the strip's right end: a small round SwiftUI view (24pt, r=12) whose fill is the
+// colour behind the initial. Stripping it like the rest of the bar's paint left the letter alone on the glass.
+// SGRRepaint.x asks as well, so the fill Spotify paints later stays.
+BOOL SGRIsStripAvatar(UIView *view) {
+    CGSize size = view.bounds.size;
+    if (size.height < 16 || size.height > 44 || fabs(size.width - size.height) > 1) return NO;
+    if (view.layer.cornerRadius < size.height / 2 - 1) return NO;
+    for (UIView *v = view.superview; v; v = v.superview) if (isStrip(v)) return YES;
+    return NO;
+}
+
+// SGStripBackgrounds (Core/SGViewTree.m) for the bar, except that it leaves the strip's avatar and what is in it.
+static void stripBar(UIView *view) {
+    if (SGRIsStripAvatar(view)) return;
+    if ([view isKindOfClass:UIVisualEffectView.class]) return;
+    if (!SGKeepsColor(view)) view.layer.backgroundColor = NULL;
+    if ([view.layer isKindOfClass:CAGradientLayer.class] || [NSStringFromClass(view.class) containsString:@"GradientView"]) view.hidden = YES;
+    for (CALayer *layer in view.layer.sublayers) {
+        if ([layer isKindOfClass:CAGradientLayer.class]) layer.hidden = YES;
+    }
+    for (UIView *sub in view.subviews) stripBar(sub);
 }
 
 // What holds the track on the bar: the title and artist block, else the artwork (a 36 to 48pt square that
@@ -182,23 +208,37 @@ static void restyleCardContent(UIView *card) {
 // the card's settled frame and the strip's height, not from the strip's frame: Spotify animates the strip
 // in, and a pane taken from it mid-way sat about 12pt off and cut its ⋯ button. The glass comes in and goes
 // by its effect, never by alpha (SGRGlass.h).
+// Whether a pane is showing: a UIVisualEffectView by its effect, an SGLegacyGlassView (below iOS 26) by its alpha,
+// the two ways SGRShowGlass hides one.
+static BOOL paneShown(UIView *pane) {
+    if ([pane isKindOfClass:UIVisualEffectView.class]) return ((UIVisualEffectView *)pane).effect != nil;
+    return pane.alpha > 0;
+}
+
 static void placeStripGlass(UIView *host, UIView *strip, CGRect card, BOOL above) {
-    UIVisualEffectView *pane = objc_getAssociatedObject(host, &kStripGlassKey);
+    UIView *pane = objc_getAssociatedObject(host, &kStripGlassKey);
+    UIView *oldFilm = objc_getAssociatedObject(host, &kStripFilmKey);
     if (!strip) {
-        if (pane.effect) SGRAnimate(SGRMotionExit, ^{ SGRShowGlass(pane, NO); }, nil);
+        if (pane && paneShown(pane)) SGRAnimate(SGRMotionExit, ^{ SGRShowGlass(pane, NO); oldFilm.alpha = 0; }, nil);
         return;
     }
     BOOL made = pane != nil;
     pane = SGGlassFor(host, &kStripGlassKey);
     if (!made) {
-        pane.effect = nil;
+        if ([pane isKindOfClass:UIVisualEffectView.class]) ((UIVisualEffectView *)pane).effect = nil;
+        else pane.alpha = 0;
         pane.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     }
     CGFloat height = strip.bounds.size.height;
     CGRect frame = CGRectMake(card.origin.x, above ? CGRectGetMinY(card) - height : CGRectGetMaxY(card), card.size.width, height);
     pane.frame = CGRectInset(frame, 0, kStripInset);
-    SGShapeGlass(pane, MIN(kCardRadius, pane.bounds.size.height / 2), NO);
-    if (!pane.effect) SGRAnimate(SGRMotionRespond, ^{ SGRShowGlass(pane, YES); }, nil);
+    CGFloat radius = MIN(kCardRadius, pane.bounds.size.height / 2);
+    SGShapeGlass(pane, radius, NO);
+    SGRDarkenGlass(pane, &kStripDimKey, radius, SGRBarDim);
+    // The same white film as the card and the tab bar (16%), which comes and goes with the pane.
+    UIView *film = SGRGlassFilm(host, &kStripFilmKey, pane, radius);
+    if (!made) film.alpha = 0;
+    if (!paneShown(pane)) SGRAnimate(SGRMotionRespond, ^{ SGRShowGlass(pane, YES); film.alpha = 1; }, nil);
 }
 
 // The bar's left and right edges in its superview, set through the constants of the constraints that hold
@@ -485,6 +525,21 @@ void SGRNowPlayingBarFollowTabBar(void) {
     placeInline(container);
     [container.view setNeedsLayout];
     [container.view layoutIfNeeded];
+    SGRSnackbarFollowNowPlayingBar();
+    SGRTooltipFollowNowPlayingBar();
+}
+
+CGFloat SGRNowPlayingBarInlineShift(void) {
+    UIView *view = sg_inline;
+    return view ? view.transform.ty : 0;
+}
+
+CGFloat SGRNowPlayingBarShiftOver(CGRect frame, UIWindow *window) {
+    CGFloat shift = SGRNowPlayingBarInlineShift();
+    if (shift == 0 || !window) return 0;
+    CGRect bar = SGRNowPlayingCardFrameIn(window, NULL);
+    if (CGRectIsNull(bar)) return shift;
+    return CGRectGetMaxY(frame) <= CGRectGetMinY(bar) - shift + 24 ? shift : 0;
 }
 
 CGRect SGRNowPlayingStripFrameIn(UIView *host) {
@@ -537,6 +592,16 @@ static BOOL inSheet(UIView *view) {
     return NO;
 }
 
+// Whether the controller stands in something presented over the app (a sheet), by its controllers rather than its views:
+// the DJ request sheet's bar lays out again as the sheet comes back, before its view is in the sheet, and taken then for
+// the tab bar's own it became the bar the tab bar's minimizing and the player's transitions follow, which broke both
+// until Spotify restarted.
+static BOOL inPresented(UIViewController *controller) {
+    UIViewController *root = controller;
+    while (root.parentViewController) root = root.parentViewController;
+    return root.presentingViewController != nil;
+}
+
 // The card's glass frame in `host`: the card, else the box round the track's content, with the strip cut
 // out from its side, all of it when the card is a view around both, else as much as overlaps. CGRectNull
 // when there is no card to speak of.
@@ -555,7 +620,7 @@ static CGRect trackFrame(UIView *bar, UIView *card, UIView *strip, CGRect stripF
 }
 
 static void styleNowPlayingBar(UIViewController *container) {
-    if (container.isViewLoaded && inSheet(container.view)) {
+    if (inPresented(container) || (container.isViewLoaded && inSheet(container.view))) {
         UIVisualEffectView *pane = objc_getAssociatedObject(container.view, &kGlassKey);
         if (pane) [pane removeFromSuperview];
         return;
@@ -569,7 +634,7 @@ static void styleNowPlayingBar(UIViewController *container) {
     // What is painted now, before it goes clear; SGRRepaint.x adds what Spotify paints later. Its size is
     // judged when the card is chosen: in a Jam the card can still be unsized here (harness/tabbar).
     SGForEachView(bar, ^(UIView *v) {
-        if (![v isKindOfClass:UIVisualEffectView.class] && !SGKeepsColor(v) && SGIsVisibleColor(v.layer.backgroundColor)) [sgr_nowPlayingPainted addObject:v];
+        if (![v isKindOfClass:UIVisualEffectView.class] && !SGKeepsColor(v) && !SGRIsStripAvatar(v) && SGIsVisibleColor(v.layer.backgroundColor)) [sgr_nowPlayingPainted addObject:v];
     });
     // The card stays while it still holds the track with no strip in it, whatever Spotify paints after.
     UIView *marker = trackMarker(bar);
@@ -593,7 +658,7 @@ static void styleNowPlayingBar(UIViewController *container) {
     });
 
     container.view.layer.backgroundColor = NULL;
-    SGStripBackgrounds(bar);
+    stripBar(bar);
 
     // Spotify lays the strip out after the bar and moves it in, so the bar is styled again a moment after
     // the strip has moved, until it stays put. A strip that comes, goes or changes height moves the fade too.
@@ -621,14 +686,18 @@ static void styleNowPlayingBar(UIViewController *container) {
         restyleCardContent(card);
     }
 
-    UIVisualEffectView *glass = SGGlassFor(container.view, &kGlassKey);
+    UIView *glass = SGGlassFor(container.view, &kGlassKey);
     // Dark whatever the system is set to: the bar is outside the navigation stacks Spotify makes dark, and
     // took the system's light glass on a phone in light mode (TabBar.x).
     if (glass.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     sg_cardGlass = glass;
     glass.frame = frame;
     SGShapeGlass(glass, radius, NO);
+    // Dimmed as the tab bar's glass is, so the card's text and buttons stand out over a bright page (below iOS 26).
+    SGRDarkenGlass(glass, &kCardDimKey, radius, SGRBarDim);
     placeStripGlass(container.view, strip, frame, stripAbove);
+
+    SGRGlassFilm(container.view, &kTintKey, glass, radius);
 
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -652,9 +721,19 @@ static void styleNowPlayingBar(UIViewController *container) {
 // The page the bar stands in passes touches outside the bar through, and the bar in the tab bar's row is
 // below the page's bounds: a touch there reaches the bar only through this. Only the narrowed card takes
 // one: the container's view keeps the screen's width, and took the touches meant for the tab bar's circles.
+%hook _TtC22NowPlaying_BarPageImplP33_CCC0D2EEA6D4725EECD8965E8C38C86D20TouchPassthroughView
+// Spotify hides the bar while Create's menu is up, because the menu covers the bar's place above the tab bar. The
+// card in the minimized row is below the menu, so it stays: the minimized bar does not go away with the menu.
+- (void)setHidden:(BOOL)hidden {
+    if (hidden && SGBelowiOS26() && sg_inline && [sg_inline isDescendantOfView:(UIView *)self] && SGRTabBarMinimized() && SGRCreateMenuUp((UIView *)self)) {
+        %orig(NO);
+        return;
+    }
+    %orig;
+}
+
 // Only the container's view moves to the row, by a transform; Spotify's layout view above it stays at the
 // bar's old place and took every touch there (#70), so a touch on nothing of the moved bar's goes through.
-%hook _TtC22NowPlaying_BarPageImplP33_CCC0D2EEA6D4725EECD8965E8C38C86D20TouchPassthroughView
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = %orig;
     UIView *moved = sg_inline;
@@ -702,9 +781,25 @@ static void styleNowPlayingBar(UIViewController *container) {
 }
 %end
 
+// The bar is Spotify's to hide and show while the player opens and closes, and Spotify paints it again then (its
+// album colour, its gradient) with no layout of the container to bring the glass card back: after a close the bar
+// now and then stood in Spotify's own colour above the tab bar until something laid it out. So it is styled again
+// once the player has settled, and a little after, as Spotify finishes.
+static void restyleAfterPlayer(void) {
+    UIViewController *container = sg_container;
+    if (!container.isViewLoaded) return;
+    styleNowPlayingBar(container);
+    SGRRepeatPass(container, SGRSettleDelays, ^(UIViewController *c) { if (c.viewIfLoaded.window) styleNowPlayingBar(c); });
+}
+
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
+    // Below iOS 26 only: the redesign's iOS 26 bar stays as it is on main.
+    if (SGBelowiOS26()) {
+        [NSNotificationCenter.defaultCenter addObserverForName:SGPlayerTransitionEndedNotification object:nil queue:nil
+                                                    usingBlock:^(NSNotification *note) { restyleAfterPlayer(); }];
+    }
     SGRequireClasses(@[
         @"_TtC18NowPlaying_BarImpl36NowPlayingBarContainerViewController",
         @"_TtC18NowPlaying_BarImpl27NowPlayingBarViewController",

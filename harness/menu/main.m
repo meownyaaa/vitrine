@@ -24,6 +24,8 @@ static float sg_pitch;
 static BOOL sg_speedAllowed = YES;
 void SGPlayFeedback(NSInteger feedback) { NSLog(@"[harness] feedback %ld", (long)feedback); }
 void SGPrepareFeedback(NSInteger feedback) {}
+// Redesigned/Player/PlayerPanelGlass.m: below iOS 26 the panel's glass; on iOS 26, which the harness runs, nothing.
+void SGPlayerStylePanel(UIView *content) {}
 double SGPlayerSpeed(void) { return sg_speed; }
 BOOL SGPlayerSpeedAllowed(void) { return sg_speedAllowed; }
 void SGSetPlayerSpeed(double speed) { sg_speed = speed; NSLog(@"[harness] speed %.2f", speed); }

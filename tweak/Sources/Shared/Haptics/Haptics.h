@@ -77,6 +77,10 @@ BOOL SGMusicHapticsInBackground(void);
 // Whether iOS lists this install for Music Haptics: MusicHapticsSupported, which only Vitrine's IPA build writes
 // into Info.plist. Without it In the Background has nothing to hand the song to.
 BOOL SGMusicHapticsListedByInstall(void);
+// The LiveContainer host bundle, if running under LiveContainer.
+NSBundle *SGHostBundle(void);
+// Whether running inside LiveContainer.
+BOOL SGIsLiveContainer(void);
 // The choice of before moved to the switches, once: Generated turns Music Haptics on, Native iOS In the
 // Background, None neither. Each reader of the switches calls it first, since none can know it runs first.
 void SGMigrateMusicHaptics(void);
@@ -87,6 +91,8 @@ extern NSNotificationName const SGMusicHapticsSwitchesChangedNotification;
 void SGMusicHapticsSetSystemCovers(BOOL covers);
 // From its strength and its choice of what to follow: reads them again, for the next tap.
 void SGMusicHapticsSettingsChanged(void);
+// The relay went quiet or came back (SGHapticRelayQuiet): whether Spotify's output is listened to is decided again.
+void SGMusicHapticsRelayQuietChanged(void);
 // One kick of the mod's own at its strength, with the rumble under it unless it follows the beat alone, played
 // at once: the Vibrations preview's tap. Nothing while the mod's own is not listening.
 void SGMusicHapticsPreview(void);
