@@ -13,7 +13,7 @@ xcrun -sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator -fobjc-ar
     "$SRC"/Shared/Navigation/AddTabSheet.m "$SRC"/Shared/Navigation/TabIcons.m \
     "$SRC"/Redesigned/Navbar/NavbarSettings.m "$SRC"/Redesigned/Navbar/NavbarLayout.m \
     "$SRC"/Settings/SGPage.m "$SRC"/Settings/SGPageStyle.m \
-    "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m "$SRC"/Core/SGViewTree.m "$SRC"/Core/SGGlass.m \
+    "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m "$SRC"/Core/SGViewTree.m "$SRC"/Core/SGGlass.m "$SRC"/Core/SGLegacyGlass.m "$SRC"/Core/SGGlassTouch.m \
     "$SRC"/Core/SGBackdrop.m "$SRC"/Core/SGFlagForce.m "$SRC"/Core/SGUIMode.m \
     -framework UIKit -framework QuartzCore -framework CoreGraphics -framework Foundation \
     -o "$OUT/AddTabHarness.app/AddTabHarness"

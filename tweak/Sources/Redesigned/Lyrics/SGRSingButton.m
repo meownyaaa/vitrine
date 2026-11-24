@@ -79,7 +79,8 @@ static char kButtonGlassKey, kPanelGlassKey;
     [super layoutSubviews];
     CGRect bounds = self.bounds;
     _button.frame = bounds;
-    SGRShowGlass(SGRGlassInside(self, &kButtonGlassKey, MIN(bounds.size.width, bounds.size.height)), !_tucked);
+    UIView *buttonGlass = SGRGlassInside(self, &kButtonGlassKey, MIN(bounds.size.width, bounds.size.height));
+    SGRShowGlass(buttonGlass, !_tucked);
     _ring.frame = bounds;
     // Starting at the top and running clockwise, as a download ring does.
     CGFloat radius = MIN(bounds.size.width, bounds.size.height) / 2 - kRingInset - kRingWidth / 2;

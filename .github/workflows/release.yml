@@ -54,3 +54,7 @@ jobs:
 
       - name: Build
         run: env -u MAKELEVEL gmake -C tweak clean package
+
+      # Vitrine Addon (addons/haptics) builds too, so a change to it is checked as the tweak is.
+      - name: Build Vitrine Addon
+        run: env -u MAKELEVEL gmake -C addons/haptics clean package THEOS_PACKAGE_SCHEME=rootless

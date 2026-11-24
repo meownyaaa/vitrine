@@ -19,28 +19,49 @@ BOOL SGRedesignFellBack(void) {
 // Below iOS 26 a launch with the redesign leaves a mark that the main queue takes off once it has run
 // for a while, or as Spotify first leaves the front, which only a main thread that answers is told of. A
 // launch that hung (the watchdog of #37) gets to neither, so the next one finds the mark and starts
-// native. ponytail: a force quit from the switcher in the first 15 s, with Spotify still in front until
+// native. A launch in the background (a push, a background refresh, the Live Activity) is not the hang:
+// iOS suspends it within seconds, before the 15 s are up, and may then end it to free memory, which on a
+// phone with little of it (an iPhone 11) happened often enough that the redesign kept turning itself
+// off. So the mark goes as soon as the launch turns out to be in the background, and whenever Spotify
+// enters it. ponytail: a force quit from the switcher in the first 15 s, with Spotify still in front until
 // then, counts as a hang; a hang later on is not caught.
 static BOOL startsUntested(void) {
     NSUserDefaults *store = NSUserDefaults.standardUserDefaults;
-    if ([store boolForKey:kStarting]) {
+    // How far the launch with the mark got: "loaded", "launched" (didFinishLaunching, in front) or "active", so the
+    // log of the next one tells a hang before the first frame from one later, or from a crash.
+    id reached = [store objectForKey:kStarting];
+    if (reached) {
         [store removeObjectForKey:kStarting];
         SGSetEnabled(SGKeyRedesign, NO);
         SGSetEnabled(SGKeyRedesignUntested, NO);
         sg_fellBack = YES;
-        SGLog(@"ui: the last launch with the redesign on iOS %@ did not get going, so this one is native",
-              NSProcessInfo.processInfo.operatingSystemVersionString);
+        SGLog(@"ui: the last launch with the redesign on iOS %@ did not get going (it got as far as %@), so this one is native",
+              NSProcessInfo.processInfo.operatingSystemVersionString, [reached isKindOfClass:NSString.class] ? reached : @"loaded");
         return NO;
     }
-    [store setBool:YES forKey:kStarting];
+    [store setObject:@"loaded" forKey:kStarting];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kStarted * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [store removeObjectForKey:kStarting];
     });
-    __block id token = [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil
-                                                                  usingBlock:^(NSNotification *note) {
-        [NSNotificationCenter.defaultCenter removeObserver:token];
+    NSMutableArray *tokens = [NSMutableArray array];
+    void (^started)(NSNotification *) = ^(NSNotification *note) {
+        if ([note.name isEqualToString:UIApplicationDidFinishLaunchingNotification]
+            && UIApplication.sharedApplication.applicationState != UIApplicationStateBackground) {
+            if ([store objectForKey:kStarting]) [store setObject:@"launched" forKey:kStarting];
+            return;
+        }
+        if ([note.name isEqualToString:UIApplicationDidBecomeActiveNotification]) {
+            if ([store objectForKey:kStarting]) [store setObject:@"active" forKey:kStarting];
+            return;
+        }
+        for (id token in tokens) [NSNotificationCenter.defaultCenter removeObserver:token];
+        [tokens removeAllObjects];
         [store removeObjectForKey:kStarting];
-    }];
+    };
+    for (NSNotificationName name in @[UIApplicationDidFinishLaunchingNotification, UIApplicationDidBecomeActiveNotification, UIApplicationWillResignActiveNotification,
+                                      UIApplicationDidEnterBackgroundNotification]) {
+        [tokens addObject:[NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil usingBlock:started]];
+    }
     return YES;
 }
 

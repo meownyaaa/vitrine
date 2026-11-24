@@ -8,6 +8,9 @@
 //     SearchPage.x      the header the way Home has it: a large title, the avatar at the trailing edge, no camera, no
 //                       scrim; and the page's layout pass, which measures that spacing
 //     SearchCards.x     each category card as Liquid Glass tinted by its own color, at the card radius, giving under a press
+//     SearchRecents.x   the cross that removes a recent search, on a glass circle
+//     SearchHeader.x    the results page's header (typed and sent with return), iOS < 26: Spotify's grey backing off, a
+//                       glass capsule for the field, and the filter chips on glass the way the Library's are
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
 // Threading: main thread only.
@@ -15,6 +18,8 @@
 
 // The page's list (trees/clean/search/01.txt:24).
 extern NSString *const SGRSearchListIdentifier;
+// The row of filter chips (Songs, Videos, Artists...) in the results header.
+#define SGRSearchFiltersIdentifier @"Components.UI.FiltersView"
 
 // SearchSections.x: measures how far the cards sit below the top of the list because of the sections collapsed above
 // them, and moves every cell of the list up by that much. Cheap to call on every layout pass of the page.

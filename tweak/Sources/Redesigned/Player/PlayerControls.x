@@ -22,6 +22,7 @@
 #import "Redesigned/Kit/SGRKit.h"
 #import "Shared/Haptics/Haptics.h"
 #import "Shared/Lyrics/Lyrics.h"
+#import "Shared/SponsorBlock/SGSponsorBlockOverlay.h"
 #import "Player.h"
 
 static const CGFloat kSkipGlyphSize = 32, kPlayGlyphSize = 44;
@@ -518,6 +519,21 @@ static void watchSlider(UIView *host) {
 }
 
 %hook _TtCO17NowPlaying_ECMKit11ProgressBar6Slider
+- (void)layoutSubviews {
+    %orig;
+    [SGSponsorBlockOverlay attachToSlider:(UIView *)self];
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+    %orig;
+    [SGSponsorBlockOverlay attachToSlider:(UIView *)self];
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (((UIView *)self).window) [SGSponsorBlockOverlay attachToSlider:(UIView *)self];
+}
+
 - (BOOL)isTracking {
     return ((UISlider *)self == sg_seekSlider && seekHeld()) || %orig;
 }

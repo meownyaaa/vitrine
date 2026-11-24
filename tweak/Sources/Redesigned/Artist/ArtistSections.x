@@ -224,6 +224,7 @@ static void logOnce(NSString *what) {
         // fade Popular's "See more" draws over its last track (device, trees/continuous/3.txt 2026-09-18).
         SGRClearCellPaint(cell);
         clearLikedBadge(cell);
+        SGRArtistDressAbout(cell);
     }
 }
 

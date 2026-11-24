@@ -95,13 +95,6 @@ static SPTPlayerTrack *upNextIn(SPTPlayerState *state) {
     return [next isKindOfClass:objc_getClass("SPTPlayerTrack")] ? next : nil;
 }
 
-static BOOL hasTranslations(NSArray<SGKaraokeLine *> *lines) {
-    for (SGKaraokeLine *line in lines) {
-        if (line.translation.length) return YES;
-    }
-    return NO;
-}
-
 // Lines with no translation of their own take Musixmatch's community ones in the Lyrics page's language,
 // whichever source they came from, Spotify's own included, matched by their text. Only the redesign shows
 // translations, so the native look asks for none. The translated lines are copies kept in place of the
@@ -109,11 +102,11 @@ static BOOL hasTranslations(NSArray<SGKaraokeLine *> *lines) {
 // Musixmatch answers at once once it has answered, so lines kept again take the translations straight away.
 static void translate(NSString *track) {
     NSString *language = SGRedesignedUI() ? SGLyricsTranslationLanguage() : nil;
-    if (!language || hasTranslations(sg_lyrics[track])) return;
+    if (!language || SGKaraokeHasTranslations(sg_lyrics[track])) return;
     SGMusixmatchTranslations(track, language, ^(NSDictionary<NSString *, NSString *> *byLine) {
         // Whatever is kept by now, which may be Spotify's timed lines in place of the plain ones asked for.
         NSArray<SGKaraokeLine *> *kept = sg_lyrics[track];
-        if (!byLine || hasTranslations(kept)) return;
+        if (!byLine || SGKaraokeHasTranslations(kept)) return;
         NSArray<SGKaraokeLine *> *translated = SGMusixmatchTranslatedLines(kept, byLine);
         if (translated) sg_lyrics[track] = translated;
     });
@@ -576,11 +569,19 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
 %end
 %end
 
+// Whether anything shows the lines now: the redesign, the lock screen's lines, the mod's own sources, the lock screen's
+// artwork with lyrics, or the large cover's lyrics once they are picked with its button. The Canvas add-on's lyrics
+// switch alone keeps the player caught (the %ctor), not the fetches: a user who never picks the lyrics pays nothing.
+static BOOL linesShown(void) {
+    return SGRedesignedUI() || SGFlag(SGKeyLockScreenLyrics, NO) || SGLyricsEnabled()
+        || SGLockArtworkShowsLyrics(SGLockScreenArtwork()) || (SGLockCoverLyricsWanted() && SGLockCoverLyricsPicked());
+}
+
 %ctor {
     // The sources that search by name learn the name from the player, so the player is caught
     // whenever one is on, not only for the redesign's lyrics and the lock screen.
     if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsEnabled()
-        && !SGLockArtworkShowsLyrics(SGLockScreenArtwork())) {
+        && !SGLockArtworkShowsLyrics(SGLockScreenArtwork()) && !SGLockCoverLyricsWanted()) {
         %init(SGSpclientHeadersOnly);
         return;
     }
@@ -622,7 +623,7 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *note) {
         NSString *playing = SGKaraokePlayingTrack();
-        if (playing && !sg_lyrics[playing] && !SGKaraokeLooking(playing)) SGKaraokeRequestLyrics(playing);
+        if (playing && linesShown() && !sg_lyrics[playing] && !SGKaraokeLooking(playing)) SGKaraokeRequestLyrics(playing);
     }];
     sg_trackWatcher = [SGKaraokeTrackWatcher new];
     SGAddPlayerStateObserver(sg_trackWatcher);

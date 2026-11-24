@@ -146,6 +146,12 @@ static id swappedValue(id value) {
 }
 %end
 
+UIColor *SGRInkOnAccent(UIColor *accent) {
+    CGFloat r = 0, g = 0, b = 0, a = 1;
+    if (![accent getRed:&r green:&g blue:&b alpha:&a]) return UIColor.whiteColor;
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 0.5 ? UIColor.blackColor : UIColor.whiteColor;
+}
+
 %ctor {
     if (!SGRedesignedUI()) return;
     sg_accent = chosen();

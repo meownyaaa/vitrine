@@ -452,7 +452,7 @@ static SGRHeaderInfo *applyInfo(UIView *block, UIView *headerRoot, UIViewControl
 #pragma mark - the header's pass
 
 // Find on this page and Sort sit above the cover, shown as the page is pulled down. They stay Spotify's own
-// controls, so the tap opens Spotify's find page; only the gray box becomes glass.
+// controls, so the tap opens Spotify's find page; only the grey box becomes glass.
 static void glassUp(UIView *box, const void *key) {
     CGSize size = box.bounds.size;
     if (size.width < 1 || size.height < 1) return;
@@ -463,13 +463,24 @@ static void glassUp(UIView *box, const void *key) {
 
 static void applyToolbar(UIView *headerRoot) {
     static char kFieldKey, kSortBoxKey, kFieldGlassKey, kSortGlassKey;
+    SGRPinnedBack(SGRPlaylistPageOf(headerRoot), headerRoot);
+    // A playlist's field and its Sort button share Components.Header.UI.Toolbar.Content. Your Episodes has the
+    // field alone, straight in the header.
     UIView *toolbar = SGRFindByIdentifier(headerRoot, @"Components.Header.UI.Toolbar.Content", &kToolbarKey);
-    if (!toolbar) return;
-    UIView *field = SGRFindByIdentifier(toolbar, @"Components.Header.UI.Toolbar.SearchField", &kFieldKey);
-    glassUp(field, &kFieldGlassKey);
-    glassUp(SGRFindByIdentifier(toolbar, @"Components.Header.UI.Toolbar.ButtonContainer", &kSortBoxKey), &kSortGlassKey);
+    UIView *field = SGRFindByIdentifier(toolbar ?: headerRoot, @"Components.Header.UI.Toolbar.SearchField", &kFieldKey);
+    UIView *sort = toolbar ? SGRFindByIdentifier(toolbar, @"Components.Header.UI.Toolbar.ButtonContainer", &kSortBoxKey) : nil;
+    if (SGBelowiOS26()) {
+        SGRGlassFlatBox(field, &kFieldGlassKey, NO);
+        SGRGlassFlatBox(sort, &kSortGlassKey, NO);
+    } else if (toolbar) {
+        // iOS 26: the system's glass in the boxes, as before the legacy glass.
+        glassUp(field, &kFieldGlassKey);
+        glassUp(sort, &kSortGlassKey);
+    }
+    // Logged only when the field got glass: on iOS 26 a field with no toolbar around it (Your Episodes) gets none.
     static BOOL logged;
-    if (!logged && field.window) {
+    BOOL glassed = SGBelowiOS26() || toolbar;
+    if (!logged && glassed && field.window) {
         logged = YES;
         SGLog(@"redesign playlist: find field %@ in glass, %.0fx%.0f", field.accessibilityLabel,
               field.bounds.size.width, field.bounds.size.height);
@@ -557,6 +568,22 @@ static UIView *blockIn(UIView *layout, UIView *cover, UIView *fullbleed) {
     return block;
 }
 
+// The block's text and buttons scroll up and stop at the top of the page with the pinned header, where they
+// were under Spotify's navigation bar. That bar is gone now (PlaylistBar.x), so they show beside the ⋯ and the
+// title's glass instead. Each goes as its top rises through the band below the pinned buttons (44pt at y 47, so down to 91), the way a row goes
+// under the Music app's bar. A view's own alpha is free here: nothing of the redesign writes the info's.
+static const CGFloat kBarBottom = 91, kFadeSpan = 48;
+
+static void fadeUnderBar(SGRHeaderInfo *info, UIView *page) {
+    if (@available(iOS 26.0, *)) return;
+    if (!page) return;
+    for (UIView *sub in info.subviews) {
+        CGFloat top = CGRectGetMinY([info convertRect:sub.frame toView:page]);
+        CGFloat alpha = MAX(0, MIN(1, (top - kBarBottom) / kFadeSpan));
+        if (fabs(sub.alpha - alpha) > 0.01) sub.alpha = alpha;
+    }
+}
+
 static void applyHeader(UIView *layout) {
     UIViewController *headerVC = SGRPlaylistHeaderOf(layout);
     UIView *headerRoot = headerVC.viewIfLoaded;
@@ -573,6 +600,7 @@ static void applyHeader(UIView *layout) {
     applyToolbar(headerRoot);
     applyScrims(headerRoot);
     SGRHeaderInfo *info = applyInfo(block, headerRoot, headerVC);
+    fadeUnderBar(info, SGRPlaylistPageOf(headerRoot));
 
     // How far the page is pulled down past the top: the plane grows by that much and the block moves with it,
     // so nothing is measured then. Rest is the smallest the plane has been.

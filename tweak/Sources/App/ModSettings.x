@@ -15,6 +15,7 @@
 //   x 48, 12pt chevron on the right. A pushed page (trees/settings notifications opened.txt) is a
 //   UITableView bg #121212: header with an 11pt gray description at (16, 24), 53pt cells with the
 #import "Core/SGCore.h"
+#import "Shared/Haptics/SGHapticRelay.h"
 #import "Settings/SGPage.h"
 #import "Settings/SGPageStyle.h"
 #import "Settings/SGModPage.h"
@@ -60,6 +61,13 @@ static UIViewController *modSettingsPage(void) {
     // The rows of one look are asked again as Redesigned UI is flipped, so the page shows what the restart brings.
     BOOL (^redesigned)(void) = ^BOOL { return SGRedesignedUIStored(); };
     BOOL (^native)(void) = ^BOOL { return !SGRedesignedUIStored(); };
+
+    // A newer Vitrine Addon inside this Vitrine than the one installed: at the top, while it is so. Only the add-on's own
+    // answer from SpringBoard makes it so, so only a jailbroken phone with the add-on shows it (SGHapticRelay.h).
+    SGModRow *addonUpdate = SGWithTile(SGActionRow(@"Update Vitrine Addon", @"A newer add-on comes with this Vitrine", ^{ SGHapticAddonShareSoon(); }),
+                                       @"arrow.down.circle.fill", UIColor.systemBlueColor);
+    addonUpdate.visible = ^BOOL { return SGHapticAddonOutdated(); };
+    [sections addObject:SGSection(nil, @[addonUpdate])];
 
     // The tile colors are the system palette's, in dark mode except where SGColorRGB gives a lighter or deeper shade.
     [sections addObject:SGNotedSection(nil, @[

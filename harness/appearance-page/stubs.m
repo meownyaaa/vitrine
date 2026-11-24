@@ -26,3 +26,8 @@ NSArray<NSString *> *SGAppFontNames(void) {
 NSArray<NSString *> *SGAppFontFamilies(void) {
     return @[@"Avenir Next", @"Georgia"];
 }
+
+// Redesigned/Pages/ModPageBar.x, the bar below iOS 26 over a page of the mod's on Spotify's stack: none here.
+void SGDressPageBar(UIViewController *page) {}
+void SGUndressPageBar(UIViewController *page) {}
+void SGPlacePageBar(UIViewController *page) {}

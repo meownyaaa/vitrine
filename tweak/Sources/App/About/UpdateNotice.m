@@ -45,7 +45,7 @@ static void offerWhenClear(NSInteger tries) {
     UIViewController *top = SGTopController();
     // The tour, the signing sheet and Spotify's own alerts own the screen first; a sheet presented
     // from one of them lands nowhere, so this one waits its turn and gives up rather than nagging.
-    if (!top || SGOnboardingShowing() || [top isKindOfClass:UIAlertController.class]) {
+    if (!top || SGOnboardingShowing() || SGIsAlertController(top)) {
         if (tries <= 0) {
             SGLog(@"update notice: the screen stayed busy, %@ waits for Mod Settings", version);
             return;

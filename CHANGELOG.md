@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-beta.17](https://github.com/My-Name-Is-Jeff/vitrine/compare/v1.0.0-beta.16...v1.0.0-beta.17) (2026-11-22)
+
+
+### Features
+
+* a page's ⋯ menu opens on the rows that page or its kind had last, with the quick row and every row's icon, and the AI DJ's ⋯ opens the system menu ([#154](https://github.com/My-Name-Is-Jeff/vitrine/issues/154)) ([5e99da8](https://github.com/My-Name-Is-Jeff/vitrine/commit/5e99da8f3df61d9df97adf85ec46fc4ff519f94e))
+* below iOS 26 alerts and Spotify's white dialogs come up as a glass card ([#208](https://github.com/My-Name-Is-Jeff/vitrine/issues/208)) ([0babe30](https://github.com/My-Name-Is-Jeff/vitrine/commit/0babe302cb09524543652631c7e8f7fc6afc653a))
+* below iOS 26 the album, artist and profile pages, SongDNA and Create cover art are on glass ([#214](https://github.com/My-Name-Is-Jeff/vitrine/issues/214)) ([78a2cfa](https://github.com/My-Name-Is-Jeff/vitrine/commit/78a2cfa233ba8c49e976a21b01d865c60a7b959c))
+* below iOS 26 the Library, Search and Home headers float on glass ([#213](https://github.com/My-Name-Is-Jeff/vitrine/issues/213)) ([dd78242](https://github.com/My-Name-Is-Jeff/vitrine/commit/dd78242557e49d7edb69b90bfec7fb73df62e346))
+* below iOS 26 the pages under UIKit's own bar get glass back and title buttons, and Mod Settings' pages the same ([#211](https://github.com/My-Name-Is-Jeff/vitrine/issues/211)) ([2a4693a](https://github.com/My-Name-Is-Jeff/vitrine/commit/2a4693a407dff5d15b40ef696aef90b17aaf99fe))
+* below iOS 26 the playlist's pages are on glass: its bar, Find, Edit, Add songs and the mixing editor ([#212](https://github.com/My-Name-Is-Jeff/vitrine/issues/212)) ([4844a66](https://github.com/My-Name-Is-Jeff/vitrine/commit/4844a664ce1ba6613b34b3e28d605d3a409571d2))
+* below iOS 26 the redesign's sheets, menus, toasts and tooltips are on glass ([#210](https://github.com/My-Name-Is-Jeff/vitrine/issues/210)) ([4cbc88e](https://github.com/My-Name-Is-Jeff/vitrine/commit/4cbc88ef3fec1a8e15edd31174293b8f925adce1))
+* below iOS 26 the redesign's switches and Speed and pitch's slider thumbs are iOS 26's glass ([#209](https://github.com/My-Name-Is-Jeff/vitrine/issues/209)) ([7b9cd1a](https://github.com/My-Name-Is-Jeff/vitrine/commit/7b9cd1a5c97b8df04a09c0d68f10124d92911963))
+* below iOS 26 the redesign's tab bar is a glass capsule of its own, with the minimized row and the now playing card in it ([#207](https://github.com/My-Name-Is-Jeff/vitrine/issues/207)) ([27a9f48](https://github.com/My-Name-Is-Jeff/vitrine/commit/27a9f4822e63597b146cb362be87d9bdfcb316b7))
+* below iOS 26 with a jailbreak the lock screen's large cover puts the song's lyrics over the Canvas, with a button between them ([#193](https://github.com/My-Name-Is-Jeff/vitrine/issues/193)) ([1e1dac7](https://github.com/My-Name-Is-Jeff/vitrine/commit/1e1dac7614a6cae5cb282b5a75413a7b1b4aa0c7))
+* Legacy Liquid Glass below iOS 26, a switch in Appearance that draws the redesign's glass panes as an approximation of iOS 26's ([#206](https://github.com/My-Name-Is-Jeff/vitrine/issues/206)) ([3024aed](https://github.com/My-Name-Is-Jeff/vitrine/commit/3024aed2ce30988cae570049ee855815b3479ef1))
+* Music Haptics everywhere and lock screen Canvas below iOS 26 on a jailbreak ([#166](https://github.com/My-Name-Is-Jeff/vitrine/issues/166)) ([2f1f158](https://github.com/My-Name-Is-Jeff/vitrine/commit/2f1f1580bb681c5856ee31467092eae423373fee))
+* **navigation:** include private Apple SF Symbols in symbol search ([#219](https://github.com/My-Name-Is-Jeff/vitrine/issues/219)) ([58efe25](https://github.com/My-Name-Is-Jeff/vitrine/commit/58efe259f3bb23d86bac4a0f59cfda127411b8bd))
+* on Fridays Home's pill wears a turning ring of pinks and purples, and the DJ card keeps what the DJ says ([#155](https://github.com/My-Name-Is-Jeff/vitrine/issues/155)) ([83eb3f0](https://github.com/My-Name-Is-Jeff/vitrine/commit/83eb3f0a9977d3b9e55c0c29f4a438035ee9d14a))
+* **player:** center back and next when shuffle and repeat are hidden ([#162](https://github.com/My-Name-Is-Jeff/vitrine/issues/162)) ([#174](https://github.com/My-Name-Is-Jeff/vitrine/issues/174)) ([fc64dc7](https://github.com/My-Name-Is-Jeff/vitrine/commit/fc64dc74cf1bf6d29f0161d3bc4d79a7155b3ad0))
+* **sponsorblock:** add SponsorBlock for podcast episodes ([#189](https://github.com/My-Name-Is-Jeff/vitrine/issues/189)) ([d48c5f3](https://github.com/My-Name-Is-Jeff/vitrine/commit/d48c5f3b57864df2bfa0f5cc736f42f819b86299))
+* Spotify's icons in the redesigned player and the AI DJ's footer, and the DJ button as a waveform ([#180](https://github.com/My-Name-Is-Jeff/vitrine/issues/180)) ([9e8b308](https://github.com/My-Name-Is-Jeff/vitrine/commit/9e8b3080bb81b73404d69c90c57ac3d6caec3ac4))
+* the lyrics' Karaoke mic is off by default below iOS 18, where Karaoke cannot run ([#179](https://github.com/My-Name-Is-Jeff/vitrine/issues/179)) ([04ee3fc](https://github.com/My-Name-Is-Jeff/vitrine/commit/04ee3fc1e5d2d25428720bd5331ae6c0b7069668))
+
+
+### Fixes
+
+* **album:** stretch the header artwork on overscroll instead of leaving a gap ([#169](https://github.com/My-Name-Is-Jeff/vitrine/issues/169)) ([#176](https://github.com/My-Name-Is-Jeff/vitrine/issues/176)) ([21d4686](https://github.com/My-Name-Is-Jeff/vitrine/commit/21d46863ce5a0b4e1afccead90d0a585172afd7c))
+* below iOS 26 the tab bar stays where it is while the player opens and closes ([#225](https://github.com/My-Name-Is-Jeff/vitrine/issues/225)) ([f6f519b](https://github.com/My-Name-Is-Jeff/vitrine/commit/f6f519b0300adef466a879feb1680505e010d165))
+* close only the DJ region dialog, matched by its exact title ([#203](https://github.com/My-Name-Is-Jeff/vitrine/issues/203)) ([cd7ace6](https://github.com/My-Name-Is-Jeff/vitrine/commit/cd7ace640513e02e398f1fa9f8f2e29d07aa8eac))
+* four crash, watchdog and player layout fixes ([#147](https://github.com/My-Name-Is-Jeff/vitrine/issues/147)) ([e033415](https://github.com/My-Name-Is-Jeff/vitrine/commit/e033415411e9ae0c7c5033377f4b62d8d837a9ac))
+* **haptics:** background Music Haptics under LiveContainer ([#221](https://github.com/My-Name-Is-Jeff/vitrine/issues/221)) ([4a1651d](https://github.com/My-Name-Is-Jeff/vitrine/commit/4a1651d59e1e712c3b82dbbea473fa8a09343ffd))
+* Home no longer crashes at launch below iOS 26 from its feed inset calling itself ([#224](https://github.com/My-Name-Is-Jeff/vitrine/issues/224)) ([1f89ad6](https://github.com/My-Name-Is-Jeff/vitrine/commit/1f89ad6b4162d8e616b290d020a7ebb3a43c6abe))
+* **lyrics:** resolve Gemini translation hangs, add dynamic model discovery, and improve error guidance ([#185](https://github.com/My-Name-Is-Jeff/vitrine/issues/185)) ([910823a](https://github.com/My-Name-Is-Jeff/vitrine/commit/910823a0f569149c01e480baae8bbc4071395ad1))
+* **lyrics:** survive a null duration from any lyrics source ([#200](https://github.com/My-Name-Is-Jeff/vitrine/issues/200)) ([3d613a8](https://github.com/My-Name-Is-Jeff/vitrine/commit/3d613a8c493b25071fb364d40cb5e3287c0d4fca))
+* **navbar:** match SF Symbol visual size and active variant to tab bar ([#220](https://github.com/My-Name-Is-Jeff/vitrine/issues/220)) ([87adc60](https://github.com/My-Name-Is-Jeff/vitrine/commit/87adc60c2860903e38f3789d30a2e9ae4a7c438b))
+* **navbar:** show the filled icon on the selected tab ([#151](https://github.com/My-Name-Is-Jeff/vitrine/issues/151)) ([#173](https://github.com/My-Name-Is-Jeff/vitrine/issues/173)) ([3476a55](https://github.com/My-Name-Is-Jeff/vitrine/commit/3476a55737d75b5b4f4df2a8b4f4ce6782092e5e))
+* **nowplaying:** match the mini player's width to the tab bar ([#170](https://github.com/My-Name-Is-Jeff/vitrine/issues/170)) ([#175](https://github.com/My-Name-Is-Jeff/vitrine/issues/175)) ([87cf7d4](https://github.com/My-Name-Is-Jeff/vitrine/commit/87cf7d4a64c0a6a1d856374d71546efc09cb1229))
+* the DJ keeps requests and starts without "not available in your country" under Spoof Premium ([#202](https://github.com/My-Name-Is-Jeff/vitrine/issues/202)) ([57b155f](https://github.com/My-Name-Is-Jeff/vitrine/commit/57b155f7db3c1690980d2865666214d4a963e359))
+* the player's Lyrics glyph stays on the footer row when Spotify's AI prompt bar is up ([#228](https://github.com/My-Name-Is-Jeff/vitrine/issues/228)) ([4d71cd5](https://github.com/My-Name-Is-Jeff/vitrine/commit/4d71cd5c94d7bbaf89495daaa3f5759a1e6d2fff))
+* the redesigned player's volume row shows the level right after a launch, not only once it is touched ([#223](https://github.com/My-Name-Is-Jeff/vitrine/issues/223)) ([5c9a686](https://github.com/My-Name-Is-Jeff/vitrine/commit/5c9a6862c7c6db0bd79bbd02c3118798fae33f5e))
+
 ## [1.0.0-beta.16](https://github.com/My-Name-Is-Jeff/vitrine/compare/v1.0.0-beta.15...v1.0.0-beta.16) (2026-10-25)
 
 

@@ -98,3 +98,8 @@ void SGDSPCompanderResponse(NSArray<NSNumber *> *gains, NSInteger count, double 
     SGDSPLogFrequencies((int)count, frequencies);
     for (NSInteger i = 0; i < count; i++) values[i] = SGDSPSmoothCurve(SGDSPCompanderFrequencies, amounts, 7, frequencies[i]);
 }
+
+// Redesigned/Pages/ModPageBar.x, the bar below iOS 26 over a page of the mod's on Spotify's stack: none here.
+void SGDressPageBar(UIViewController *page) {}
+void SGUndressPageBar(UIViewController *page) {}
+void SGPlacePageBar(UIViewController *page) {}

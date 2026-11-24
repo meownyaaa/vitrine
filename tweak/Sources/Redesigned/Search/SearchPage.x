@@ -22,7 +22,7 @@
 // Layout passes without the header before that is logged.
 static const NSUInteger kMissesLogged = 60;
 
-static char kTitleKey;
+static char kTitleKey, kFaceGlassKey, kFollowerKey;
 
 static __weak UICollectionView *sg_list;
 static __weak UIStackView *sg_row;
@@ -102,6 +102,71 @@ static UILabel *titleIn(UIStackView *row) {
     return title;
 }
 
+// The header's own block, the ElementView the toolbar row and the field sit in, a child of the page beside the list:
+// Spotify paints it black, so the field scrolled over the cards stood on a black band rather than on glass alone. Its
+// fill is taken off, the view's own colour too (a view puts that back on its layer), and the block is held clear. The
+// page behind it is black already.
+static void clearHeaderBlock(UIStackView *row, UIView *page) {
+    UIView *block = row;
+    while (block.superview && block.superview != page) block = block.superview;
+    if (!block || block == row || block.superview != page) return;
+    // This block only, not its class: the ElementView class may be other screens' too.
+    static __weak UIView *held;
+    if (held != block) {
+        held = block;
+        SGRHoldClear(block);
+        SGLog(@"redesign search: the header's block (%@) held clear", NSStringFromClass(block.class));
+    }
+    if (block.backgroundColor) block.backgroundColor = nil;
+    if (SGIsVisibleColor(block.layer.backgroundColor)) block.layer.backgroundColor = NULL;
+}
+
+// The plate Spotify lays over the top of the page behind the status bar: a plain view the page's width and the status
+// bar's height (48pt on a 414pt phone), black, the page's last child, over the list. It goes the way the header's block
+// does, so only the field's glass stands over the cards as they scroll under it.
+static void clearStatusPlate(UIView *page) {
+    CGFloat width = page.bounds.size.width;
+    for (UIView *sub in page.subviews) {
+        if (object_getClass(sub) != UIView.class || sub.frame.origin.y > 0.5 || fabs(sub.bounds.size.width - width) > 0.5) continue;
+        if (sub.bounds.size.height < 1 || sub.bounds.size.height > 80) continue;
+        SGRHoldClear(sub);
+        if (sub.backgroundColor) sub.backgroundColor = nil;
+        if (SGIsVisibleColor(sub.layer.backgroundColor)) sub.layer.backgroundColor = NULL;
+    }
+}
+
+// The title and the avatar scroll away with the page, as Home's do (HomeHeader.x, followScroll): they rise with what is
+// under them and fade over the row's height. Spotify slid and faded the row itself on earlier builds; on this one it
+// stays, and with the black plate gone (clearStatusPlate) the two stood over the cards scrolling under them. The avatar's
+// glass takes no alpha (SGRGlass.h): it goes once the row is half faded and comes back with it.
+static __weak UIView *sg_face;
+static BOOL sg_faceGlassShown = YES;
+
+static void rise(UIView *view, CGAffineTransform transform, CGFloat alpha) {
+    if (!view) return;
+    if (!CGAffineTransformEqualToTransform(view.transform, transform)) view.transform = transform;
+    if (view.alpha != alpha) view.alpha = alpha;
+}
+
+static void followScroll(UIScrollView *list) {
+    UIStackView *row = sg_row;
+    if (!list || !row || !SGBelowiOS26()) return;
+    CGFloat height = MAX(1, row.bounds.size.height);
+    CGFloat scrolled = MAX(0, list.contentOffset.y + list.adjustedContentInset.top);
+    CGAffineTransform up = CGAffineTransformMakeTranslation(0, -MIN(scrolled, height));
+    CGFloat alpha = 1 - MIN(1, scrolled / height);
+    rise(objc_getAssociatedObject(row, &kTitleKey), up, alpha);
+    UIView *face = sg_face;
+    if (!face) return;
+    rise(face, up, alpha);
+    BOOL shown = alpha > 0.5;
+    UIView *glass = objc_getAssociatedObject(face, &kFaceGlassKey);
+    if (glass && shown != sg_faceGlassShown) {
+        sg_faceGlassShown = shown;
+        [UIView animateWithDuration:0.15 animations:^{ SGRShowGlass(glass, shown); }];
+    }
+}
+
 static void layoutHeader(UIStackView *row) {
     vanish(sg_scrim);
 
@@ -116,6 +181,10 @@ static void layoutHeader(UIStackView *row) {
         [row setNeedsLayout];
     }
     [row layoutIfNeeded];
+    // The avatar on a glass circle as large as the other pages' corner buttons, as Home's sits in its pill: bare, it was the
+    // one control of the header with nothing behind it.
+    if (face && SGBelowiOS26()) SGRGlassInside(face, &kFaceGlassKey, 44);
+    sg_face = face;
 
     UILabel *title = titleIn(row);
     if (![title.text isEqualToString:text]) {
@@ -144,6 +213,12 @@ static void layoutHeader(UIStackView *row) {
     UIView *view = ((UIViewController *)self).viewIfLoaded;
     if (!view || !findParts(view)) return;
     layoutHeader(sg_row);
+    if (SGBelowiOS26()) {
+        clearHeaderBlock(sg_row, view);
+        clearStatusPlate(view);
+        SGRFollowOffset(sg_list, &kFollowerKey, ^(UIScrollView *scroll) { followScroll(scroll); });
+        followScroll(sg_list);
+    }
     SGRSearchCloseGap(sg_list);
 }
 

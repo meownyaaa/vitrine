@@ -4,6 +4,7 @@
 #import "Settings/SGModPage.h"
 #import "Settings/SGPageStyle.h"
 #import "AnimatedArtwork.h"
+#import "Shared/Haptics/SGHapticRelay.h"
 
 SGLockArtwork SGLockScreenArtwork(void) {
     if (@available(iOS 26.0, *)) {
@@ -44,6 +45,22 @@ NSArray *SGLockScreenMotionRows(void) {
             sources,
             lowData,
         ];
+    }
+    // Below iOS 26 with a jailbreak the add-on in SpringBoard draws the cover full screen itself, in place of the row that
+    // says the lock screen needs iOS 26. iOS 26 and later never come here: their own lock screen artwork is the rows above.
+    if (SGHapticEverywhereOffered()) {
+        SGModRow *cover = SGOptionRow(@"Canvas for the large cover", @"Tap the lock screen player's cover: it opens the screen's width across, the widgets under the clock hidden, with the Canvas or Apple Music's animated cover in its place where the song has one. Drawn by Vitrine Addon", SGKeyLockCoverAddon);
+        cover.changed = ^(BOOL on) {
+            SGHapticRelaySendLockArt();
+            if (on && !SGHapticRelayAvailable()) SGHapticAddonExplain(@"The full-screen artwork");
+        };
+        SGModRow *lyrics = SGSwitchRow(@"Lyrics on the large cover", @"A button in the lock screen player, while the large cover is open, puts the song's lyrics over the Canvas, and takes them away again", SGKeyLockCoverLyrics);
+        lyrics.changed = ^(BOOL on) { SGHapticRelaySendLockArt(); };
+        lyrics.visible = ^BOOL { return SGFlag(SGKeyLockCoverAddon, NO); };
+        // The add-on's update, offered here as on the Vibrations page: it draws this screen too.
+        SGModRow *update = SGActionRow(@"Update Vitrine Addon", @"A newer add-on comes with this Vitrine", ^{ SGHapticAddonShareSoon(); });
+        update.visible = ^BOOL { return SGHapticAddonOutdated(); };
+        return @[cover, lyrics, update];
     }
     return @[SGLockScreenArtworkNeedsRow()];
 }

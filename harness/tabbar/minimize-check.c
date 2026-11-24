@@ -26,6 +26,15 @@ int main(void) {
     assert(!SGRMinimizeStep(&s, 80, 0, 100));
     s.minimized = true;              // and one that cannot scroll leaves a minimized bar minimized
     assert(SGRMinimizeStep(&s, 0, 0, 100));
+    // The capsule bar (iOS < 26): minimized stays minimized while scrolling up, and the top brings it back.
+    SGRMinimizeTrack h = {-100, false};
+    assert(SGRMinimizeStepEx(&h, -70, -100, 2000, false));   // minimized going down
+    assert(SGRMinimizeStepEx(&h, 800, -100, 2000, false));
+    assert(SGRMinimizeStepEx(&h, 700, -100, 2000, false));   // up 100: still minimized
+    assert(SGRMinimizeStepEx(&h, 300, -100, 2000, false));
+    assert(SGRMinimizeStepEx(&h, -60, -100, 2000, false));   // near the top, not at it
+    assert(!SGRMinimizeStepEx(&h, -100, -100, 2000, false)); // the top
+    assert(SGRMinimizeStepEx(&h, -60, -100, 2000, false));   // and down again minimizes
     puts("minimize-check: ok");
     return 0;
 }

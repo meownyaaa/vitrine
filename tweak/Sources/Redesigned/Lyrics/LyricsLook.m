@@ -1,5 +1,7 @@
 // The lyrics' look as stored, its presets and the preview's lines. The page is LyricsLookSettings.m.
+#import "Core/SGCore.h"
 #import "LyricsLook.h"
+#import "LyricsText.h"
 
 NSNotificationName const SGRLyricsLookDidChangeNotification = @"spotifyglass.redesign.lyricsLookDidChange";
 
@@ -106,4 +108,12 @@ NSArray<SGKaraokeLine *> *SGRLyricsSampleLines(void) {
 
 NSInteger SGRLyricsSampleLength(void) {
     return 13500;   // a pause after the last line, then the first again
+}
+
+// Shared/Lyrics/Lyrics.h's: the lyrics page's look and texts, for the lock screen's large cover.
+NSDictionary *SGLyricsLookPlist(void) {
+    SGRLyricsLook look = SGRLyricsLookNow();
+    return @{@"size": @(look.size), @"spacing": @(look.spacing), @"blur": @(look.blur), @"glow": @(look.glow), @"wave": @(look.wave),
+             @"order": SGRLyricsTextOrder(), @"pronunciation": @(SGFlag(SGRKeyLyricsPronunciation, NO)),
+             @"translation": @(SGFlag(SGRKeyLyricsTranslation, NO))};
 }

@@ -2,6 +2,7 @@
 #import "Settings/SGModPage.h"
 #import "AdBlock.h"
 #import "Shared/Privacy/Privacy.h"
+#import "Shared/SponsorBlock/SGSponsorBlock.h"
 
 NSString *const SGFakePremiumWarning = @"This is the part of EeveeSpotify Spotify's takedown went after, and it has not been tested here. It can end in a forced logout or worse for the account. A Premium account gains nothing from it.";
 
@@ -61,8 +62,20 @@ UIViewController *SGAdsSettingsPage(void) {
     if (!SGRedesignedUIStored()) [ads addObject:SGWithSymbol(SGOptionRow(@"Hide the video carousel in Search", nil, SGKeyHideSearchVideos), @"play.rectangle.on.rectangle")];
     [ads addObject:SGWithSymbol(SGPageRow(@"Ad and upsell flags", ^UIViewController *{ return adFlagsPage(); }), @"flag")];
 
+    SGModRow *sponsorBlock = SGWithSymbol(SGOptionRow(@"SponsorBlock",
+                                                      @"Skip sponsored segments and filler in episodes",
+                                                      SGKeySponsorBlockEnabled), @"shield.lefthalf.filled");
+    sponsorBlock.changed = ^(BOOL on) { SGSponsorBlockPreferencesDidChange(); };
+    SGModRow *sponsorBlockPage = SGWithSymbol(SGPageRow(@"Categories & behavior", ^UIViewController *{ return SGSponsorBlockSettingsPage(); }), @"slider.horizontal.3");
+    sponsorBlockPage.value = ^NSString *{ return SGSponsorBlockSummary(); };
+    sponsorBlockPage.waitsOn = SGKeySponsorBlockEnabled;
+
     return [[SGModPage alloc] initWithTitle:@"Premium, ads & privacy" intro:SGRestartNote sections:@[
         SGNotedSection(@"Ads", ads, @"Audio ads between songs need Spoof Premium."),
+        SGNotedSection(@"Podcasts", @[
+            sponsorBlock,
+            sponsorBlockPage,
+        ], @"Skips segments submitted to sponsor.ajay.app. Changes take effect immediately."),
         SGNotedSection(@"Premium", @[
             SGWithSymbol(fakePremium, @"crown"),
         ], @"Free accounts only."),

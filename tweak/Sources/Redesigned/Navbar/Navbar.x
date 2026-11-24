@@ -210,16 +210,20 @@ void SGRComposeTabBar(UIView *tabBar) {
     NSMutableArray<UIView *> *wanted = [NSMutableArray array];
     NSMutableSet<NSString *> *placed = [NSMutableSet set];
     NSMutableSet<NSString *> *keep = [NSMutableSet set];
-    NSArray<NSDictionary *> *splitList = SGEnabled(SGRKeyNavbar) ? SGRNavbarSplit() : @[];
+    NSArray<NSDictionary *> *splitList = SGEnabled(SGRKeyNavbar) ? SGRNavbarSplitShown() : @[];
     NSMutableSet<NSString *> *splitStock = [NSMutableSet set];
     for (NSDictionary *entry in splitList) if (!entry[SGRNavbarURI] && [entry[SGRNavbarID] isKindOfClass:NSString.class]) [splitStock addObject:entry[SGRNavbarID]];
     NSMutableSet<UIView *> *apart = [NSMutableSet set];
+    // Where the settings' tab list puts each tab, for the one place a split tab is not sent to the end (below).
+    NSMutableDictionary<NSString *, NSNumber *> *layoutRank = [NSMutableDictionary dictionary];
+    NSMapTable<UIView *, NSNumber *> *itemRank = [NSMapTable strongToStrongObjectsMapTable];
 
     if (SGEnabled(SGRKeyNavbar)) {
         for (NSDictionary *entry in SGRNavbarLayout()) {
             NSString *ident = entry[SGRNavbarID];
             if (![ident isKindOfClass:NSString.class] || [placed containsObject:ident]) continue;
             [placed addObject:ident];
+            layoutRank[ident] = @(layoutRank.count);
             BOOL hidden = [entry[SGRNavbarHidden] boolValue];
             if (entry[SGRNavbarURI]) {
                 if (hidden) continue;
@@ -228,9 +232,11 @@ void SGRComposeTabBar(UIView *tabBar) {
                 else custom[ident] = item = [[SGRTabItemView alloc] initWithEntry:entry];
                 [keep addObject:ident];
                 [wanted addObject:item];
+                [itemRank setObject:layoutRank[ident] forKey:item];
             } else if (stockViews[ident] && ![splitStock containsObject:ident]) {
                 stockViews[ident].hidden = hidden;
                 [wanted addObject:stockViews[ident]];
+                [itemRank setObject:layoutRank[ident] forKey:stockViews[ident]];
             }
         }
     }
@@ -255,10 +261,12 @@ void SGRComposeTabBar(UIView *tabBar) {
             [keep addObject:ident];
             [wanted addObject:item];
             [apart addObject:item];
+            if (layoutRank[ident]) [itemRank setObject:layoutRank[ident] forKey:item];
         } else if (stockViews[ident]) {
             stockViews[ident].hidden = NO;
             [wanted addObject:stockViews[ident]];
             [apart addObject:stockViews[ident]];
+            if (layoutRank[ident]) [itemRank setObject:layoutRank[ident] forKey:stockViews[ident]];
         }
     }
     for (NSString *ident in custom.allKeys) {
@@ -285,10 +293,28 @@ void SGRComposeTabBar(UIView *tabBar) {
         [([apart containsObject:item] ? trailing : order) addObject:item];
     }
     NSUInteger apartCount = order.count ? trailing.count : 0;
-    [order addObjectsFromArray:trailing];
-    [order enumerateObjectsUsingBlock:^(UIView *item, NSUInteger i, BOOL *stop) {
-        objc_setAssociatedObject(item, &kApartKey, i + apartCount >= order.count ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }];
+    // The fallback bar folds a short bar's split tab into its one capsule (TabBarLegacy.x), and there it is a tab
+    // like the rest: it stands where the tab list in the settings puts it, not at the end. A split tab the list
+    // does not name (one of the mod's own picked only for the split) has no place there and stays last.
+    BOOL fold = apartCount && SGRLegacyTabBarOn() && order.count + trailing.count <= SGRLegacyFoldLimit;
+    NSSet<UIView *> *apartSet = [NSSet setWithArray:trailing];
+    if (fold) {
+        for (UIView *item in trailing) {
+            NSNumber *rank = [itemRank objectForKey:item];
+            NSUInteger at = order.count;
+            for (NSUInteger j = 0; rank && j < order.count; j++) {
+                NSNumber *other = [itemRank objectForKey:order[j]];
+                if (!other || other.unsignedIntegerValue > rank.unsignedIntegerValue) { at = j; break; }
+            }
+            [order insertObject:item atIndex:at];
+        }
+    } else {
+        [order addObjectsFromArray:trailing];
+    }
+    // Marked by the tab itself: a folded one is not the last.
+    for (UIView *item in order) {
+        objc_setAssociatedObject(item, &kApartKey, apartCount && [apartSet containsObject:item] ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     sg_row = stack;
     if (![order isEqualToArray:objc_getAssociatedObject(stack, &kOrderKey)] || apartCount != sg_apartCount) {
         sg_apartCount = apartCount;

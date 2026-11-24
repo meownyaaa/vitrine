@@ -57,7 +57,7 @@ static UIView *clearAncestors(UIView *view) {
     page.layer.backgroundColor = NULL;
     sg_lyricsPageRoot = clearAncestors(page);
 
-    UIVisualEffectView *glass = SGGlassFor(page, &kPageGlassKey);
+    UIView *glass = SGGlassFor(page, &kPageGlassKey);
     // Dark whatever the system is set to, as the player's header panes are (Native/Player/Player.x):
     // light glass under white lyrics otherwise, on a phone in light mode.
     if (glass.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;

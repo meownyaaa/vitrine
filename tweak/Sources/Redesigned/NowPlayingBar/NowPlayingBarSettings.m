@@ -12,13 +12,18 @@ NSArray<SGModRow *> *SGRNowPlayingBarRows(void) {
         if (!on) SGRSetTabBarMinimized(NO, NO);
         SGRRefreshTabBar();
     };
+    // The capsule bar (iOS < 26) only: the glass bar always comes back as the page is scrolled up.
+    SGModRow *expandOnUp = SGRLegacyTabBarOn() ? SGOptionRow(@"Expand on scroll up", @"Off: only at the top of the page or on a tap on a tab", SGRKeyNavbarExpandOnScrollUp) : nil;
+    expandOnUp.waitsOn = SGRKeyNavbarMinimize;
     SGModRow *inlineConnect = SGOptionRow(@"Device button", @"Kept on the bar between the tabs", SGRKeyBarInlineConnect);
     inlineConnect.waitsOn = SGRKeyNavbarMinimize;
-    return @[
-        minimize,
+    NSMutableArray<SGModRow *> *rows = [NSMutableArray arrayWithObject:minimize];
+    if (expandOnUp) [rows addObject:expandOnUp];
+    [rows addObjectsFromArray:@[
         inlineConnect,
         SGHideRow(@"Hide the device button", @"On the full now playing bar", SGRHideBarConnect),
         // Spotify's own flag for the bar's save button, forced off: Spotify leaves the button out.
         SGKillRow(@"Hide the like button", @"ios-feature-nowplayingbar.add_button"),
-    ];
+    ]];
+    return rows;
 }

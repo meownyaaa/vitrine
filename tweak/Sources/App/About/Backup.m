@@ -12,10 +12,12 @@
 // here. What is left out belongs to this install rather than to its user's choices.
 static BOOL isSetting(NSString *key) {
     if (![key hasPrefix:@"spotifyglass."]) return NO;
-    for (NSString *local in @[@"spotifyglass.adblock.counts", @"spotifyglass.privacy.counts", @"spotifyglass.update.",
-                              @"spotifyglass.signing.", @"spotifyglass.onboarding.", @"spotifyglass.navbar.stock",
-                              @"spotifyglass.redesign.navbar.stock", @"spotifyglass.automix.saved",
-                              @"spotifyglass.lossless.savedQuality", @"spotifyglass.liveActivity.startedAt"]) {
+    for (NSString *local in @[@"spotifyglass.adblock.counts", @"spotifyglass.privacy.counts",
+                              @"spotifyglass.sponsorblock.skipCount", @"spotifyglass.sponsorblock.timeSaved",
+                              @"spotifyglass.update.", @"spotifyglass.signing.", @"spotifyglass.onboarding.",
+                              @"spotifyglass.navbar.stock", @"spotifyglass.redesign.navbar.stock",
+                              @"spotifyglass.automix.saved", @"spotifyglass.lossless.savedQuality",
+                              @"spotifyglass.liveActivity.startedAt"]) {
         if ([key hasPrefix:local]) return NO;
     }
     return YES;

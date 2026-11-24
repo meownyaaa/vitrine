@@ -18,6 +18,9 @@
 
 // The accent is the only thing the Kit's tokens reach out for and it is not what is being looked at here.
 UIColor *SGRAccentColor(void) { return nil; }
+// SGRRepaint.x, the layer hooks that keep a glassed sheet clear of Spotify's grey: the harness has no Spotify sheet.
+__weak UIView *sgr_sheetChromeRoot = nil;
+void SGRWatchSheetPaint(UIView *root) {}
 
 static const CGFloat kButton = 48;
 

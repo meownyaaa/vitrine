@@ -1,0 +1,2 @@
+// Vitrine's Romanise.m, built into the add-on for the lock screen's lyrics (LockLyricsView.m): the same code, not a copy.
+#include "../../tweak/Sources/Shared/Lyrics/Romanise.m"

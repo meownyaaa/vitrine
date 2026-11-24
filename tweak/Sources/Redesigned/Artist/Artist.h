@@ -46,3 +46,7 @@ void SGRArtistSetArtwork(UIView *view, UIImage *image);
 // the answer; NO until then. The first call subscribes for the page's lifetime, and `changed` runs on the
 // main thread whenever the answer changes.
 BOOL SGRArtistFollowing(UIView *page, NSString *moreIdentifier, BOOL *following, void (^changed)(void));
+
+// ArtistAbout.x: the About card in `cell` on glass, its gray and its Follow button's ring gone. Cheap on a cell that
+// is not About's.
+void SGRArtistDressAbout(UIView *cell);

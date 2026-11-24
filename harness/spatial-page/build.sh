@@ -10,7 +10,7 @@ SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
 xcrun -sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator -fobjc-arc -g -O0 \
     -I"$SRC" -isysroot "$SDK" -Wall -Werror -Wno-deprecated-declarations \
     "$(dirname "$0")/main.m" "$(dirname "$0")/stubs.m" "$(dirname "$0")/../scene.m" \
-    "$SRC"/Shared/Sing/SingSettings.m "$SRC"/Shared/Sing/SGSingCard.m "$SRC"/Shared/Sing/SGSpatialPreview.m "$SRC"/Core/SGGlass.m \
+    "$SRC"/Shared/Sing/SingSettings.m "$SRC"/Shared/Sing/SGSingCard.m "$SRC"/Shared/Sing/SGSpatialPreview.m "$SRC"/Core/SGGlass.m "$SRC"/Core/SGLegacyGlass.m "$SRC"/Core/SGGlassTouch.m \
     "$SRC"/Shared/Player/SGLastTrack.m "$SRC"/Settings/SGMarquee.m \
     "$SRC"/Settings/SGPage.m "$SRC"/Settings/SGPageStyle.m "$SRC"/Settings/SGModPage.m "$SRC"/Settings/SGGlowSwitch.m \
     "$SRC"/Core/SGLog.m "$SRC"/Core/SGPrefs.m "$SRC"/Core/SGViewTree.m "$SRC"/Core/SGFlagForce.m "$SRC"/Core/SGUIMode.m \

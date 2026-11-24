@@ -9,6 +9,7 @@
 // NowPlaying_ECMKit.SliderNowPlaying (a UISlider too) and Encore's SeekBarView (a drag recognizer); which
 // of them "New progress slider" brings is not proven, so they are left as Spotify has them.
 #import "Core/SGCore.h"
+#import "Shared/SponsorBlock/SGSponsorBlockOverlay.h"
 
 // The player's vertical list (the string is in 9.1.78's binary), so a sideways list inside it is not the one held.
 static NSString *const kListIdentifier = @"scrolling_npv_collection_view_accessibility_identifier";
@@ -36,6 +37,16 @@ static void scrubEnded(void) {
 
 // Shared/Haptics/ControlHaptics.x hooks the same begin and end for the scrub's taps; both call through.
 %hook _TtCO17NowPlaying_ECMKit11ProgressBar6Slider
+- (void)layoutSubviews {
+    %orig;
+    [SGSponsorBlockOverlay attachToSlider:(UIView *)self];
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+    %orig;
+    [SGSponsorBlockOverlay attachToSlider:(UIView *)self];
+}
+
 - (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     BOOL tracking = %orig;
     if (tracking) scrubBegan((UIView *)self);
@@ -56,7 +67,8 @@ static void scrubEnded(void) {
 // neither of the two above may come.
 - (void)didMoveToWindow {
     %orig;
-    if (!((UIView *)self).window) scrubEnded();
+    if (((UIView *)self).window) [SGSponsorBlockOverlay attachToSlider:(UIView *)self];
+    else scrubEnded();
 }
 %end
 

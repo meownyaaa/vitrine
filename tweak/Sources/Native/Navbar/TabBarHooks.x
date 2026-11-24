@@ -6,6 +6,7 @@
 #import "Core/SGCore.h"
 #import "Navbar.h"
 #import "Settings/SGPage.h"
+#import "Shared/Navigation/TabItems.h"
 
 @interface SGHomeHold : UILongPressGestureRecognizer
 @end
@@ -24,12 +25,6 @@ static void holdHome(UIView *stockBar) {
         if ([recognizer isKindOfClass:SGHomeHold.class]) return;
     }
     [home addGestureRecognizer:[[SGHomeHold alloc] initWithTarget:SGHomeHold.class action:@selector(held:)]];
-}
-
-static UIView *tabBarOf(UIView *item) {
-    Class barClass = NSClassFromString(@"_TtC23NavigationUI_TabBarImpl10TabBarView");
-    for (UIView *v = item.superview; v; v = v.superview) if ([v isKindOfClass:barClass]) return v;
-    return nil;
 }
 
 %hook _TtC23NavigationUI_TabBarImpl10TabBarView

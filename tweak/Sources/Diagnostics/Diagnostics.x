@@ -95,8 +95,10 @@ static NSString *describeValue(id value) {
 static void appendModState(NSMutableString *out) {
     NSDictionary *stored = [NSUserDefaults.standardUserDefaults persistentDomainForName:NSBundle.mainBundle.bundleIdentifier] ?: @{};
     [out appendFormat:@"== mod\nstock %@\n", [stored[SGKeyStock] boolValue] ? @"yes" : @"no"];
-    NSArray<NSString *> *local = @[@"spotifyglass.adblock.counts", @"spotifyglass.privacy.counts", @"spotifyglass.update.",
-                                   @"spotifyglass.signing.", @"spotifyglass.onboarding.", @"spotifyglass.navbar.stock", @"spotifyglass.redesign.navbar.stock",
+    NSArray<NSString *> *local = @[@"spotifyglass.adblock.counts", @"spotifyglass.privacy.counts",
+                                   @"spotifyglass.sponsorblock.skipCount", @"spotifyglass.sponsorblock.timeSaved",
+                                   @"spotifyglass.update.", @"spotifyglass.signing.", @"spotifyglass.onboarding.",
+                                   @"spotifyglass.navbar.stock", @"spotifyglass.redesign.navbar.stock",
                                    @"spotifyglass.musixmatch.token"];
     for (NSString *key in [stored.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
         if (![key hasPrefix:@"spotifyglass."] || [key isEqualToString:SGKeyStock]) continue;

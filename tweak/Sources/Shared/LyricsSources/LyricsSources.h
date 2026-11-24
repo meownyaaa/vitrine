@@ -147,9 +147,6 @@ BOOL SGLyricsReplyFailed(NSURLResponse *response, NSError *error);
 // line's translation and pronunciation added where the head has them; nil when the document holds no
 // line the page could show.
 NSArray<SGKaraokeLine *> *SGTTMLLines(NSString *xml);
-// The letters and digits of a text alone, lowercased: a pronunciation or a translation equal to its
-// line's this way reads the same as the line and is left out.
-NSString *SGLyricsBareText(NSString *text);
 // A line's pronunciation: timed `words` where the source has them, else `plain` estimated across the
 // line's own time; nil when it has neither or reads the same as `of`.
 SGKaraokeLine *SGLyricsPronunciation(NSArray<SGKaraokeWord *> *words, NSString *plain, SGKaraokeLine *of);

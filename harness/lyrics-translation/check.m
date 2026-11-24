@@ -109,7 +109,7 @@ int main(void) {
         CHECK(!readFrom(@"anthropic", @"{\"stop_reason\":\"refusal\",\"content\":[]}", 200, 2, &problem) && [problem isEqualToString:@"Anthropic declined to translate the song."]);
         CHECK(!readFrom(@"anthropic", @"{\"stop_reason\":\"max_tokens\",\"content\":[{\"type\":\"text\",\"text\":\"{\"}]}", 200, 2, &problem) && [problem containsString:@"too long"]);
         CHECK(!readFrom(@"anthropic", @"{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}", 401, 2, &problem)
-              && [problem isEqualToString:@"Anthropic turned the key down. Check it on the Lyrics page."]);
+              && [problem isEqualToString:@"Anthropic turned the key down. Check it in Mod Settings > Lyrics."]);
         CHECK(!readFrom(@"anthropic", @"{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}", 529, 2, &problem) && [problem containsString:@"busy"]);
 
         // The requests: where each goes, the key in its header and never in the body, and what plain leaves out.

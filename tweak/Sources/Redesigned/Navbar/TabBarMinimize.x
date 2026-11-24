@@ -1,5 +1,6 @@
 // What minimizes the glass bar and what brings it back (TabBar.x draws it): a page scrolled down by a
-// finger or the fling after it, and scrolled back up or to its top (MinimizeStep.h). After the bar changes some
+// finger or the fling after it, and scrolled back up or to its top (MinimizeStep.h; the capsule bar of iOS < 26 only at the top,
+// unless SGRKeyNavbarExpandOnScrollUp is on). After the bar changes some
 // other way (a tap on its circle, a tab, the player), only a new touch minimizes it again: the fling still
 // running would otherwise undo the tap at once; another tab (TabBar.x);
 // and the full screen player opening or closing, which takes Spotify's pictures of the bars to move with it
@@ -22,8 +23,20 @@ static BOOL inContainer(UIView *view) {
     return NO;
 }
 
-static void scrolled(UIScrollView *scrollView) {
-    if ((!scrollView.isTracking && !scrollView.isDecelerating) || scrollView == sg_other) return;
+static void scrolled(UIScrollView *scrollView, CGFloat before) {
+    if (!scrollView.isTracking && !scrollView.isDecelerating) {
+        // The capsule bar only comes back at the top of the page, and a scroll to the top that no finger made (a tap
+        // on the status bar, Home tapped again) gets there too. That is a page that was off its top and now is on it:
+        // any scroll view of the container laid out again at its own top (a shelf, a page of another tab) is not.
+        if (!SGRTabBarMinimized() || !SGRLegacyTabBarOn()) return;
+        UIEdgeInsets inset = scrollView.adjustedContentInset;
+        CGFloat top = -inset.top, bottom = scrollView.contentSize.height + inset.bottom - scrollView.bounds.size.height;
+        if (before > top + 1 && scrollView.contentOffset.y <= top + 1 && bottom - top >= kSGRMinimizeRange && inContainer(scrollView)) {
+            SGRSetTabBarMinimized(NO, YES);
+        }
+        return;
+    }
+    if (scrollView == sg_other) return;
     CGFloat offset = scrollView.contentOffset.y;
     if (scrollView != sg_page) {
         if (!inContainer(scrollView)) {
@@ -41,7 +54,8 @@ static void scrolled(UIScrollView *scrollView) {
     if (scrollView.isTracking) sg_waitForTouch = NO;
     UIEdgeInsets inset = scrollView.adjustedContentInset;
     CGFloat top = -inset.top, bottom = scrollView.contentSize.height + inset.bottom - scrollView.bounds.size.height;
-    BOOL minimized = SGRMinimizeStep(&sg_track, offset, top, bottom);
+    BOOL expandsOnUp = !SGRLegacyTabBarOn() || SGHidden(SGRKeyNavbarExpandOnScrollUp);
+    BOOL minimized = SGRMinimizeStepEx(&sg_track, offset, top, bottom, expandsOnUp);
     if (minimized == SGRTabBarMinimized() || (minimized && !SGEnabled(SGRKeyNavbarMinimize))) return;
     if (minimized && sg_waitForTouch) return;
     SGRSetTabBarMinimized(minimized, YES);
@@ -49,8 +63,9 @@ static void scrolled(UIScrollView *scrollView) {
 
 %hook UIScrollView
 - (void)setContentOffset:(CGPoint)offset {
+    CGFloat before = self.contentOffset.y;
     %orig;
-    scrolled(self);
+    scrolled(self, before);
 }
 %end
 
@@ -60,5 +75,11 @@ static void scrolled(UIScrollView *scrollView) {
     if (!sg_containerClass) return;
     %init;
     [NSNotificationCenter.defaultCenter addObserverForName:SGPlayerTransitionNotification object:nil queue:nil
-                                                usingBlock:^(NSNotification *note) { SGRSetTabBarMinimized(NO, NO); }];
+                                                usingBlock:^(NSNotification *note) {
+        // The capsule bar (iOS < 26) stays as it is: Spotify's pictures of the bars are of the minimized row, and
+        // growing the real bar back under them drew a full bar beneath the circles (two bars in the swipe that
+        // opens the player from the minimized bar).
+        if (SGRLegacyTabBarOn()) return;
+        SGRSetTabBarMinimized(NO, NO);
+    }];
 }

@@ -151,6 +151,7 @@ static UIColor *footColor(CGImageRef poster) {
 @end
 
 @implementation SGRPlayerMotionView {
+    NSURL *_file;
     AVQueuePlayer *_player;
     AVPlayerLooper *_looper;
     UIView *_picture;   // the clip over its foot, faded in as one
@@ -159,6 +160,7 @@ static UIColor *footColor(CGImageRef poster) {
     CAGradientLayer *_clipMask, *_seamMask;
     CALayer *_foot;   // the color of the poster's last rows, from the seam down
     CAGradientLayer *_dim;   // black over the clip's top and from above the title down, as dark as the clip is bright
+    AVAssetImageGenerator *_generator;
     NSMutableData *_luminances;   // of the frames measured so far
     BOOL _lyricsUp;
     NSUInteger _blurTurn;   // counts the lyrics' turns, so a fade cut short leaves the filter to the turn after it
@@ -234,6 +236,10 @@ static UIBlurEffect *blurEffect(void) {
 
 - (void)dealloc {
     [NSNotificationCenter.defaultCenter removeObserver:self];
+    [_generator cancelAllCGImageGeneration];
+    [_looper disableLooping];
+    [_player pause];
+    _clip.player = nil;
 }
 
 - (void)setScreenHeight:(CGFloat)height {
@@ -270,6 +276,13 @@ static UIBlurEffect *blurEffect(void) {
 }
 
 - (void)playFile:(NSURL *)file poster:(UIImage *)poster {
+    if ([_file isEqual:file] && _still.contents == (__bridge id)poster.CGImage) {
+        [self updateMotion];
+        return;
+    }
+    _file = [file copy];
+    [_looper disableLooping];
+    [_player pause];
     _aspect = poster.size.height / poster.size.width;
     _foot.backgroundColor = footColor(poster.CGImage).CGColor;
     _still.contents = (__bridge id)poster.CGImage;
@@ -285,6 +298,7 @@ static UIBlurEffect *blurEffect(void) {
 
 // The poster now, so the clip comes in already dimmed, and two later frames as they are read.
 - (void)measure:(NSURL *)file poster:(UIImage *)poster {
+    [_generator cancelAllCGImageGeneration];
     _luminances = [NSMutableData data];
     addLuminances(poster.CGImage, _luminances);
     [CATransaction begin];
@@ -292,6 +306,7 @@ static UIBlurEffect *blurEffect(void) {
     [self updateDim];
     [CATransaction commit];
     AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:[AVURLAsset assetWithURL:file]];
+    _generator = generator;
     generator.appliesPreferredTrackTransform = YES;
     generator.maximumSize = CGSizeMake(64, 64);
     __weak SGRPlayerMotionView *weakSelf = self;
@@ -537,9 +552,15 @@ BOOL SGRPlayerMotionShowing(void) {
 }
 
 static UIView *previewOf(NSURL *file, UIImage *poster) {
-    SGRPlayerMotionView *preview = [[SGRPlayerMotionView alloc] initWithFrame:CGRectZero];
+    static __weak SGRPlayerMotionView *sg_preview;
+    SGRPlayerMotionView *preview = sg_preview;
+    BOOL fresh = !preview;
+    if (fresh) {
+        preview = [[SGRPlayerMotionView alloc] initWithFrame:CGRectZero];
+        sg_preview = preview;
+    }
     [preview playFile:file poster:poster];
-    [preview appear:NO then:^{}];
+    if (fresh) [preview appear:NO then:^{}];
     return preview;
 }
 

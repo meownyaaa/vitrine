@@ -469,11 +469,6 @@ void SGRPlayerLowerRow(UIView *row) {
         SGRPlayerVanish(arrangedAround(gone[i], host));
     }
 
-    SGRGlyphButton *lyrics = SGRPlayerLyricsGlyphIn(host);
-    lyrics.bounds = CGRectMake(0, 0, 44, 44);
-    lyrics.center = CGPointMake(round(width * (rtl ? kTrailing : kLeading)), middleY);
-    SGRPlayerLyricsChanged();
-
     UIView *connect = SGRFindByIdentifier(host, @"Components.ConnectButtonOutputSwitcher", &kConnectKey);
     UIView *glyph = SGRPlayerConnectGlyphIn(host, connect);
     CGFloat connectFrom = glyph ? SGRPlayerTranslateArranged(arrangedAround(connect, host), glyph, CGPointMake(CGRectGetMidX(glyph.bounds), CGRectGetMidY(glyph.bounds)), host, round(width * kMiddle)) : -1;
@@ -482,12 +477,21 @@ void SGRPlayerLowerRow(UIView *row) {
     standInForQueue((SPTEncoreIconView *)SGRFindByIdentifier(queue, @"Encore.IconView", &kQueueIconKey));
     CGFloat queueFrom = SGRPlayerTranslateArranged(arrangedAround(queue, host), queue, CGPointMake(CGRectGetMidX(queue.bounds), CGRectGetMidY(queue.bounds)), host, round(width * (rtl ? kLeading : kTrailing)));
 
+    // Lyrics on the line of Spotify's own glyphs, not the unit's middle: with Spotify's AI prompt bar on the player
+    // (Labs > Agent button) the unit is taller than the row and its middle falls on the bar. The queue's arranged view
+    // is moved sideways only, so its middle is the row's.
+    CGFloat rowY = queue.window ? round([queue convertPoint:CGPointMake(CGRectGetMidX(queue.bounds), CGRectGetMidY(queue.bounds)) toView:host].y) : middleY;
+    SGRGlyphButton *lyrics = SGRPlayerLyricsGlyphIn(host);
+    lyrics.bounds = CGRectMake(0, 0, 44, 44);
+    lyrics.center = CGPointMake(round(width * (rtl ? kTrailing : kLeading)), rowY);
+    SGRPlayerLyricsChanged();
+
     SGRPlayerLowerRow(host);
     SGRPlayerCoverConnect(arrangedAround(connect, host), glyph);
 
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        SGLog(@"redesign player: footer lyrics at %.0f, connect %.0f (%@) to %.0f, queue %.0f to %.0f, share %@", lyrics.center.x,
+        SGLog(@"redesign player: footer lyrics at %.0f,%.0f (unit middle %.0f), connect %.0f (%@) to %.0f, queue %.0f to %.0f, share %@", lyrics.center.x, lyrics.center.y, middleY,
               connectFrom, glyph ? @"glyph" : @"button", round(width * kMiddle), queueFrom, round(width * (rtl ? kLeading : kTrailing)), share ? @"gone" : @"not found");
     });
 }

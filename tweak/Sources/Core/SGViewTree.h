@@ -2,6 +2,8 @@
 #import <UIKit/UIKit.h>
 
 void SGForEachView(UIView *view, void (^fn)(UIView *));
+// The view `make` builds, made once and kept on `host` under `key`. Not added to the hierarchy.
+UIView *SGLazyChild(UIView *host, const void *key, UIView *(^make)(void));
 CGRect SGFrameIn(UIView *view, UIView *target);
 // Whether `view` sits under `root`, stopping at a visual effect view on the way up.
 BOOL SGIsInside(UIView *view, UIView *root);
@@ -34,6 +36,8 @@ BOOL SGKeepsColor(UIView *view);
 void SGStripBackgrounds(UIView *view);
 BOOL SGIsVisibleColor(CGColorRef color);
 BOOL SGIsLightColor(CGColorRef color);
+// A translucent white (alpha 0.3 at most): the faint fill Spotify gives a button on a dark sheet.
+BOOL SGIsFaintWhite(CGColorRef color);
 // Spotify's base surface: the neutral #121212 it paints its pages with, or the black AMOLED turns
 // that into.
 BOOL SGIsBaseSurface(CGColorRef color);

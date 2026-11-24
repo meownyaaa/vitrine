@@ -10,6 +10,7 @@ const CGFloat SGRRadiusCard = 16;
 const CGFloat SGRRadiusCover = 8;
 const CGFloat SGRRadiusThumb = 6;
 const CGFloat SGRGlassCircleSize = 44;
+const CGFloat SGRTitlePadding = 18;
 const CGFloat SGRActionHeight = 48;
 const CGFloat SGRActionSpacing = 12;
 const CGFloat SGRGlassSpacing = 16;
@@ -49,6 +50,13 @@ UIColor *SGRNeutralField(void) {
 
 UIColor *SGRSolidGlassFill(void) {
     return [UIColor colorWithWhite:1 alpha:0.16];
+}
+
+UIColor *SGRGlassFilmColor(void) {
+    static UIColor *color;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = [UIColor colorWithWhite:1 alpha:0.16]; });
+    return color;
 }
 
 UIColor *SGRHairline(void) {
